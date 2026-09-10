@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/sanitize.mjs
+      - name: Validate version files
+        run: node scripts/verify-release.mjs "$(node -p 'require("./manifest.json").version')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cmds-zotero-build
+          if-no-files-found: error
+          path: |
+            main.js
+            manifest.json
+            styles.css

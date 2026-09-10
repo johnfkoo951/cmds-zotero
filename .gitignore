@@ -1,0 +1,17 @@
+node_modules/
+main.js
+*.js.map
+coverage/
+dist/
+.env
+.env.*
+!.env.example
+data.json
+zotero-index*.json
+*.local.*
+backups/
+.local/
+.obsidian/
+.idea/
+*.iml
+.DS_Store

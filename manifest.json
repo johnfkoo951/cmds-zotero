@@ -1,0 +1,10 @@
+{
+  "id": "cmds-zotero",
+  "name": "CMDS Zotero",
+  "version": "0.2.0",
+  "minAppVersion": "1.7.2",
+  "description": "Connect verified Zotero sources, citations, annotations, and literature notes to your vault.",
+  "author": "Yohan Koo (CMDSPACE)",
+  "authorUrl": "https://cmdspace.work",
+  "isDesktopOnly": true
+}

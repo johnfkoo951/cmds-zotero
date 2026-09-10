@@ -1,0 +1,29 @@
+{
+  "name": "cmds-zotero",
+  "version": "0.2.0",
+  "description": "Connect citations, annotations, source links and literature notes to your vault. By CMDSPACE.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "npm run typecheck && node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit --skipLibCheck",
+    "test": "tsx --test tests/*.test.ts",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
+  },
+  "keywords": ["obsidian", "cmdspace", "zotero", "betterbibtex", "citations", "hookmark"],
+  "author": "Yohan Koo (CMDSPACE)",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "esbuild": "0.25.10",
+    "eslint": "9.39.1",
+    "eslint-plugin-obsidianmd": "0.4.2",
+    "obsidian": "1.13.1",
+    "tslib": "2.8.1",
+    "tsx": "4.23.13",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.46.1"
+  }
+}
