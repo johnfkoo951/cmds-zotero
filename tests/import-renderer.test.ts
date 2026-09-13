@@ -102,3 +102,9 @@ test("gray highlights become headings, notes become note callouts, related items
 	const plain = renderLiterature(item, "APA", { ...DEFAULT_SETTINGS, headingHighlightColor: "none" }, null);
 	assert.match(plain.content, /\[!Highlight\] gray · p\. ii/);
 });
+
+test("placeholder page labels fall back to the PDF page position", () => {
+	const result = renderLiterature({ ...entry, attachments: [{ ...entry.attachments[0]!, annotations: [{ ...annotation, pageLabel: "-" }] }] }, "APA", DEFAULT_SETTINGS, null);
+	assert.match(result.content, /\[!Highlight\] yellow · p\. 3\n/);
+	assert.match(result.content, /\[p\. 3\]\(zotero:/);
+});

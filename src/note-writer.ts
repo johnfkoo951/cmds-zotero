@@ -78,7 +78,8 @@ export function annotationURI(a: Annotation, entry: ZoteroIndexEntry): string {
 export function annotationBody(a: Annotation, image: string | undefined, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings): string {
 	const uri = annotationURI(a, entry);
 	const page = Number.isSafeInteger(a.page) && a.page > 0 ? a.page : 1;
-	const label = inline(a.pageLabel || String(page));
+	// Zotero page labels can be placeholders such as "-"; fall back to the PDF page position unless the label carries a letter or digit.
+	const label = inline(/[\p{L}\p{N}]/u.test(a.pageLabel) ? a.pageLabel : String(page));
 	const color = colorName(a.color);
 	const link = `[p. ${label}](${uri})`;
 	const comment = a.comment ? `**Comment**: *${inline(a.comment)}*` : "";
