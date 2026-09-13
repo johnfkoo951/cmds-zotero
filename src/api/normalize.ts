@@ -63,6 +63,10 @@ export function normalizeAttachments(raw: unknown, entry: ZoteroIndexEntry): Att
 		}) : undefined;
 		if (!exported) throw new Error("Attachment does not match the exported parent's attachment identities; refresh again.");
 		const attachment: Attachment = { key: uri.itemKey, openURI: value.open, path: typeof value.path === "string" ? value.path : null, title: text(exported.title), annotations: [] };
+		const contentType = text(exported.contentType) || text(value.contentType);
+		const filename = text(exported.filename) || (typeof exported.path === "string" ? exported.path.split(/[\\/]/).pop() ?? "" : "");
+		if (contentType) attachment.contentType = contentType;
+		if (filename) attachment.filename = filename;
 		if (value.annotations !== undefined && !Array.isArray(value.annotations)) throw new Error("Invalid annotations array");
 		attachment.annotations = (Array.isArray(value.annotations) ? value.annotations : []).map(annotation => {
 			if (!record(annotation)) throw new Error("Invalid annotation");

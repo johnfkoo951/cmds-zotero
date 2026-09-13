@@ -70,6 +70,9 @@ export interface Attachment {
 	path: string | null;
 	title: string;
 	annotations: Annotation[];
+	/** Additive (0.4): from the BetterBibTeX JSON export when present; lets a null-path PDF be told apart from a snapshot. */
+	contentType?: string;
+	filename?: string;
 }
 
 export interface ZoteroIndexEntry extends ItemIdentity {
@@ -128,4 +131,6 @@ export type Resolution =
 export interface IndexStorage {
 	read(): Promise<string | null>;
 	writeValidated(content: string): Promise<void>;
+	/** Cheap change detector for the persisted index (size + mtime); undefined when unsupported. */
+	fingerprint?(): Promise<string | undefined>;
 }

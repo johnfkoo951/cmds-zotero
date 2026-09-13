@@ -40,6 +40,16 @@ export async function ensureDirectory(app: App, filePath: string): Promise<void>
 	}
 }
 
+export const CMDS_DIR = ".cmds-zotero";
+
+/** The plugin's private directory holds sensitive caches; it is always gitignored by the plugin itself (idempotent). */
+export async function ensureCmdsIgnore(app: App): Promise<void> {
+	const ignore = `${CMDS_DIR}/.gitignore`;
+	await assertVaultBoundary(app, ignore);
+	await ensureDirectory(app, ignore);
+	if (!(await app.vault.adapter.exists(ignore))) await app.vault.adapter.write(ignore, "*\n");
+}
+
 export class VaultIndexStorage implements IndexStorage {
 	private snapshot: string | null | undefined;
 	constructor(private app: App, private indexPath: string, private canWrite: () => boolean = () => true) {
@@ -51,6 +61,11 @@ export class VaultIndexStorage implements IndexStorage {
 		await assertVaultBoundary(this.app, this.indexPath);
 		this.snapshot = await this.readCurrent();
 		return this.snapshot;
+	}
+
+	async fingerprint(): Promise<string | undefined> {
+		const stat = await this.app.vault.adapter.stat(this.indexPath);
+		return stat ? `${stat.size}:${stat.mtime}` : "absent";
 	}
 
 	private async readCurrent(): Promise<string | null> {

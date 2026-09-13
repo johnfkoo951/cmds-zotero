@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 import { noteDeepLink } from "./uris";
 import { buildAliasIndex, noteIdentity } from "./note-aliases";
-import { assertVaultBoundary, ensureDirectory, relativePath } from "./vault-storage";
+import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory, relativePath } from "./vault-storage";
 
 const MAP_PATH = ".cmds-zotero/note-map.json";
 interface NoteMap {
@@ -47,6 +47,7 @@ export class VaultLinks {
 		const map: NoteMap = { version: 1, vault: this.app.vault.getName(), generatedAt: new Date().toISOString(), indexGeneratedAt: index.generatedAt, notes };
 		await assertVaultBoundary(this.app, MAP_PATH);
 		if (!this.canWrite()) return;
+		await ensureCmdsIgnore(this.app);
 		await ensureDirectory(this.app, MAP_PATH);
 		if (!this.canWrite()) return;
 		await this.app.vault.adapter.write(MAP_PATH, JSON.stringify(map, null, 2));

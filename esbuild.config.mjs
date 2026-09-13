@@ -8,7 +8,28 @@ if you want to view the source, please visit the github repository of this plugi
 */
 `;
 
-const prod = process.argv[2] === "production";
+const mode = process.argv[2];
+
+if (mode === "core") {
+  // Offline CLI core: pure modules plus the `yaml` package, no `obsidian` import allowed (verified by tests/tooling.test.ts).
+  await esbuild.build({
+    banner: { js: banner },
+    entryPoints: ["src/cli/core.ts"],
+    bundle: true,
+    external: ["obsidian", "electron", "node:*", ...builtinModules],
+    platform: "node",
+    format: "esm",
+    target: "node22",
+    logLevel: "warning",
+    sourcemap: false,
+    minify: false,
+    treeShaking: true,
+    outfile: "scripts/ingest-core.mjs",
+  });
+  process.exit(0);
+}
+
+const prod = mode === "production";
 
 const context = await esbuild.context({
   banner: { js: banner },
