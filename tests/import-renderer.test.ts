@@ -16,12 +16,19 @@ test("initial import has quoted typed YAML, native layout and safe notes", () =>
 	assert.match(first.content, /zoteroItemKey: "ITEM0001"/);
 	assert.match(first.content, /zoteroLibraryID: 1/);
 	assert.match(first.content, /zoteroLibraryType: "user"/);
-	assert.match(first.content, /## Overview/);
-	assert.match(first.content, /## Synthesis/);
-	assert.match(first.content, /### Contribution/);
+	assert.match(first.content, /^type: "zotero"$/m);
+	assert.match(first.content, /zotero_year: "2026"/);
+	assert.match(first.content, /> \[!Cite\]\n> Author \\\(2026\\\)\. Example\./);
+	assert.match(first.content, /> \[!Abstract\]\n> abstract:: Abstract/);
+	assert.match(first.content, /> \[!md\]\n> \*\*Author\*\*:: Test Author/);
+	assert.match(first.content, /\*\*Citekey\*\*:: @Example2026/);
+	assert.match(first.content, /> \[!LINK\]\n> \[Open in Zotero\]/);
+	assert.match(first.content, /## Synthesis\n\n> \[!Synth\]/);
 	assert.doesNotMatch(first.content, /<script|<img|alert\(1\)|javascript:/);
 	assert.match(first.content, /page=3&annotation=ANNOT001/);
-	assert.match(first.content, /highlight · ii/);
+	assert.match(first.content, /> \[!Highlight\] yellow · p\. ii\n> <mark class="cmds-zotero-hl-yellow">Evidence<\/mark> \(\[p\. ii\]\(zotero:\/\/open-pdf/);
+	assert.match(first.content, /> \*\*Comment\*\*: \*Comment\*/);
+	assert.doesNotMatch(first.content, /obscite/);
 });
 
 test("reimport is idempotent and preserves all user prose and YAML", () => {
@@ -34,11 +41,12 @@ test("reimport is idempotent and preserves all user prose and YAML", () => {
 	assert.match(updated.content, /custom: \[mine\]/);
 	assert.match(updated.content, /Afterword/);
 	assert.match(updated.content, /# New title/);
+	assert.match(updated.content, /\*\*Title\*\*:: New title/);
 	assert.ok(updated.content.startsWith(edited.slice(0, edited.indexOf("<!--"))));
 });
 
 test("edited generated text is preserved and reported, unrelated names refuse ownership", () => {
-	const edited = render(null).content.replace("> Evidence", "> My changed evidence");
+	const edited = render(null).content.replace(">Evidence<", ">My changed evidence<");
 	const result = render(edited);
 	assert.match(result.conflicts.join(" "), /Edited generated section/);
 	assert.match(result.content, /My changed evidence/);
@@ -49,10 +57,10 @@ test("edited generated text is preserved and reported, unrelated names refuse ow
 test("annotation identities dedupe, append, and preserve removed annotations", () => {
 	const duplicate = { ...entry, attachments: [{ ...entry.attachments[0]!, annotations: [annotation, annotation] }] };
 	const first = render(null, duplicate);
-	assert.equal((first.content.match(/### highlight/g) ?? []).length, 1);
+	assert.equal((first.content.match(/\[!Highlight\]/g) ?? []).length, 1);
 	const extra = { ...annotation, key: "ANNOT002", text: "New evidence" };
 	const second = render(first.content, { ...duplicate, attachments: [{ ...duplicate.attachments[0]!, annotations: [extra] }] });
-	assert.match(second.content, /> Evidence/);
+	assert.match(second.content, />Evidence</);
 	assert.match(second.content, /New evidence/);
 	assert.equal(render(second.content, duplicate).content, second.content);
 });
@@ -70,5 +78,27 @@ test("raster image plans use stable names and encoded vault destinations", () =>
 	const result = renderLiterature(imageEntry, "APA", { ...DEFAULT_SETTINGS, imageFolder: "Reference images" }, null, hashes);
 	assert.deepEqual(result.images, [{ source: "/synthetic/figure.png", path: `Reference images/user-1-ATTACH01-ANNOT001-${digest}.png` }]);
 	assert.ok(result.content.includes(`Reference%20images/user-1-ATTACH01-ANNOT001-${digest}.png`));
+	assert.match(result.content, /> \[!Image\] yellow · p\. ii/);
 	assert.equal(renderLiterature(imageEntry, "APA", { ...DEFAULT_SETTINGS, imageFolder: "Reference images" }, result.content, hashes).content, result.content);
+});
+
+test("gray highlights become headings, notes become note callouts, related items and tags are filtered", () => {
+	const gray = { ...annotation, key: "ANNOT003", color: "#aaaaaa", text: "Section heading", comment: "" };
+	const sticky = { ...annotation, key: "ANNOT004", type: "note", text: "", comment: "Sticky comment" };
+	const item = { ...entry, tags: ["obscite", "theme"], metadata: { ...entry.metadata, itemType: "journalArticle", publicationTitle: "Journal of Tests", volume: "12", creators: [{ creatorType: "author", lastName: "Doe", firstName: "Jane" }, { creatorType: "editor", name: "Editorial Board" }] }, attachments: [{ ...entry.attachments[0]!, annotations: [gray, sticky] }] };
+	const result = renderLiterature(item, "APA", DEFAULT_SETTINGS, null, new Map(), { related: ["doe2019", "bad key"] });
+	assert.match(result.content, /^##### Section heading \[p\. ii\]\(zotero:/m);
+	assert.match(result.content, /> \[!Note\] p\. ii\n> Sticky comment \[p\. ii\]/);
+	assert.match(result.content, /\*\*Author\*\*:: Doe, Jane/);
+	assert.match(result.content, /\*\*Editor\*\*:: Editorial Board/);
+	assert.match(result.content, /\*\*Journal\*\*:: \*Journal of Tests\*/);
+	assert.match(result.content, /\*\*Volume\*\*:: 12/);
+	assert.match(result.content, /\*\*Related\*\*:: \[\[@doe2019\]\]/);
+	assert.doesNotMatch(result.content, /bad key/);
+	assert.match(result.content, /zotero_journal: "Journal of Tests"/);
+	assert.match(result.content, /zotero_tags: \["theme"\]/);
+	assert.doesNotMatch(result.content, /obscite/);
+	assert.match(result.content, /zotero_author: \["Doe, Jane"\]/);
+	const plain = renderLiterature(item, "APA", { ...DEFAULT_SETTINGS, headingHighlightColor: "none" }, null);
+	assert.match(plain.content, /\[!Highlight\] gray · p\. ii/);
 });

@@ -4,7 +4,7 @@
 
 Verified Zotero sources, citations, annotations, and literature notes for a local-first research vault. By CMDSPACE.
 
-**Version 0.2.0 is a development version, not a community-approved release.** It has been tested on Obsidian 1.13.7 with Zotero 9.0.6 / Better BibTeX 9.0.63 in two desktop vaults. Live checks cover index rebuilding, APA bibliography, text/image imports, preservation on repeat imports, renamed-note deep links, and cross-vault lookup. Group libraries, the interactive citation picker, and receiving/round-tripping links in Hookmark still require manual acceptance. Keep existing integrations until your workflow is verified.
+**Version 0.3.0 is a development version, not a community-approved release.** 0.3.0 adds inline citekey completion, references and annotation sidebars, batch note updates, and a callout-based literature note layout after a review of ZotLit 2.1.4 and the archived Zotero Integration plugin; see [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md) for what was adopted and what was deliberately left out. The 0.2.0 baseline below still describes the live-tested scope. It has been tested on Obsidian 1.13.7 with Zotero 9.0.6 / Better BibTeX 9.0.63 in two desktop vaults. Live checks cover index rebuilding, APA bibliography, text/image imports, preservation on repeat imports, renamed-note deep links, and cross-vault lookup. Group libraries, the interactive citation picker, and receiving/round-tripping links in Hookmark still require manual acceptance. Keep existing integrations until your workflow is verified.
 
 ## Scope
 
@@ -13,6 +13,7 @@ Verified Zotero sources, citations, annotations, and literature notes for a loca
 - Literature-note and annotation import using a standalone built-in CMDS template, with preview and preservation boundaries.
 - Zotero/PDF/evidence links, diagnostics, paper-ingest integration, and opt-in peer-vault navigation.
 - Copyable Markdown links suitable for passing to Hookmark; no Hookmark bookmark creation or scripting.
+- Inline `[@` citekey completion, a references sidebar with CSL bibliography for the active note, an annotations sidebar, citing-notes lookup, and batch update of owned notes, all served from the local index.
 
 This is **not full Zotero Integration or ZotLit compatibility**. Existing templates are not accepted as interchangeable: Nunjucks extensions such as `persist`, `filterby`, `format`, and `lastImportDate` are not promised as a drop-in template API. Keep existing templates and notes. Only turn other plugins off manually after your citation, bibliography, text/image annotation, and re-import workflows have been verified.
 
@@ -67,6 +68,16 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 After migration, launch Obsidian yourself, verify only the new ID is enabled, inspect preserved settings, refresh the index, and test commands. Keep the previous plugins installed until replacement is actually validated.
 
+## Writing and reviewing with the sidebars
+
+- **Citekey completion.** Type `[@` and part of a citekey, title, author, or year (use `_` for spaces). Enter inserts `[@citekey]`; Shift+Enter inserts `@citekey`; inside `[[` the wikilink form is completed. The suggester reads only the local index and triggers a background index load when none is cached. Set the trigger to "At sign" to also complete after a bare `@` at a word start, or "Off".
+- **References sidebar** (`Open references sidebar`). Scans the active note for `[@key]`, `@key`, and `[[@key]]`, skipping frontmatter and code fences, and lists each source once with the bibliography text from BBT in the configured style. Unresolved and ambiguous keys are shown in red with the reason. Actions open the literature note, the Zotero item, or the PDF; the text jumps to the first citation; "Copy bibliography" copies the resolved list as plain text.
+- **Annotations sidebar** (`Open annotations sidebar`, ribbon highlighter). Follows the active literature note through its `zoteroID` or citekey, or pins any indexed item. Each card shows the color, page label, text, comment, and tags. Actions open the annotation in Zotero's reader, insert it at the cursor as the same callout the import produces, copy its link, or copy its text. Image annotations are linked, not copied; use the import command for validated image copies.
+- **Find notes citing a source** scans the vault for the current and previous citekeys of an item and opens the note at the first citation.
+- **Update all owned literature notes** re-renders managed sections of every note owned by this plugin and reports updated, unchanged, and skipped notes. Edited generated sections, duplicate identities, and unowned notes are skipped rather than overwritten.
+
+Imported notes use the CMDS callout layout: `[!Cite]`, `[!Abstract]`, an `[!md]` callout with inline Dataview fields (creators by role, journal, volume, issue, publisher, pages, DOI, ISBN, collections, related items as `[[@citekey]]`), `[!LINK]` with the Zotero select URI and `file://` attachment links, then `[!Highlight]`, `[!Image]`, and `[!Note]` annotation callouts. Highlight text is wrapped in `<mark class="cmds-zotero-hl-<color>">`; the color is the nearest Zotero palette hue. Highlights in the configured heading color (default gray) become `#####` headings for structural reading. Tags listed under "Excluded tags" (default `obscite`) are left out. Frontmatter includes `zotero_title`, `zotero_author`, `zotero_year`, `zotero_journal`, `zotero_doi`, `zotero_url`, and `zotero_tags` alongside the identity keys, and stays user-owned after creation.
+
 ## Index and integration contract
 
 The TypeScript contract in [`src/types.ts`](src/types.ts) is authoritative. Schema **2** has `generatedAt`, `source: "better-bibtex"`, `count`, `entries`, `capabilities`, `diagnostics`, and `complete`. Entries retain citation/display fields, but identity is `libraryType` + local `libraryID` + canonical `itemKey`; group URIs additionally need the real `groupID`. CSL `id` and citekeys are **not item keys**. Attachments have their own keys and verified `openURI`; annotation links carry attachment/annotation identity and 1-based PDF pages. Printed page labels are separate.
@@ -109,8 +120,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # tracked working-tree files
 node scripts/sanitize.mjs --staged  # staged additions/changes, reads index bytes
-node scripts/version-bump.mjs 0.2.1 # synchronizes package, lock, manifest, versions
-node scripts/verify-release.mjs 0.2.1
+node scripts/version-bump.mjs 0.3.1 # synchronizes package, lock, manifest, versions
+node scripts/verify-release.mjs 0.3.1
 ```
 
 Tests use synthetic fixtures. The sanitizer reports matching file/line/rule without printing secrets; it is a heuristic and does not replace manual staged-diff inspection or review of private repository links. CI uses `npm ci`, lint, typecheck, tests, and production build on Node 22. The prepared release workflow requires an exact stable semver tag **without `v`**, matching manifest/package/lock/versions; it builds three plugin assets and publishes their provenance bundle. **Pushing such a tag publishes a release: obtain approval first.** A prepared workflow does not imply a release, successful CI run, or community submission has occurred.

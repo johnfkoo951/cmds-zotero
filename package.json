@@ -1,6 +1,6 @@
 {
   "name": "cmds-zotero",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Connect citations, annotations, source links and literature notes to your vault. By CMDSPACE.",
   "main": "main.js",
   "private": true,
@@ -12,7 +12,14 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"
   },
-  "keywords": ["obsidian", "cmdspace", "zotero", "betterbibtex", "citations", "hookmark"],
+  "keywords": [
+    "obsidian",
+    "cmdspace",
+    "zotero",
+    "betterbibtex",
+    "citations",
+    "hookmark"
+  ],
   "author": "Yohan Koo (CMDSPACE)",
   "license": "MIT",
   "devDependencies": {

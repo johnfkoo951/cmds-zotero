@@ -42,7 +42,7 @@ test("service preserves snapshots and canonical identity", async t => {
 		preview.path = "elsewhere.md";
 		await service.apply(preview);
 		const notePath = `${DEFAULT_SETTINGS.outputFolder}/@Example2026.md`;
-		assert.match(vault.data.get(notePath), /## Overview/);
+		assert.match(vault.data.get(notePath), /> \[!Cite\]/);
 		assert.equal(vault.data.has("elsewhere.md"), false);
 		const stale = await service.preview(entry);
 		vault.data.set(notePath, vault.data.get(notePath) + "\nUser text");

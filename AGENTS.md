@@ -14,6 +14,10 @@ A desktop-only, local-first Zotero integration: verified identities and index, c
 ## Development
 
 - Shared data contracts: `src/types.ts`. Keep modules independently testable with synthetic fixtures.
+- Pure modules stay free of the `obsidian` import so `tsx --test` can load them: `note-writer`, `citations/scan`, `citations/score`, `annotations/colors`, `related`, `settings-data`. UI lives in `citations/suggest`, `views/*`, `modals`, `settings`.
+- Sidebars and the suggester read `plugin.cachedEntries()` only; they never block on BBT. Bibliography text goes through `plugin.bibliographyFor()` (cached per index generation and style).
+- Rendered literature notes keep managed section IDs `overview`, `citation`, `metadata`, `notes`, `annotation-<attachment>-<annotation>`; adding IDs breaks in-place updates of older notes.
+- Feature decisions against other plugins: `docs/plugin-landscape-2026-09.md`. No SQLite, companion add-on, template engine, or HTTP listener.
 - BBT transport uses Node HTTP for local server compatibility (desktop-only). Bound timeouts/concurrency and validate response shapes. Do not replace it with browser fetch based on obsolete guidance.
 - Prefer Obsidian public APIs for vault writes, UI and protocol registration. Use `Setting.setHeading()`, CSS classes and safe text construction.
 - Command IDs: kebab-case without plugin ID or `command`. Sentence-case labels. No global eslint rule suppression.

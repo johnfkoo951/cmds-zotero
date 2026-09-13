@@ -27,3 +27,110 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* Sidebars */
+.cmds-zotero-sidebar {
+  padding: var(--size-4-2);
+}
+.cmds-zotero-sidebar-title {
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--size-2-2);
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-sidebar-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-2-2);
+  margin-bottom: var(--size-4-2);
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+}
+.cmds-zotero-sidebar-toolbar input[type="search"] {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+.cmds-zotero-reference-list {
+  padding-left: var(--size-4-5);
+  margin: 0;
+}
+.cmds-zotero-reference {
+  margin-bottom: var(--size-4-3);
+  font-size: var(--font-smaller);
+}
+.cmds-zotero-reference-text {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-reference-text:hover {
+  color: var(--text-accent);
+}
+.cmds-zotero-reference-ambiguous .cmds-zotero-reference-text,
+.cmds-zotero-reference-not-found .cmds-zotero-reference-text {
+  color: var(--text-error);
+}
+.cmds-zotero-reference-actions {
+  display: flex;
+  gap: var(--size-2-1);
+  margin-top: var(--size-2-1);
+}
+.cmds-zotero-suggest-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmds-zotero-suggest-meta {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+}
+
+/* Annotation cards */
+.cmds-zotero-annotation {
+  --cmds-zotero-color: var(--text-muted);
+  border-left: 3px solid var(--cmds-zotero-color);
+  padding: var(--size-2-2) var(--size-4-2);
+  margin-bottom: var(--size-4-2);
+  background: var(--background-secondary);
+  border-radius: 0 var(--radius-s) var(--radius-s) 0;
+  font-size: var(--font-smaller);
+}
+.cmds-zotero-annotation-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  color: var(--text-muted);
+}
+.cmds-zotero-annotation-chip {
+  width: 0.7em;
+  height: 0.7em;
+  border-radius: 50%;
+  background: var(--cmds-zotero-color);
+}
+.cmds-zotero-annotation-text {
+  margin-top: var(--size-2-1);
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-annotation-comment {
+  margin-top: var(--size-2-1);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-annotation-yellow { --cmds-zotero-color: #ffd400; }
+.cmds-zotero-annotation-red { --cmds-zotero-color: #ff6666; }
+.cmds-zotero-annotation-green { --cmds-zotero-color: #5fb236; }
+.cmds-zotero-annotation-blue { --cmds-zotero-color: #2ea8e5; }
+.cmds-zotero-annotation-purple { --cmds-zotero-color: #a28ae5; }
+.cmds-zotero-annotation-magenta { --cmds-zotero-color: #e56eee; }
+.cmds-zotero-annotation-orange { --cmds-zotero-color: #f19837; }
+.cmds-zotero-annotation-gray { --cmds-zotero-color: #aaaaaa; }
+
+/* Highlight marks inside imported notes */
+mark.cmds-zotero-hl-yellow { background: rgba(255, 212, 0, 0.45); }
+mark.cmds-zotero-hl-red { background: rgba(255, 102, 102, 0.45); }
+mark.cmds-zotero-hl-green { background: rgba(95, 178, 54, 0.45); }
+mark.cmds-zotero-hl-blue { background: rgba(46, 168, 229, 0.45); }
+mark.cmds-zotero-hl-purple { background: rgba(162, 138, 229, 0.45); }
+mark.cmds-zotero-hl-magenta { background: rgba(229, 110, 238, 0.45); }
+mark.cmds-zotero-hl-orange { background: rgba(241, 152, 55, 0.45); }
+mark.cmds-zotero-hl-gray { background: rgba(170, 170, 170, 0.45); }
+mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius: 2px; }

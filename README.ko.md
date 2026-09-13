@@ -4,7 +4,7 @@
 
 검증된 Zotero 원문·인용·주석·문헌노트를 로컬 중심 연구 볼트에 연결합니다. By CMDSPACE.
 
-**0.2.0은 개발 버전이며 커뮤니티 승인 릴리스가 아닙니다.** Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, Hookmark에서의 링크 수신·왕복은 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
+**0.3.0은 개발 버전이며 커뮤니티 승인 릴리스가 아닙니다.** 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, Hookmark에서의 링크 수신·왕복은 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
 
 ## 범위
 
@@ -13,6 +13,7 @@
 - 미리보기와 보존 경계를 갖춘 독립적인 CMDS 내장 템플릿 기반 문헌·주석 가져오기.
 - Zotero/PDF/근거 링크, 진단, paper-ingest 연동, 선택적으로 등록하는 다른 볼트 탐색.
 - Hookmark에 전달할 수 있는 Markdown 링크 복사. Hookmark 북마크 생성이나 스크립팅은 하지 않습니다.
+- 로컬 인덱스만으로 동작하는 인라인 `[@` citekey 자동완성, 활성 노트의 CSL 참고문헌 사이드바, 주석 사이드바, 인용 노트 역조회, 소유 노트 일괄 갱신.
 
 **Zotero Integration 또는 ZotLit 전체 호환 구현이 아닙니다.** 기존 템플릿을 그대로 사용할 수 있다고 가정하지 마세요. `persist`, `filterby`, `format`, `lastImportDate` 등 Nunjucks 확장의 드롭인 호환은 약속하지 않습니다. 원래 템플릿과 문헌노트는 보존하세요. 인용·참고문헌·텍스트/이미지 주석·재가져오기를 검증한 다음에만 다른 플러그인을 수동으로 끄세요.
 
@@ -67,6 +68,16 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 이전 후 직접 앱을 실행해 새 ID만 활성화되었는지 확인하고 설정 보존·인덱스 갱신·명령을 검증하세요. 기능 대체가 실제로 확인될 때까지 이전의 다른 Zotero 플러그인도 설치 상태를 유지하세요.
 
+## 사이드바로 쓰고 검토하기
+
+- **citekey 자동완성.** `[@` 뒤에 citekey·제목·저자·연도 일부를 입력합니다(공백은 `_`). Enter는 `[@citekey]`, Shift+Enter는 `@citekey`를 넣고, `[[` 안에서는 위키링크 형태로 완성합니다. 서제스터는 로컬 인덱스만 읽으며 캐시가 없으면 백그라운드 로드를 시작합니다. 트리거를 "At sign"으로 바꾸면 단어 시작의 `@` 뒤에서도 동작하고, "Off"로 끌 수 있습니다.
+- **참고문헌 사이드바**(`Open references sidebar`). 활성 노트의 `[@key]`, `@key`, `[[@key]]`를 프론트매터와 코드펜스를 제외하고 스캔해 문헌마다 한 번씩 BBT의 설정 스타일 참고문헌을 표시합니다. 미해결·중복 키는 이유와 함께 붉게 표시됩니다. 문헌노트·Zotero 항목·PDF 열기, 첫 인용 위치로 이동, "Copy bibliography"로 목록 복사가 가능합니다.
+- **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID` 또는 citekey로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
+- **Find notes citing a source**는 항목의 현재·이전 citekey를 볼트 전체에서 찾아 첫 인용 위치로 엽니다.
+- **Update all owned literature notes**는 이 플러그인이 소유한 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀을 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
+
+가져온 노트는 CMDS 콜아웃 레이아웃을 사용합니다: `[!Cite]`, `[!Abstract]`, 인라인 Dataview 필드를 담은 `[!md]`(역할별 저자, 저널, 권·호, 출판사, 쪽, DOI, ISBN, 컬렉션, 관련 문헌 `[[@citekey]]`), Zotero select URI와 `file://` 첨부 링크를 담은 `[!LINK]`, 그리고 `[!Highlight]`·`[!Image]`·`[!Note]` 주석 콜아웃. 하이라이트 본문은 `<mark class="cmds-zotero-hl-<color>">`로 감싸며 색상은 Zotero 팔레트에서 가장 가까운 색조입니다. 설정한 제목용 색상(기본 gray)의 하이라이트는 `#####` 제목이 됩니다. "Excluded tags"(기본 `obscite`)의 태그는 제외합니다. 프론트매터에는 identity 키와 함께 `zotero_title`, `zotero_author`, `zotero_year`, `zotero_journal`, `zotero_doi`, `zotero_url`, `zotero_tags`가 들어가며 생성 후에는 사용자 소유입니다.
+
 ## 인덱스·연동 계약
 
 정본은 [`src/types.ts`](src/types.ts)입니다. 스키마 **2**는 `generatedAt`, `source: "better-bibtex"`, `count`, `entries`, `capabilities`, `diagnostics`, `complete`를 포함합니다. 문헌은 인용·표시 필드와 별개로 `libraryType` + 로컬 `libraryID` + 실제 `itemKey`를 사용합니다. 그룹 URI에는 실제 `groupID`가 추가로 필요합니다. CSL의 `id`와 citekey는 **item key가 아닙니다**. 첨부는 별도 key와 검증된 `openURI`를 가지며 주석 링크에는 첨부·주석 식별자와 1부터 시작하는 PDF 페이지가 들어갑니다. 인쇄된 페이지 라벨은 별도입니다.
@@ -109,8 +120,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # 추적 중인 작업 파일 검사
 node scripts/sanitize.mjs --staged  # Git index의 추가·변경 파일 검사
-node scripts/version-bump.mjs 0.2.1 # package/lock/manifest/versions 동기화
-node scripts/verify-release.mjs 0.2.1
+node scripts/version-bump.mjs 0.3.1 # package/lock/manifest/versions 동기화
+node scripts/verify-release.mjs 0.3.1
 ```
 
 테스트는 합성 데이터만 사용합니다. 새니타이저는 비밀값 대신 파일·줄·규칙만 출력하는 휴리스틱이며 staged diff와 private 저장소 링크의 수동 검토를 대체하지 않습니다. CI는 Node 22에서 `npm ci`, lint, typecheck, test, production build를 수행합니다. 준비된 릴리스 workflow는 manifest/package/lock/versions와 일치하는 **v 접두사 없는 정식 semver 태그**를 요구하며 세 플러그인 파일과 provenance bundle을 배포합니다. **해당 태그를 push하면 릴리스가 공개되므로 먼저 승인을 받으세요.** Workflow 준비는 릴리스·CI 성공·커뮤니티 등록을 완료했다는 뜻이 아닙니다.

@@ -69,7 +69,7 @@ export function pdfURI(openURI: string, page?: number, annotationKey?: string): 
 	return openURI.split("?")[0] + (params.size ? `?${params.toString()}` : "");
 }
 
-export function noteDeepLink(vault: string, entry: ItemIdentity, target: "note" | "pdf" = "note", page?: number, annotationKey?: string): string {
+export function noteDeepLink(vault: string, entry: ItemIdentity, target: "note" | "pdf" | "import" = "note", page?: number, annotationKey?: string): string {
 	identityKey(entry);
 	if (!vault.trim()) throw new Error("Vault name is required");
 	if (page !== undefined && !positiveInteger(page)) throw new Error("Invalid PDF page");

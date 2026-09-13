@@ -2,7 +2,7 @@ export interface ProtocolRequest {
 	vault: string;
 	libraryID: number;
 	itemKey: string;
-	target: "note" | "pdf";
+	target: "note" | "pdf" | "import";
 	page?: number;
 	annotation?: string;
 }
@@ -19,7 +19,8 @@ export function parseProtocolRequest(params: Record<string, string>, routedVault
 	if (!Number.isSafeInteger(libraryID)) throw new Error("Invalid library ID.");
 	if (!/^[A-Z0-9]{8}$/.test(params.itemKey ?? "")) throw new Error("Invalid item key.");
 	const target = params.target ?? "note";
-	if (target !== "note" && target !== "pdf") throw new Error("This link can only open a note or PDF.");
+	if (target === "import" && (params.page !== undefined || params.annotation !== undefined)) throw new Error("Import links do not take page or annotation parameters.");
+	if (target !== "note" && target !== "pdf" && target !== "import") throw new Error("This link can only open a note or PDF, or import a note.");
 	let page: number | undefined;
 	if (params.page !== undefined) {
 		if (!/^[1-9]\d*$/.test(params.page) || !Number.isSafeInteger(Number(params.page))) throw new Error("Page must be a positive integer.");

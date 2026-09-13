@@ -3,6 +3,8 @@ export interface PeerVault {
 	path: string;
 }
 
+export type CitationTrigger = "bracket" | "at" | "off";
+
 export interface CmdsZoteroSettings {
 	bbtEndpoint: string;
 	zoteroIndexPath: string;
@@ -15,6 +17,10 @@ export interface CmdsZoteroSettings {
 	imageFolder: string;
 	bibliographyStyle: string;
 	peerVaults: PeerVault[];
+	citationTrigger: CitationTrigger;
+	excludedTags: string[];
+	headingHighlightColor: string;
+	referencesFollowActiveNote: boolean;
 }
 
 export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
@@ -29,6 +35,10 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	imageFolder: "References/Zotero/images",
 	bibliographyStyle: "apa",
 	peerVaults: [],
+	citationTrigger: "bracket",
+	excludedTags: ["obscite"],
+	headingHighlightColor: "gray",
+	referencesFollowActiveNote: true,
 };
 
 export interface ItemIdentity {

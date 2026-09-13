@@ -1,7 +1,8 @@
 import { App, FileSystemAdapter, parseYaml, TFile, TFolder } from "obsidian";
 import type { BbtService } from "./bbt";
-import type { CmdsZoteroSettings, ZoteroIndexEntry } from "./types";
+import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 import { hashText, renderLiterature, safeVaultPath } from "./note-writer";
+import { relatedCitekeys } from "./related";
 import { checkVaultDestination, hashBytes, MAX_IMAGE_BYTES, readAnnotationImage } from "./import/images";
 
 export interface ImportPreview {
@@ -23,7 +24,7 @@ export class ImportService {
 	private applying = false;
 	constructor(private app: App, private bbt: BbtService, private settings: () => CmdsZoteroSettings) {}
 
-	async preview(entry: ZoteroIndexEntry): Promise<ImportPreview> {
+	async preview(entry: ZoteroIndexEntry, index?: ZoteroIndex): Promise<ImportPreview> {
 		if (!entry.citekey || /[\\/:*?"<>|]/.test(entry.citekey) || [...entry.citekey].some(c => c.charCodeAt(0) < 32) || entry.citekey.endsWith(".")) throw new Error("Unsafe citation key filename");
 		const settings = this.settings();
 		const defaultPath = safeVaultPath(`${settings.outputFolder}/@${entry.citekey}.md`);
@@ -44,7 +45,7 @@ export class ImportService {
 		for (const attachment of entry.attachments) for (const annotation of attachment.annotations) {
 			if (annotation.imagePath && !imageHashes.has(annotation.imagePath)) imageHashes.set(annotation.imagePath, hashBytes(await readAnnotationImage(annotation.imagePath)));
 		}
-		const rendered = renderLiterature(entry, bibliography, settings, original, imageHashes);
+		const rendered = renderLiterature(entry, bibliography, settings, original, imageHashes, { related: index ? relatedCitekeys(entry, index) : [] });
 		const images: Snapshot["images"] = [];
 		for (const image of rendered.images) {
 			await this.checkPath(image.path);
@@ -59,25 +60,26 @@ export class ImportService {
 		return preview;
 	}
 
-	async apply(preview: ImportPreview): Promise<{ path: string; conflicts: string[] }> {
+	async apply(preview: ImportPreview): Promise<{ path: string; conflicts: string[]; changed: boolean }> {
 		const snapshot = this.snapshots.get(preview);
 		if (!snapshot) throw new Error("Unknown or already applied import preview");
 		const path = snapshot.path;
-		if (snapshot.conflicts.length) return { path, conflicts: [...snapshot.conflicts] };
-		if (this.applying) return { path, conflicts: ["Another import is being applied"] };
+		const changed = snapshot.original !== snapshot.content;
+		if (snapshot.conflicts.length) return { path, conflicts: [...snapshot.conflicts], changed: false };
+		if (this.applying) return { path, conflicts: ["Another import is being applied"], changed: false };
 		this.applying = true;
 		try {
 			await this.checkPath(path);
-			if (!(await this.matches(snapshot))) return { path, conflicts: ["Note changed after preview; preview again"] };
+			if (!(await this.matches(snapshot))) return { path, conflicts: ["Note changed after preview; preview again"], changed: false };
 			const pending: { path: string; bytes: Uint8Array }[] = [];
 			// Finish all source and destination checks before creating any files.
 			for (const image of snapshot.images) {
 				await this.checkPath(image.path);
 				const bytes = await readAnnotationImage(image.source);
-				if (hashBytes(bytes) !== image.hash) return { path, conflicts: ["Annotation image changed after preview"] };
+				if (hashBytes(bytes) !== image.hash) return { path, conflicts: ["Annotation image changed after preview"], changed: false };
 				const existing = this.app.vault.getAbstractFileByPath(image.path);
 				if (existing) {
-					if (!(existing instanceof TFile) || existing.stat.size > MAX_IMAGE_BYTES || hashBytes(new Uint8Array(await this.app.vault.readBinary(existing))) !== image.hash) return { path, conflicts: [`Image conflict: ${image.path}`] };
+					if (!(existing instanceof TFile) || existing.stat.size > MAX_IMAGE_BYTES || hashBytes(new Uint8Array(await this.app.vault.readBinary(existing))) !== image.hash) return { path, conflicts: [`Image conflict: ${image.path}`], changed: false };
 				} else pending.push({ path: image.path, bytes });
 			}
 			for (const image of pending) {
@@ -89,17 +91,17 @@ export class ImportService {
 			await this.checkPath(path);
 			const file = this.app.vault.getAbstractFileByPath(path);
 			if (snapshot.original === null) {
-				if (file) return { path, conflicts: ["Note appeared after preview; refusing overwrite"] };
+				if (file) return { path, conflicts: ["Note appeared after preview; refusing overwrite"], changed: false };
 				await this.app.vault.create(path, snapshot.content);
 			} else {
-				if (!(file instanceof TFile)) return { path, conflicts: ["Note removed after preview"] };
+				if (!(file instanceof TFile)) return { path, conflicts: ["Note removed after preview"], changed: false };
 				await this.app.vault.process(file, current => {
 					if (hashText(current) !== hashText(snapshot.original ?? "")) throw new Error("Note changed after preview; no note content was written");
 					return snapshot.content;
 				});
 			}
 			this.snapshots.delete(preview);
-			return { path, conflicts: [] };
+			return { path, conflicts: [], changed };
 		} finally { this.applying = false; }
 	}
 
