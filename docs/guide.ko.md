@@ -2,7 +2,7 @@
 검증된 Zotero 식별자, 인용, 주석, 문헌 노트를 연구 볼트에 연결합니다. Zotero는 읽기 전용으로 다루고 사람이 쓴 노트는 보존합니다.
 
 ## 먼저 확인할 개발 상태
-**0.3.0은 개발 버전이며 공개 플러그인 릴리스가 아닙니다.** **2026-09-14** 기준 공개 저장소에는 GitHub Release가 없고 Obsidian Community Plugins 목록에도 없습니다. 로컬 루트 manifest는 0.3.0이며 별도 0.4 개발은 이 설명서나 설치 약속에 포함되지 않습니다.
+**0.3.0은 개발 버전이며 공개 플러그인 릴리스가 아닙니다.** **2026-09-14** 기준 공개 저장소에는 GitHub Release가 없고 Obsidian Community Plugins 목록에도 없습니다. **공개 `main`의 코드는 아직 0.2.0입니다. 이 설명서는 공개 복제로 받을 수 있는 코드가 아니라 미공개 로컬 0.3.0 개발본을 설명합니다.** 저장소 복제나 릴리스 다운로드로 0.3 기능을 받을 수는 없습니다. 별도 0.4 개발은 이 설명서나 설치 약속에 포함되지 않습니다.
 과거 0.2 기준선은 Obsidian 1.13.7, Zotero 9.0.6, Better BibTeX 9.0.63에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 개명 노트 링크, 교차 볼트 검색을 시험했다고 기록합니다. **0.3의 모든 기능을 새로 검증했다는 뜻은 아닙니다.** 그룹 라이브러리 실사용, 대화형 인용 선택기, Hookmark 수신/왕복은 수동 확인이 필요합니다.
 백업한 테스트 볼트에서 사용하고 본인 작업이 검증될 때까지 기존 연동을 유지합니다. ZotLit/Zotero Integration 전체 호환이나 기존 Nunjucks 템플릿의 즉시 교체를 제공하지 않습니다.
 
@@ -15,7 +15,7 @@
 **citekey**는 `Example2026` 같은 인용 라벨이며 영구 항목 식별자가 아닙니다. 정식 식별은 라이브러리 종류, 로컬 library ID, Zotero item key를 함께 사용합니다. 첨부와 주석에는 별도 ID가 있으며 부모 항목이 곧 PDF는 아닙니다.
 
 ## 로컬 시험용 빌드와 설치
-아직 다운로드할 공개 릴리스 파일 세트가 없습니다. 개발자/테스터는 공개 저장소를 개발 폴더에 복제한 뒤 루트 소스를 빌드합니다.
+아직 공개 릴리스 파일이나 공개된 0.3 소스는 없습니다. **공개 `main`을 복제하고 아래 명령을 실행하면 이 설명서의 0.3이 아니라 0.2 기준선이 빌드됩니다.** 공개 기준선을 시험하려면 [해당 버전의 README](https://github.com/johnfkoo951/cmds-zotero/blob/b58adb733bcd5bc0734ca2f31d6cb420fd8e8fbe/README.md)를 따릅니다.
 ```sh
 npm ci
 npm run lint
@@ -23,10 +23,11 @@ npm run typecheck
 npm test
 npm run build
 ```
-`main.js`, `manifest.json`, `styles.css`만 `<vault>/.obsidian/plugins/cmds-zotero/`에 복사합니다. Obsidian을 다시 로드하고 **CMDS Zotero**를 직접 활성화합니다. 다른 컴퓨터의 설정/개인 인덱스를 복사하지 않습니다. 위 명령은 사용 안내이며 이번 문서 작업에서 실행했다는 뜻은 아닙니다.
+먼저 빌드한 `manifest.json`을 확인합니다. 현재 공개 main 빌드는 **0.2.0**이며, 아래 0.3 전용 자동완성/사이드바/설정 동작을 그 빌드에서 보장하지 않습니다. `main.js`, `manifest.json`, `styles.css`만 `<vault>/.obsidian/plugins/cmds-zotero/`에 복사합니다. Obsidian을 다시 로드하고 **CMDS Zotero**를 직접 활성화합니다. 다른 컴퓨터의 설정/개인 인덱스를 복사하지 않습니다. 위 명령은 사용 안내이며 이번 문서 작업에서 실행했다는 뜻은 아닙니다.
 기존 `cmds-link-zotero`에서 이전한다면 아래 전용 이전 절차를 사용합니다. 실행 중 설치본을 덮어쓰거나 두 ID를 동시에 활성화하지 않습니다.
 
 ## 첫 성공: 연결, 인덱스, 자료 하나 가져오기
+아래 절차와 기능 사전은 **미공개 로컬 0.3 개발 환경**을 설명합니다. 해당 소스가 없는 독자에게는 개발 미리보기이며, 공개 저장소를 복제한 경우에는 위의 0.2 기준선 안내를 사용합니다.
 1. Better BibTeX이 활성화된 Zotero를 실행합니다.
 2. **설정 → CMDS Zotero**에서 **Server endpoint**, **Output folder**, **Image folder**, **Index path**를 확인합니다. 출력/인덱스 경로는 볼트 상대경로입니다.
 3. **Save configuration**을 먼저 누릅니다. 수정값은 저장 전까지 초안이며 **Test connection → Test**는 저장된 설정을 시험합니다.
@@ -143,6 +144,7 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 롤백은 배포 이후 바뀐 파일/설정을 덮어쓰지 않고 거부합니다. 백업을 유지해 충돌을 수동 해결합니다. 재시작 후 의도한 새 ID만 활성화되었는지, 설정/인덱스/자료 하나가 맞는지 확인합니다. 이 설명서 작성 중 실제 이전은 실행하지 않았습니다.
 
 ## 연동과 개발 참고
+아래 구현 설명은 로컬 0.3을 확인한 결과입니다. 공개 소스 링크는 현재 받을 수 있는 0.2 기준선을 가리키며 0.3 전체 구현이 공개됐다는 근거가 아닙니다.
 [소스 타입](https://github.com/johnfkoo951/cmds-zotero/blob/main/src/types.ts)의 schema 2는 생성 시각, 개수, 항목, 기능, 진단, 완전성을 정의합니다. `resolved`, `ambiguous`, `not-found`, `unavailable`을 구분하며 레거시 인덱스는 재구축 전까지 정식 식별을 신뢰하지 않습니다.
 [ingest API](https://github.com/johnfkoo951/cmds-zotero/blob/main/src/ingest-api.ts)와 [CLI](https://github.com/johnfkoo951/cmds-zotero/blob/main/scripts/ingest.mjs)는 별도 HTTP 서버 없이 제한된 작업/결과 계약을 제공합니다. UI 명령 실행만으로 완료 데이터를 얻었다고 가정하지 말고 direct-BBT/오프라인 대안을 유지합니다.
 ```sh

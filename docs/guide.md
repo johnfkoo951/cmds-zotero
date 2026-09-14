@@ -2,7 +2,7 @@
 Connect verified Zotero identities, citations, annotations and literature notes to a research vault, while keeping Zotero read-only and preserving human-written notes.
 
 ## Development status: read this first
-**0.3.0 is a development version, not a published plugin release.** On **2026-09-14**, the public repository had no GitHub releases and no entry in Obsidian's Community Plugins registry. The local root manifest is 0.3.0. Separate 0.4 development is not part of this manual or an installation promise.
+**0.3.0 is a development version, not a published plugin release.** On **2026-09-14**, the public repository had no GitHub releases and no entry in Obsidian's Community Plugins registry. **Public `main` is still 0.2.0. This manual describes unpublished local 0.3.0 development, not code available from a public clone.** Its 0.3 features cannot currently be obtained by cloning this repository or downloading a release. Separate 0.4 development is not part of this manual or an installation promise.
 The earlier 0.2 baseline records local testing with Obsidian 1.13.7, Zotero 9.0.6 and Better BibTeX 9.0.63: index rebuilds, APA bibliography, text/image import, repeat-import preservation, renamed-note links and cross-vault lookup. These are historical baseline checks, **not fresh acceptance of every 0.3 feature**. Live group-library behavior, interactive citation-picker acceptance and Hookmark receiving/round trips still need manual testing.
 Use a backed-up test vault. Keep existing Zotero integrations installed until your own workflow is verified. This is not full ZotLit/Zotero Integration compatibility and does not accept their Nunjucks templates as a drop-in API.
 
@@ -15,7 +15,7 @@ Use a backed-up test vault. Keep existing Zotero integrations installed until yo
 A **citekey** is a citation label such as `Example2026`. It is not a stable item identity. Canonical identity combines library type, local library ID and Zotero item key. Attachments and annotations have their own identities; a parent item is not a PDF.
 
 ## Build and install for a local test
-There is no released asset set to download yet. For developers/testers, clone the public repository into a development directory and build the root source:
+There is no released asset set or public 0.3 source to download yet. **Cloning public `main` and running the commands below builds the 0.2 baseline only, not the 0.3 implementation described in the rest of this guide.** For that public baseline, follow its [version-specific README](https://github.com/johnfkoo951/cmds-zotero/blob/b58adb733bcd5bc0734ca2f31d6cb420fd8e8fbe/README.md).
 ```sh
 npm ci
 npm run lint
@@ -23,10 +23,11 @@ npm run typecheck
 npm test
 npm run build
 ```
-Copy only `main.js`, `manifest.json`, and `styles.css` to `<vault>/.obsidian/plugins/cmds-zotero/`. Reload Obsidian and enable **CMDS Zotero** manually. Never copy another machine's settings or private indexes. The commands above are instructions, not a claim they were executed during this documentation pass.
+Check the built `manifest.json` first: a public-main build currently says **0.2.0**. Do not follow the 0.3-only completion/sidebar/settings behavior below as a guarantee for that build. Copy only `main.js`, `manifest.json`, and `styles.css` to `<vault>/.obsidian/plugins/cmds-zotero/`. Reload Obsidian and enable **CMDS Zotero** manually. Never copy another machine's settings or private indexes. The commands above are instructions, not a claim they were executed during this documentation pass.
 If migrating from `cmds-link-zotero`, use the dedicated migration appendix below instead of overwriting a live install. Do not enable both plugin IDs.
 
 ## First success: connect, index, import one source
+The steps and feature reference below describe the **unpublished local 0.3 development environment**. They are a development preview for readers without that source; public-clone users should use the linked 0.2 baseline guide instead.
 1. Start Zotero with Better BibTeX enabled.
 2. Open **Settings → CMDS Zotero** and inspect **Server endpoint**, **Output folder**, **Image folder**, and **Index path**. Paths for output/index are relative to the current vault, not arbitrary absolute paths.
 3. Click **Save configuration** first. Edits remain a draft until saved. **Test connection → Test** tests the saved configuration, not unsaved text.
@@ -143,6 +144,7 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 Rollback refuses changed deployed files/settings rather than overwriting later work. Keep the backup and resolve conflicts manually. After restarting Obsidian, ensure only the intended new ID is enabled and verify settings, index and one source before regular work. No migration was executed while preparing this guide.
 
 ## Integration and development reference
+The implementation discussed here was inspected locally at 0.3. Public source links below point to the available 0.2 baseline and are not evidence that the full 0.3 implementation has been published.
 [Source types](https://github.com/johnfkoo951/cmds-zotero/blob/main/src/types.ts) define schema 2 with generated time, count, entries, capabilities, diagnostics and completeness. Resolution distinguishes `resolved`, `ambiguous`, `not-found`, and `unavailable`. Legacy indexes remain identity-untrusted until rebuilt.
 The [ingest API](https://github.com/johnfkoo951/cmds-zotero/blob/main/src/ingest-api.ts) and [CLI](https://github.com/johnfkoo951/cmds-zotero/blob/main/scripts/ingest.mjs) provide a bounded job/result contract without an independent HTTP listener. Consumers should keep direct-BBT/offline fallbacks rather than assume a UI command returned completed data.
 ```sh

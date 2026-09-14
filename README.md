@@ -3,18 +3,18 @@
 # CMDS Zotero
 Connect Zotero sources, citations, annotations and literature notes with verified identities and preservation-aware imports.
 
-**0.3.0 development, unreleased.** No GitHub release or Community Plugins listing as of 2026-09-14.
+**Public source: 0.2.0. Local 0.3.0 development: not yet published.** No GitHub release or Community Plugins listing as of 2026-09-14.
 
 Obsidian 1.7.2+ | Desktop only.
 
-## What it does
+## 0.3 development preview
 - Rebuild a local Better BibTeX index and resolve canonical source/PDF identities.
 - Insert citations and bibliography; review references and annotations in sidebars.
 - Preview a single literature-note import and preserve human-owned content.
 - Find citing notes and opt-in peer-vault references without writing to Zotero.
 
 ## Install and first use
-For developers/testers only: build the root source, install the three plugin files in a backed-up test vault, start Zotero with Better BibTeX, **Save configuration**, **Test**, then **Refresh citekey index**. Preview and import one sample before any batch operation.
+Public `main` currently builds **0.2.0**, not the local 0.3 implementation described in the manual. Use the [public 0.2 baseline guide](https://github.com/johnfkoo951/cmds-zotero/blob/b58adb733bcd5bc0734ca2f31d6cb420fd8e8fbe/README.md) when trying the available source. There is no public 0.3 install path yet; the 0.3 manual is a development preview, not a promise that public-clone builds include those features.
 
 ## Read the manual
 - [English user guide](docs/guide.md)
@@ -24,7 +24,7 @@ For developers/testers only: build the root source, install the three plugin fil
 - [Issues and support](https://github.com/johnfkoo951/cmds-zotero/issues)
 
 ## Privacy and limits
-No published release or Community installation yet. Root 0.3 features are not the separate 0.4 work. Group libraries, interactive picker acceptance and Hookmark round trips remain environment-specific tests. Existing templates are not drop-in compatible. Batch update does not ask per note.
+No published release or Community installation yet. Unpublished local 0.3 features are not the separate 0.4 work. Group libraries, interactive picker acceptance and Hookmark round trips remain environment-specific tests. Existing templates are not drop-in compatible. Batch update does not ask per note.
 Citekey completion uses `[@` by default. Completion, tag-exclusion and heading-highlight preferences are not yet exposed in the settings UI.
 
 ## Development
@@ -35,7 +35,7 @@ npm run typecheck
 npm test
 npm run build
 ```
-Build the plugin assets for local development.
+These commands build whichever checkout you actually have. Public `main` is 0.2.0; they do not fetch unpublished 0.3 code.
 [Changelog](CHANGELOG.md)
 
 ## Credits and license
