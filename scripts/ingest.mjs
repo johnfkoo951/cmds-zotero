@@ -4,10 +4,13 @@
 // skills/cmds-zotero/references/cli-contract-v2.md.
 //
 // Transport notes: a busy Obsidian renderer makes `obsidian eval` return exit 0 with EMPTY stdout while the eval
-// still runs. Such bridge failures are transient: discovery is retried up to three times before submission, a
-// submission with unknown outcome is never repeated, and result polling keeps trying until the --timeout deadline.
+// still runs. Only that signature (exit 0, no result and no error line) is retried before submission, up to three
+// times; a CLI that fails to spawn or exits non-zero is immediate bridge loss so offline fallback stays instant.
+// A submission with unknown outcome is never repeated. After acceptance every bridge failure (empty output or a
+// transport error) is retried until the --timeout deadline, then reported as timeout.
 // Completed results persist in the plugin until this script acknowledges them (p.service.ackJob) or their TTL.
-// CMDS_ZOTERO_POLL_MS (tests only): overrides the poll deadline in milliseconds instead of --timeout seconds.
+// CMDS_ZOTERO_POLL_MS overrides the poll deadline in milliseconds instead of --timeout seconds. It is honoured only
+// inside the node test runner (NODE_TEST_CONTEXT set) so user shells cannot bypass the --timeout bounds.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -126,19 +129,23 @@ const request = {};
 const map = { '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict' };
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
-const pollOverride = /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
+const pollOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
 const timeoutMs = pollOverride ?? (parsed.values['--timeout'] ?? (action === 'pdf-text' ? 900 : 300)) * 1000;
 const offline = parsed.values['--offline'] === true;
 const TRANSIENT_DELAY_MS = 500;
 const DISCOVERY_RETRIES = 3;
+// Throws raised by the eval wrapper itself or by the plugin's lifecycle/capacity guards: the plugin is not (usably)
+// present, so they stay requires-obsidian. Every other startJob throw is the plugin validating the request.
+const LIFECYCLE_ERROR = /is not loaded|Wrong vault|was unloaded|Too many active/;
 
+// Exit 0 with neither a result nor an error line is the busy-renderer signature: the eval ran, only its output was lost.
 function classifyBridgeOutput(output) {
 	const lines = output.split(/\r?\n/).filter(Boolean);
 	const result = lines.findLast(value => value.startsWith('=> '));
 	if (result) return { kind: 'result', value: JSON.parse(result.slice(3)) };
 	const error = lines.map(l => /^Error: (.*)$/.exec(l)).find(Boolean);
 	if (error) return { kind: 'plugin-error', message: error[1] };
-	return { kind: 'bridge-failure', message: lines.length ? lines.join(' ') : 'Empty output from the Obsidian CLI' };
+	return { kind: 'bridge-failure', transient: true, message: lines.length ? lines.join(' ') : 'Empty output from the Obsidian CLI' };
 }
 
 function evaluate(expression) {
@@ -148,15 +155,16 @@ function evaluate(expression) {
 		output = execFileSync('obsidian', [`vault=${vault}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 	} catch (error) {
 		const detail = error && typeof error === 'object' && 'stdout' in error && error.stdout ? String(error.stdout) : error instanceof Error ? error.message : 'Obsidian CLI failed';
-		return { kind: 'bridge-failure', message: detail.split(/\r?\n/).filter(Boolean).slice(-1)[0] ?? 'Obsidian CLI failed' };
+		// A CLI that could not spawn or exited non-zero (Obsidian not running, CLI missing) is not the busy-renderer case.
+		return { kind: 'bridge-failure', transient: false, message: detail.split(/\r?\n/).filter(Boolean).slice(-1)[0] ?? 'Obsidian CLI failed' };
 	}
 	return classifyBridgeOutput(output);
 }
 
-// Pre-submission reads are side-effect free, so a transient bridge failure may be retried a few times.
+// Pre-submission reads are side-effect free, so the transient (empty-output) bridge failure may be retried a few times.
 async function evaluateBeforeSubmission(expression) {
 	let outcome = evaluate(expression);
-	for (let retry = 0; retry < DISCOVERY_RETRIES && outcome.kind === 'bridge-failure'; retry++) {
+	for (let retry = 0; retry < DISCOVERY_RETRIES && outcome.kind === 'bridge-failure' && outcome.transient; retry++) {
 		await delay(TRANSIENT_DELAY_MS);
 		outcome = evaluate(expression);
 	}
@@ -179,7 +187,7 @@ async function runLive() {
 		const started = evaluate(`p.service.startJob(${JSON.stringify(action)},${JSON.stringify(request)})`);
 		if (started.kind === 'result') { id = started.value; break; }
 		if (started.kind === 'plugin-error' && /Too many active/.test(started.message) && attempt < 3) { await delay(1000 * 2 ** attempt); continue; }
-		if (started.kind === 'plugin-error' && /Too many active|was unloaded/.test(started.message)) return { bridge: started, phase: 'discovery' };
+		if (started.kind === 'plugin-error' && LIFECYCLE_ERROR.test(started.message)) return { bridge: started, phase: 'discovery' };
 		// Any other throw is the plugin rejecting the request before acceptance: Obsidian and the plugin are present.
 		if (started.kind === 'plugin-error') return { bridge: { kind: 'invalid-request', message: started.message, apiVersions }, phase: 'discovery' };
 		return { bridge: started, phase: 'submission-uncertain' };

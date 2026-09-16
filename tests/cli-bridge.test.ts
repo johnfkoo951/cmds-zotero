@@ -12,7 +12,7 @@ const ro = join(process.cwd(), "scripts", "ingest-ro.mjs");
 const temporaryRoots: string[] = [];
 after(() => { for (const root of temporaryRoots) rmSync(root, { recursive: true, force: true }); });
 
-type Mode = "flaky" | "poll-always-empty" | "invalid" | "job-failed";
+type Mode = "flaky" | "poll-always-empty" | "invalid" | "unloaded" | "job-failed" | "discovery-exits";
 
 const FAKE = `
 const { appendFileSync, readFileSync, writeFileSync, existsSync } = require("node:fs");
@@ -30,11 +30,15 @@ const result = { contract: 2, apiVersion: 1, apiVersions: [1, 2], action: "resol
 if (kind === "discovery") {
   // First discovery call on a busy renderer: exit 0, empty stdout.
   if (mode === "flaky" && counts[kind] === 1) process.exit(0);
+  // Obsidian not running / CLI unusable: non-zero exit with a plain message, never the busy-renderer signature.
+  if (mode === "discovery-exits") { console.log("Obsidian is not running."); process.exit(1); }
   console.log('=> {"apiVersion":2,"apiVersions":[1,2]}'); process.exit(0);
 }
 if (kind === "startJob") {
   // An eval throw is reported by the Obsidian CLI as an "Error: ..." line with exit 0 (observed live, audit F12).
   if (mode === "invalid") { console.log("Error: Selector citekey must not be empty."); process.exit(0); }
+  // The eval wrapper's own throw when the plugin was disabled between discovery and submission.
+  if (mode === "unloaded") { console.log("Error: CMDS Zotero service is not loaded."); process.exit(0); }
   console.log('=> "job-7"'); process.exit(0);
 }
 if (kind === "getJob") {
@@ -95,8 +99,49 @@ test("a bridge that never answers polls yields timeout after the deadline withou
 	assert.equal(result.stderr.trim(), "reason: timeout");
 	const seen = counts(fake.state);
 	assert.equal(seen.startJob, 1);
-	assert.ok(seen.getJob >= 3, `polled ${seen.getJob} times`);
+	// One initial poll plus at least one more before the deadline is guaranteed by the loop regardless of machine load.
+	assert.ok(seen.getJob >= 2, `polled ${seen.getJob} times`);
 	assert.equal(seen.ackJob, undefined, "nothing to acknowledge");
+});
+
+test("the plugin disappearing between discovery and submission stays requires-obsidian with an unknown plugin", () => {
+	const fake = fakeObsidian("unloaded");
+	const result = run(fake.env);
+	assert.equal(result.status, 1);
+	const payload = JSON.parse(result.stdout);
+	assert.equal(payload.reason, "requires-obsidian");
+	assert.match(payload.message, /CMDS Zotero service is not loaded/);
+	assert.equal(payload.connection.mode, "live");
+	assert.notEqual(payload.connection.plugin.status, "ok");
+	assert.equal(payload.connection.plugin.status, "unknown");
+	const seen = counts(fake.state);
+	assert.equal(seen.startJob, 1, "an unloaded plugin is not retried");
+	assert.equal(seen.getJob, undefined, "nothing was submitted, so nothing is polled");
+	assert.equal(result.stderr.trim(), "reason: requires-obsidian");
+});
+
+test("a CLI that exits non-zero during discovery is immediate bridge loss: no retries, one spawn", () => {
+	const fake = fakeObsidian("discovery-exits");
+	const started = Date.now();
+	const result = run(fake.env, script, ["--vault", "Research", "--action", "refresh"]);
+	const elapsed = Date.now() - started;
+	assert.equal(result.status, 1);
+	const payload = JSON.parse(result.stdout);
+	assert.equal(payload.reason, "requires-obsidian");
+	assert.match(payload.message, /Obsidian is not running/);
+	assert.equal(counts(fake.state).discovery, 1, "non-zero exit is not the busy-renderer signature and is not retried");
+	assert.ok(elapsed < 1500, `finished in ${elapsed} ms without transient delays`);
+});
+
+test("CMDS_ZOTERO_POLL_MS is ignored outside the node test runner so --timeout bounds cannot be bypassed", () => {
+	// Reproduces a user shell: no NODE_TEST_CONTEXT, an override of 100 ms, and --timeout at its minimum.
+	const fake = fakeObsidian("flaky", 2);
+	delete fake.env.NODE_TEST_CONTEXT;
+	fake.env.CMDS_ZOTERO_POLL_MS = "100";
+	const result = run(fake.env, script, ["--vault", "Research", "--action", "resolve", "--citekey", "smith2020", "--timeout", "30"]);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(JSON.parse(result.stdout).marker, "delivered-after-empty-polls", "two empty polls exceed 100 ms yet the result still arrives");
+	assert.equal(counts(fake.state).getJob, 3);
 });
 
 test("plugin-side request rejection is invalid-request with a present plugin, not requires-obsidian", () => {
