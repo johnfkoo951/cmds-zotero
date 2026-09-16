@@ -266,6 +266,7 @@ test("a hung write job times out, is reported as failed, releases busy, and a la
 	const job = api.getJob(id);
 	assert.equal(job.state, "failed");
 	assert.match(job.error ?? "", /timed out after 900 s \(pdf-text\)/);
+	assert.equal(job.reason, "timeout", "host timeout carries a structured reason for the CLI");
 	assert.match(job.error ?? "", /inspect the current state/);
 	assert.equal(api.busy, false, "the write gate is released on timeout");
 	assert.equal(api.activeCount, 0);

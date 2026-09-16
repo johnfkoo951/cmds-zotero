@@ -75,7 +75,8 @@ A completed result persists until the client acknowledges it or its ten-minute T
 return the same result. Lost delivery is an uncertain outcome;
 inspect the current state with read-only reconcile rather than automatically reapplying.
 Unloading prevents late completion from recreating jobs or performing later writes.
-A pending job is failed by the host after a per-action timeout (`pdf-text` 900 s, every other action 300 s); the
+A pending job is failed by the host after a per-action timeout (`pdf-text` 900 s, every other action 300 s); the job
+carries `reason: timeout` and the CLI reports it as reason `timeout` (uncertain outcome, never resubmitted), not `requires-obsidian`; the
 failure text names the action and the timeout, releases the write gate that blocks reconfiguration, and a late
 settlement never reverses it. A timed-out write is an uncertain outcome like any other timeout and its failure text
 says so; a timed-out read-only job says it left no state behind. The underlying work is not cancelled.

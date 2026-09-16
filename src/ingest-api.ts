@@ -19,6 +19,8 @@ export interface IngestJob {
 	error?: string;
 	/** The requested action; present on jobs created since 0.5. */
 	action?: IngestAction;
+	/** Structured cause for failed jobs; `timeout` when the host per-action deadline failed the job (0.5 R13). */
+	reason?: "timeout";
 }
 export type ActionHostFactory = (action: AgentAction, request: unknown, now: Date) => Promise<ActionHost>;
 
@@ -130,7 +132,7 @@ export class IngestAPI {
 			this.timerHandles.delete(id);
 			// A read-only job leaves nothing behind; only a write is an uncertain outcome worth inspecting.
 			const consequence = writes ? "A timed-out write may still have completed; inspect the current state before resubmitting." : "The request was read-only and left no state behind; resubmit once the host responds.";
-			settle({ state: "failed", error: `Request timed out after ${Math.round(timeoutMs / 1000)} s (${action}). ${consequence}`, finishedAt: new Date().toISOString() });
+			settle({ state: "failed", reason: "timeout", error: `Request timed out after ${Math.round(timeoutMs / 1000)} s (${action}). ${consequence}`, finishedAt: new Date().toISOString() });
 			release();
 		}, timeoutMs));
 		void this.execute(action, request).then(result => {

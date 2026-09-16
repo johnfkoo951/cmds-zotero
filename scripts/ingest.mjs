@@ -198,7 +198,8 @@ async function runLive() {
 		const job = evaluate(`p.service.getJob(${JSON.stringify(id)})`);
 		if (job.kind === 'result') {
 			lastBridgeFailure = null;
-			if (job.value.state === 'failed') return { bridge: { kind: 'plugin-error', message: job.value.error ?? 'Ingest request failed.' }, phase: 'accepted' };
+			// A host-side per-action timeout is reported as reason 'timeout' (uncertain outcome), never as a missing Obsidian.
+			if (job.value.state === 'failed') return { bridge: { kind: job.value.reason === 'timeout' ? 'timeout' : 'plugin-error', message: job.value.error ?? 'Ingest request failed.' }, phase: 'accepted' };
 			if (job.value.state === 'completed') {
 				// Best effort: release the persisted result now that it has been read. Failure to acknowledge is not an error.
 				evaluate(`typeof p.service.ackJob==='function'?p.service.ackJob(${JSON.stringify(id)}):false`);
