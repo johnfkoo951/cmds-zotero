@@ -1,20 +1,30 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CACHE_SCHEMA, cacheFileName, cachePrefix, evictionSet, evictionSetByPath, parseCacheName, PDF_TEXT_CACHE_DIR, pickNewest, validateCache, verifyCache, type PdfTextCache } from "../src/pdf/cache";
+import { CACHE_SCHEMA, cacheFileName, cachePrefix, evictionSet, evictionSetByPath, filePathHash, parseCacheName, PDF_TEXT_CACHE_DIR, pickNewest, validateCache, verifyCache, type PdfTextCache } from "../src/pdf/cache";
 
 const SHA = "0123456789abcdef".repeat(4);
 const OTHER_SHA = "fedcba9876543210".repeat(4);
 const attachment = { kind: "attachment", libraryType: "user", libraryID: 1, attachmentKey: "ATTACH01" } as const;
 const group = { kind: "attachment", libraryType: "group", libraryID: 42, attachmentKey: "GRPATT01" } as const;
+// 0.5 R13/F17: vault-file caches are named by a hash of the vault-relative path plus the content hash.
+const fileA = { kind: "file", path: "80. References/Attachments/synthetic-a.pdf" } as const;
+const fileB = { kind: "file", path: "80. References/Attachments/synthetic-b.pdf" } as const;
+const hashA = filePathHash(fileA.path);
+const hashB = filePathHash(fileB.path);
 
 test("cache names encode scope and the first 16 hex chars of the content hash", () => {
 	assert.equal(PDF_TEXT_CACHE_DIR, ".cmds-zotero/pdf-text");
 	assert.equal(cachePrefix(attachment), "user-1-ATTACH01");
 	assert.equal(cachePrefix(group), "group-42-GRPATT01");
-	assert.equal(cachePrefix({ kind: "file" }), "file");
+	assert.match(hashA, /^[0-9a-f]{16}$/);
+	assert.notEqual(hashA, hashB);
+	assert.equal(cachePrefix(fileA), `file-${hashA}`);
 	assert.equal(cacheFileName(attachment, SHA), "user-1-ATTACH01-0123456789abcdef.json");
 	assert.equal(cacheFileName(group, SHA), "group-42-GRPATT01-0123456789abcdef.json");
-	assert.equal(cacheFileName({ kind: "file" }, SHA), "file-0123456789abcdef.json");
+	assert.equal(cacheFileName(fileA, SHA), `file-${hashA}-0123456789abcdef.json`);
+	// Identical bytes at two vault paths never share a cache name (F17).
+	assert.notEqual(cacheFileName(fileA, SHA), cacheFileName(fileB, SHA));
+	assert.throws(() => cacheFileName({ kind: "file", path: "" }, SHA), /vault path/);
 	assert.throws(() => cacheFileName(attachment, "abc"), /SHA-256/);
 	assert.throws(() => cacheFileName({ ...attachment, attachmentKey: "short" }, SHA), /attachment key/);
 	assert.throws(() => cacheFileName({ ...attachment, libraryID: 0 }, SHA), /library ID/);
@@ -24,7 +34,10 @@ test("cache names encode scope and the first 16 hex chars of the content hash", 
 test("cache names parse back into their scope and ignore foreign files", () => {
 	assert.deepEqual(parseCacheName("user-1-ATTACH01-0123456789abcdef.json"), { scope: attachment, prefix: "user-1-ATTACH01", sha16: "0123456789abcdef" });
 	assert.deepEqual(parseCacheName("group-42-GRPATT01-0123456789abcdef.json"), { scope: group, prefix: "group-42-GRPATT01", sha16: "0123456789abcdef" });
-	assert.deepEqual(parseCacheName("file-0123456789abcdef.json"), { scope: { kind: "file" }, prefix: "file", sha16: "0123456789abcdef" });
+	assert.deepEqual(parseCacheName(`file-${hashA}-0123456789abcdef.json`), { scope: { kind: "file", pathHash: hashA }, prefix: `file-${hashA}`, sha16: "0123456789abcdef" });
+	// Pre-0.5 file caches carried no path identity; they are foreign now and are never selected or evicted.
+	assert.equal(parseCacheName("file-0123456789abcdef.json"), null);
+	assert.equal(parseCacheName(`file-${hashA.toUpperCase()}-0123456789abcdef.json`), null);
 	assert.equal(parseCacheName("user-0-ATTACH01-0123456789abcdef.json"), null);
 	assert.equal(parseCacheName("user-1-attach01-0123456789abcdef.json"), null);
 	assert.equal(parseCacheName("user-1-ATTACH01-0123456789ABCDEF.json"), null);
@@ -39,15 +52,16 @@ test("the newest cache for a prefix wins by extractedAt with a deterministic tie
 		{ name: "user-1-ATTACH01-bbbbbbbbbbbbbbbb.json", extractedAt: "2026-09-03T10:00:00.000Z" },
 		{ name: "user-1-ATTACH01-cccccccccccccccc.json", extractedAt: "2026-09-02T10:00:00.000Z" },
 		{ name: "user-1-OTHERATT-dddddddddddddddd.json", extractedAt: "2026-09-09T10:00:00.000Z" },
-		{ name: "file-eeeeeeeeeeeeeeee.json", extractedAt: "2026-09-04T10:00:00.000Z" },
-		{ name: "file-ffffffffffffffff.json", extractedAt: "2026-09-04T10:00:00.000Z" },
+		{ name: `file-${hashA}-eeeeeeeeeeeeeeee.json`, extractedAt: "2026-09-04T10:00:00.000Z" },
+		{ name: `file-${hashA}-ffffffffffffffff.json`, extractedAt: "2026-09-04T10:00:00.000Z" },
+		{ name: `file-${hashB}-0000000000000000.json`, extractedAt: "2026-09-08T10:00:00.000Z" },
 		{ name: "README.md", extractedAt: "2099-01-01T00:00:00.000Z" },
 	];
 	assert.equal(pickNewest(entries, "user-1-ATTACH01")?.name, "user-1-ATTACH01-bbbbbbbbbbbbbbbb.json");
-	assert.equal(pickNewest(entries, "file")?.name, "file-ffffffffffffffff.json");
+	assert.equal(pickNewest(entries, `file-${hashA}`)?.name, `file-${hashA}-ffffffffffffffff.json`, "another path's newer cache is never selected");
 	assert.equal(pickNewest(entries, "user-1-MISSING1"), null);
-	assert.equal(pickNewest([], "file"), null);
-	assert.equal(pickNewest([{ name: "file-0000000000000000.json", extractedAt: "garbage" }, { name: "file-1111111111111111.json", extractedAt: "2026-01-01T00:00:00Z" }], "file")?.name, "file-1111111111111111.json");
+	assert.equal(pickNewest([], `file-${hashA}`), null);
+	assert.equal(pickNewest([{ name: `file-${hashA}-0000000000000000.json`, extractedAt: "garbage" }, { name: `file-${hashA}-1111111111111111.json`, extractedAt: "2026-01-01T00:00:00Z" }], `file-${hashA}`)?.name, `file-${hashA}-1111111111111111.json`);
 });
 
 test("eviction keeps the current cache and leaves other prefixes and foreign files alone", () => {
@@ -58,25 +72,29 @@ test("eviction keeps the current cache and leaves other prefixes and foreign fil
 		"user-1-ATTACH01-cccccccccccccccc.json",
 		"user-1-OTHERATT-dddddddddddddddd.json",
 		"group-42-GRPATT01-aaaaaaaaaaaaaaaa.json",
+		`file-${hashA}-eeeeeeeeeeeeeeee.json`,
+		`file-${hashB}-eeeeeeeeeeeeeeee.json`,
 		"file-eeeeeeeeeeeeeeee.json",
 		".DS_Store",
 	];
 	assert.deepEqual(evictionSet(names, "user-1-ATTACH01-bbbbbbbbbbbbbbbb.json"), ["user-1-ATTACH01-aaaaaaaaaaaaaaaa.json", "user-1-ATTACH01-cccccccccccccccc.json"]);
-	// file- names carry no identity: never evict another vault PDF's cache by name.
-	assert.deepEqual(evictionSet(names, "file-0000000000000000.json"), []);
+	// A file prefix names one vault path: another path's cache and a pre-0.5 name are never evicted.
+	assert.deepEqual(evictionSet(names, `file-${hashA}-0000000000000000.json`), [`file-${hashA}-eeeeeeeeeeeeeeee.json`]);
 	assert.deepEqual(evictionSet(names, "group-42-GRPATT01-aaaaaaaaaaaaaaaa.json"), []);
 	assert.throws(() => evictionSet(names, "not-a-cache.json"), /cache name/);
 });
 
 test("file-scope eviction follows the recorded vault path, never the prefix alone", () => {
 	const entries = [
-		{ name: "file-aaaaaaaaaaaaaaaa.json", path: "80. References/Attachments/synthetic-a.pdf" },
-		{ name: "file-bbbbbbbbbbbbbbbb.json", path: "80. References/Attachments/synthetic-a.pdf" },
-		{ name: "file-cccccccccccccccc.json", path: "80. References/Attachments/synthetic-b.pdf" },
-		{ name: "user-1-ATTACH01-dddddddddddddddd.json", path: "80. References/Attachments/synthetic-a.pdf" },
+		{ name: `file-${hashA}-aaaaaaaaaaaaaaaa.json`, path: fileA.path },
+		{ name: `file-${hashA}-bbbbbbbbbbbbbbbb.json`, path: fileA.path },
+		// A recorded path that disagrees with the name's path hash is left alone (never evicted blindly).
+		{ name: `file-${hashB}-cccccccccccccccc.json`, path: fileA.path },
+		{ name: `file-${hashA}-dddddddddddddddd.json`, path: fileB.path },
+		{ name: "user-1-ATTACH01-dddddddddddddddd.json", path: fileA.path },
 	];
-	assert.deepEqual(evictionSetByPath(entries, "file-bbbbbbbbbbbbbbbb.json", "80. References/Attachments/synthetic-a.pdf"), ["file-aaaaaaaaaaaaaaaa.json"]);
-	assert.deepEqual(evictionSetByPath(entries, "file-eeeeeeeeeeeeeeee.json", "80. References/Attachments/synthetic-c.pdf"), []);
+	assert.deepEqual(evictionSetByPath(entries, `file-${hashA}-bbbbbbbbbbbbbbbb.json`, fileA.path), [`file-${hashA}-aaaaaaaaaaaaaaaa.json`]);
+	assert.deepEqual(evictionSetByPath(entries, `file-${filePathHash("c.pdf")}-eeeeeeeeeeeeeeee.json`, "c.pdf"), []);
 	assert.throws(() => evictionSetByPath(entries, "user-1-ATTACH01-dddddddddddddddd.json", "x.pdf"), /file scope/);
 });
 

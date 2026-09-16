@@ -2,6 +2,7 @@
  * PDF text cache naming, selection, eviction and schema validation. Pure: never imports `obsidian`;
  * directory listings and file stats are injected by the host. Vocabulary §6.
  */
+import { createHash } from "node:crypto";
 import type { PageText } from "./locate";
 
 export const PDF_TEXT_CACHE_DIR = ".cmds-zotero/pdf-text";
@@ -30,23 +31,34 @@ export interface PdfTextCache {
 	tool: string;
 }
 
-export type CacheScope =
-	| { kind: "attachment"; libraryType: "user" | "group"; libraryID: number; attachmentKey: string }
-	| { kind: "file" };
+export type AttachmentCacheScope = { kind: "attachment"; libraryType: "user" | "group"; libraryID: number; attachmentKey: string };
+/** A vault PDF (`--file`): `path` is vault-relative and becomes part of the cache name (0.5 R13/F17). */
+export type CacheScope = AttachmentCacheScope | { kind: "file"; path: string };
+/** The scope recoverable from a cache name: a file name carries the path hash, never the path itself. */
+export type ParsedCacheScope = AttachmentCacheScope | { kind: "file"; pathHash: string };
 
 export interface ParsedCacheName {
-	scope: CacheScope;
+	scope: ParsedCacheScope;
 	prefix: string;
 	sha16: string;
 }
 
 const ATTACHMENT_KEY = /^[A-Z0-9]{8}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const CACHE_NAME = /^(?:(user|group)-([1-9]\d*)-([A-Z0-9]{8})|file)-([0-9a-f]{16})\.json$/;
+const CACHE_NAME = /^(?:(user|group)-([1-9]\d*)-([A-Z0-9]{8})|file-([0-9a-f]{16}))-([0-9a-f]{16})\.json$/;
 
-/** `<libraryType>-<libraryID>-<attachmentKey>` for Zotero attachments, `file` for vault PDFs. */
+/** First 16 hex characters of the SHA-256 of a vault-relative path; binds a `file-` cache to its path. */
+export function filePathHash(path: string): string {
+	if (typeof path !== "string" || !path) throw new Error("Invalid vault path for the PDF text cache");
+	return createHash("sha256").update(path).digest("hex").slice(0, 16);
+}
+
+/**
+ * `<libraryType>-<libraryID>-<attachmentKey>` for Zotero attachments, `file-<pathHash16>` for vault PDFs, so two vault
+ * PDFs with identical bytes at different paths keep separate caches and never select or evict each other.
+ */
 export function cachePrefix(scope: CacheScope): string {
-	if (scope.kind === "file") return "file";
+	if (scope.kind === "file") return `file-${filePathHash(scope.path)}`;
 	if (scope.libraryType !== "user" && scope.libraryType !== "group") throw new Error("Invalid library type for the PDF text cache");
 	if (!Number.isSafeInteger(scope.libraryID) || scope.libraryID < 1) throw new Error("Invalid library ID for the PDF text cache");
 	if (!ATTACHMENT_KEY.test(scope.attachmentKey)) throw new Error("Invalid attachment key for the PDF text cache");
@@ -59,15 +71,15 @@ export function cacheFileName(scope: CacheScope, sha256: string): string {
 	return `${cachePrefix(scope)}-${sha256.slice(0, 16)}.json`;
 }
 
-/** Inverse of `cacheFileName`; null for foreign files in the cache directory. */
+/** Inverse of `cacheFileName`; null for foreign files in the cache directory (pre-0.5 `file-<sha16>.json` names included). */
 export function parseCacheName(name: string): ParsedCacheName | null {
 	const match = CACHE_NAME.exec(name);
 	if (!match) return null;
-	const sha16 = match[4];
-	if (!match[1]) return { scope: { kind: "file" }, prefix: "file", sha16 };
+	const sha16 = match[5];
+	if (!match[1]) return { scope: { kind: "file", pathHash: match[4] }, prefix: `file-${match[4]}`, sha16 };
 	const libraryID = Number(match[2]);
 	if (!Number.isSafeInteger(libraryID) || libraryID < 1) return null;
-	const scope: CacheScope = { kind: "attachment", libraryType: match[1] as "user" | "group", libraryID, attachmentKey: match[3] };
+	const scope: AttachmentCacheScope = { kind: "attachment", libraryType: match[1] as "user" | "group", libraryID, attachmentKey: match[3] };
 	return { scope, prefix: cachePrefix(scope), sha16 };
 }
 
@@ -94,21 +106,20 @@ export function pickNewest(entries: CacheEntry[], prefix: string): CacheEntry | 
 }
 
 /**
- * Every cache name sharing `keepName`'s attachment prefix except `keepName` itself, sorted; foreign names are left alone.
- * `file-<sha16>` names carry no file identity, so the `file` prefix never evicts by name: use `evictionSetByPath`.
+ * Every cache name sharing `keepName`'s prefix except `keepName` itself, sorted; foreign names are left alone.
+ * A `file-<pathHash>` prefix names one vault path, so it evicts only caches of that same path.
  */
 export function evictionSet(names: string[], keepName: string): string[] {
 	const keep = parseCacheName(keepName);
 	if (!keep) throw new Error("Invalid PDF text cache name");
-	if (keep.scope.kind === "file") return [];
 	return [...new Set(names.filter(name => name !== keepName && parseCacheName(name)?.prefix === keep.prefix))].sort();
 }
 
-/** `--file` eviction: older `file-` caches whose recorded vault-relative `path` equals the one just extracted. */
+/** `--file` eviction: older caches with `keepName`'s path prefix whose recorded vault-relative `path` also equals the one just extracted. */
 export function evictionSetByPath(entries: { name: string; path: string }[], keepName: string, path: string): string[] {
 	const keep = parseCacheName(keepName);
 	if (!keep || keep.scope.kind !== "file") throw new Error("Invalid PDF text cache name for a file scope");
-	return [...new Set(entries.filter(entry => entry.name !== keepName && entry.path === path && parseCacheName(entry.name)?.prefix === "file").map(entry => entry.name))].sort();
+	return [...new Set(entries.filter(entry => entry.name !== keepName && entry.path === path && parseCacheName(entry.name)?.prefix === keep.prefix).map(entry => entry.name))].sort();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

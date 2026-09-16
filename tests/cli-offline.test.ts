@@ -5,6 +5,7 @@ import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { entryHash } from "../src/identity";
+import { pluginApiVersionsFor } from "../src/cli/core";
 import type { ZoteroIndexEntry } from "../src/types";
 
 const script = join(process.cwd(), "scripts", "ingest.mjs");
@@ -136,4 +137,33 @@ test("read-only wrapper falls back from old hosts but never sends apply there", 
 	assert.equal(apply.status, 1);
 	assert.equal(JSON.parse(apply.stdout).reason, "plugin-too-old");
 	assert.equal(JSON.parse(apply.stdout).apply.mode, "refused");
+});
+
+// 0.5 R13/F10: contract-2 support follows the installed manifest's numeric major.minor, not one hard-coded version.
+
+test("plugin API versions are derived from the manifest's major.minor", () => {
+	assert.deepEqual(pluginApiVersionsFor("0.4.0"), [1, 2]);
+	assert.deepEqual(pluginApiVersionsFor("0.4.1"), [1, 2]);
+	assert.deepEqual(pluginApiVersionsFor("0.5.0"), [1, 2]);
+	assert.deepEqual(pluginApiVersionsFor("0.10.3"), [1, 2]);
+	assert.deepEqual(pluginApiVersionsFor("1.0.0"), [1, 2]);
+	assert.deepEqual(pluginApiVersionsFor("0.5.0-beta.1"), [1, 2]);
+	assert.deepEqual(pluginApiVersionsFor("0.3.0"), [1]);
+	assert.deepEqual(pluginApiVersionsFor("0.0.1"), [1]);
+	assert.equal(pluginApiVersionsFor(null), null);
+	assert.equal(pluginApiVersionsFor(""), null);
+	assert.equal(pluginApiVersionsFor("latest"), null);
+	assert.equal(pluginApiVersionsFor("v0.4.1"), null);
+});
+
+test("offline envelopes advertise API 2 for installed 0.4.1 and 0.5.0 manifests and unknown for an unparsable one", () => {
+	for (const [version, expected] of [["0.4.1", [1, 2]], ["0.5.0", [1, 2]], ["garbage", null]] as const) {
+		const root = vault();
+		writeFileSync(join(root, ".obsidian", "plugins", "cmds-zotero", "manifest.json"), JSON.stringify({ version }));
+		const result = run(["--vault", "Research", "--vault-path", root, "--offline", "--action", "info"]);
+		assert.equal(result.status, 0, result.stderr);
+		const payload = JSON.parse(result.stdout);
+		assert.deepEqual(payload.connection.plugin.apiVersions, expected, `manifest ${version}`);
+		assert.equal(payload.connection.plugin.version, version);
+	}
 });

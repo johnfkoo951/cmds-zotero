@@ -4,6 +4,7 @@
  */
 import { App, FileSystemAdapter, loadPdfJs } from "obsidian";
 import { join } from "node:path";
+import { promises as fs } from "node:fs";
 import { createHash } from "crypto";
 import { joinTextItems, normalizePageLabel, type PageText, type TextItem } from "./locate";
 import { cacheFileName, cachePrefix, evictionSet, evictionSetByPath, parseCacheName, MAX_CACHE_BYTES, PDF_TEXT_CACHE_DIR, validateCache, type CacheScope, type PdfTextCache } from "./cache";
@@ -55,12 +56,18 @@ export interface PdfCacheStore {
 
 export function vaultCacheStore(app: App): PdfCacheStore {
 	const adapter = app.vault.adapter;
+	// 0.5 R13/F11: resolved once; the guarded reader refuses any path whose realpath differs (a symlinked vault root included).
+	let root: Promise<string> | null = null;
+	const basePath = (): Promise<string> => {
+		if (!(adapter instanceof FileSystemAdapter)) return Promise.reject(new Error("A desktop vault is required for PDF caches"));
+		root ??= fs.realpath(adapter.getBasePath()).catch(() => adapter.getBasePath());
+		return root;
+	};
 	return {
 		exists: path => adapter.exists(path),
 		read: async path => {
 			await assertVaultBoundary(app, path);
-			if (!(adapter instanceof FileSystemAdapter)) throw new Error("A desktop vault is required for PDF caches");
-			const bytes = (await readLocalFile(join(adapter.getBasePath(), path), { maxBytes: MAX_CACHE_BYTES, minBytes: 0, magic: () => true })).bytes;
+			const bytes = (await readLocalFile(join(await basePath(), path), { maxBytes: MAX_CACHE_BYTES, minBytes: 0, magic: () => true })).bytes;
 			return Buffer.from(bytes).toString("utf8");
 		},
 		write: (path, content) => adapter.write(path, content),
@@ -85,7 +92,7 @@ interface PdfDocument {
 }
 
 function toCacheScope(scope: ExtractScope): CacheScope {
-	return scope.kind === "file" ? { kind: "file" } : { kind: "attachment", libraryType: scope.libraryType, libraryID: scope.libraryID, attachmentKey: scope.attachmentKey };
+	return scope.kind === "file" ? { kind: "file", path: scope.path } : { kind: "attachment", libraryType: scope.libraryType, libraryID: scope.libraryID, attachmentKey: scope.attachmentKey };
 }
 
 export function truncatedPages(pages: PageText[]): number[] {
@@ -174,8 +181,8 @@ export class PdfTextService {
 	}
 
 	/**
-	 * Removes older caches of the same PDF: by attachment prefix, or for `--file` by the vault-relative path each
-	 * `file-` cache recorded (their names carry no identity, and another paper's cache must never be evicted).
+	 * Removes older caches of the same PDF: by attachment prefix, or for `--file` by the path-hash prefix *and* the
+	 * vault-relative path each `file-` cache recorded (another paper's cache must never be evicted).
 	 */
 	private async evictOthers(keepName: string, scope: ExtractScope): Promise<string[]> {
 		const names = await this.store.list(PDF_TEXT_CACHE_DIR);

@@ -61,6 +61,16 @@ A completed result persists until the client acknowledges it or its ten-minute T
 return the same result. Lost delivery is an uncertain outcome;
 inspect the current state with read-only reconcile rather than automatically reapplying.
 Unloading prevents late completion from recreating jobs or performing later writes.
+A pending job is failed by the host after a per-action timeout (`pdf-text` 900 s, every other action 300 s); the
+failure text names the action and the timeout, releases the write gate that blocks reconfiguration, and a late
+settlement never reverses it. A timed-out write is an uncertain outcome like any other timeout.
+
+Failure `reason` values come from typed errors and the request, never from message text: an index refusal keeps its
+own reason; a local-file refusal maps by code (`too-large` → `pdf-too-large`, any other → `pdf-invalid`), so an
+oversized or non-PDF `--file` target is named precisely; `apply-failed` is reserved for a `reconcile` that was asked
+to write (`--apply`), while a failing dry-run or read reports `invalid-request`.
+`locate --path` and `cites --path` resolve a note with or without its `.md` extension; an unknown note is a
+structured `invalid-request`, and a path that cannot lie inside the vault is `path-outside-vault`.
 
 ## Identity and matching
 
@@ -155,7 +165,11 @@ Capture the input byte length before passing a transferable buffer to pdf.js.
 Page is one-based physical position; pageLabel is printed text. Empty/dash-only labels fall back to position.
 `p.-` must never appear. Fuzzy/ambiguous/unverified matches must not masquerade as confirmed quote locations.
 
-Cache names bind source scope and content hash. Attachment and vault-file caches cannot select/evict each other.
+Cache names bind source scope and content hash: `<libraryType>-<libraryID>-<attachmentKey>-<sha16>.json` for
+Zotero attachments and `file-<pathHash16>-<sha16>.json` for vault PDFs, where the path hash is the SHA-256 of the
+vault-relative path. Attachment and vault-file caches cannot select/evict each other, and two vault PDFs with
+identical bytes at different paths keep separate caches. Pre-0.5 `file-<sha16>.json` names are foreign: never
+selected, never evicted; re-run `pdf-text` to rebuild.
 Validate schema, source identity, file scope, page order/uniqueness, limits and metadata before use.
 A changed PDF is verification failure; an unavailable original is unchecked. Preserve truncation warnings on cache hits.
 Always clean up pdf.js tasks/documents on failure or completion.

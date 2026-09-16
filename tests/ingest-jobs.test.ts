@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { IngestAPI } from "../src/ingest-api";
+import { IngestAPI, JOB_TIMEOUT_MS } from "../src/ingest-api";
+import { LocalFileError } from "../src/local-file";
+import { buildConnection } from "../src/agent/connection";
+import { DEFAULT_SETTINGS } from "../src/types";
+import type { ActionHost } from "../src/agent/actions";
 import { IndexService } from "../src/index-service";
 import { normalizeEntry } from "../src/api/normalize";
 import type { BbtService } from "../src/bbt";
@@ -151,4 +155,133 @@ test("the hostless refresh job never reports a stale-fallback as success, whatev
 		assert.equal(job.state, "failed", `refresh ${JSON.stringify(request)} fails instead of publishing the stale snapshot`);
 		assert.match(job.error ?? "", /ECONNREFUSED/);
 	}
+});
+
+// 0.5 R13/F05: UI resolve never runs the agent resolve action (whole-vault note scan, git probe) behind a click.
+test("resolve() always answers from the in-memory snapshot and never builds an agent host", async () => {
+	const stored = snapshot(1);
+	const bbt = { collect: async () => snapshot(0) } as unknown as BbtService;
+	const index = new IndexService(bbt, { read: async () => JSON.stringify(stored), writeValidated: async () => undefined }, () => 60);
+	let hosts = 0;
+	const api = new IngestAPI({ vault: { getName: () => "Research" } } as never, bbt, index, {} as never, async () => {}, async () => { hosts++; throw new Error("the host factory must not be used for UI resolve"); });
+	const byKey = await api.resolve({ citekey: "Example2026" });
+	assert.equal(byKey.status, "resolved");
+	assert.equal((byKey as { entry: { itemKey: string } }).entry.itemKey, "ABCD2345");
+	const byItem = await api.resolve({ itemKey: "ABCD2345", libraryID: 1 });
+	assert.equal(byItem.status, "resolved");
+	assert.equal((await api.resolve({ citekey: "missing" })).status, "not-found");
+	assert.equal(hosts, 0);
+	// Agents still get the full action through the job path.
+	api.startJob("resolve", { citekey: "Example2026" });
+	await tick();
+	assert.equal(hosts, 1);
+});
+
+// 0.5 R13/F08: failure reasons come from typed errors and the request, not from message text.
+
+function failingHost(overrides: Partial<ActionHost>): ActionHost {
+	const now = new Date("2026-09-16T00:00:00.000Z");
+	const stored = snapshot(1);
+	const connection = buildConnection({ mode: "live", obsidian: "ok", pluginVersion: "0.5.0", pluginApiVersions: [1, 2], pluginEnabled: true, bbt: { reachable: null }, index: { source: "plugin", path: "80. References/zotero-index.json", generatedAt: stored.generatedAt, count: 1, complete: true, schemaVersion: 2 }, maxAgeMinutes: 60, legacyPluginEnabled: false, git: null, now });
+	const host: ActionHost = {
+		vault: "Research", now, connection, settings: DEFAULT_SETTINGS, indexView: { index: stored, stale: false, ageMinutes: 1 }, indexFailure: null,
+		reader: { vaultName: () => "Research", scanWarnings: () => ({ skipped: [], truncated: false }), listNotes: async () => [], readNote: async () => "", exists: async () => false },
+		bibliography: null, bibliographyReason: null, vaultLinks: async () => ({ links: [], warnings: [] }),
+		pdfCache: { list: async () => [], read: async () => null, statLocal: async () => null, fileHash: async () => null }, vaultPdfPaths: async () => [],
+		extractPdf: async () => { throw new Error("unused"); },
+		...overrides,
+	};
+	return host;
+}
+
+async function reasonOf(host: ActionHost, action: "pdf-text" | "locate" | "reconcile" | "cites", request: object): Promise<string | undefined> {
+	const api = new IngestAPI({ vault: { getName: () => "Research" } } as never, {} as never, {} as never, {} as never, async () => {}, async () => host);
+	const id = api.startJob(action, request);
+	await tick(); await tick();
+	const job = api.getJob(id);
+	assert.equal(job.state, "completed", job.error);
+	return (job.result as { reason?: string }).reason;
+}
+
+test("oversized and non-PDF vault files report pdf-too-large and pdf-invalid by error code", async () => {
+	const tooLarge = failingHost({ pdfCache: { list: async () => [], read: async () => null, statLocal: async () => null, fileHash: async () => { throw new LocalFileError("too-large", "PDF size 73400320 exceeds the 67108864 byte limit"); } } });
+	assert.equal(await reasonOf(tooLarge, "pdf-text", { file: "Attachments/huge.pdf" }), "pdf-too-large");
+	assert.equal(await reasonOf(tooLarge, "locate", { file: "Attachments/huge.pdf", quote: "a long enough quote to locate" }), "pdf-too-large");
+	const notPdf = failingHost({ pdfCache: { list: async () => [], read: async () => null, statLocal: async () => null, fileHash: async () => { throw new LocalFileError("bad-magic", "PDF content does not match the expected format"); } } });
+	assert.equal(await reasonOf(notPdf, "pdf-text", { file: "Attachments/fake.pdf" }), "pdf-invalid");
+});
+
+test("reconcile errors are apply-failed only when a write was requested; other action errors are invalid-request", async () => {
+	const broken = failingHost({ reader: { vaultName: () => "Research", listNotes: async () => { throw new Error("Note exceeds 2 MiB: Hubs/big.md"); }, readNote: async () => "", exists: async () => false } });
+	assert.equal(await reasonOf(broken, "reconcile", {}), "invalid-request");
+	assert.equal(await reasonOf(broken, "reconcile", { apply: false }), "invalid-request");
+	assert.equal(await reasonOf(broken, "reconcile", { apply: true }), "apply-failed");
+	// A message that merely mentions PDFs does not classify a non-PDF action.
+	const mentionsPdf = failingHost({ reader: { vaultName: () => "Research", listNotes: async () => { throw new Error("PDF extraction wording inside a cites failure"); }, readNote: async () => "", exists: async () => false } });
+	assert.equal(await reasonOf(mentionsPdf, "cites", { path: "Q.md" }), "invalid-request");
+});
+
+// 0.5 R13/F18: a job that never settles is failed by its per-action timeout and releases the write gate.
+
+function fakeTimers() {
+	const scheduled = new Map<number, { callback: () => void; ms: number }>();
+	let next = 1;
+	return {
+		scheduled,
+		timers: { setTimeout: (callback: () => void, ms: number) => { const handle = next++; scheduled.set(handle, { callback, ms }); return handle; }, clearTimeout: (handle: unknown) => { scheduled.delete(handle as number); } },
+		fire(): void { for (const [handle, entry] of [...scheduled]) { scheduled.delete(handle); entry.callback(); } },
+	};
+}
+
+test("per-action timeouts default to 900 s for pdf-text and 300 s otherwise", () => {
+	assert.equal(JOB_TIMEOUT_MS["pdf-text"], 900_000);
+	for (const action of ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "locate"] as const) assert.equal(JOB_TIMEOUT_MS[action], 300_000);
+});
+
+test("a hung write job times out, is reported as failed, releases busy, and a late settlement is ignored", async () => {
+	const clock = fakeTimers();
+	let finish!: (value: unknown) => void;
+	const host = failingHost({ extractPdf: () => new Promise(resolve => { finish = resolve as never; }), pdfCache: { list: async () => [], read: async () => null, statLocal: async () => null, fileHash: async () => ({ sha256: "a".repeat(64), absolutePath: "/synthetic/vault/x.pdf" }) } });
+	const api = new IngestAPI({ vault: { getName: () => "Research" } } as never, {} as never, { collecting: false } as never, {} as never, async () => {}, async () => host, { timers: clock.timers });
+	const id = api.startJob("pdf-text", { file: "x.pdf" });
+	assert.equal(api.busy, true);
+	assert.deepEqual(api.pendingWrites(), [{ id, action: "pdf-text" }]);
+	// Let the job reach the hung extraction before the timeout fires.
+	while (!finish) await tick();
+	assert.equal([...clock.scheduled.values()][0]?.ms, 900_000);
+	clock.fire();
+	const job = api.getJob(id);
+	assert.equal(job.state, "failed");
+	assert.match(job.error ?? "", /timed out after 900 s \(pdf-text\)/);
+	assert.match(job.error ?? "", /inspect the current state/);
+	assert.equal(api.busy, false, "the write gate is released on timeout");
+	assert.equal(api.activeCount, 0);
+	assert.deepEqual(api.pendingWrites(), []);
+	// The extraction eventually settles: the failed verdict stands and the counters are not decremented twice.
+	finish({ cache: { path: "x", hit: false, evicted: [] }, extracted: {}, truncatedPages: [], warnings: [] });
+	await tick(); await tick();
+	assert.equal(api.getJob(id).state, "failed");
+	assert.equal(api.activeCount, 0);
+	assert.equal(api.busy, false);
+	assert.equal(api.ackJob(id), true);
+});
+
+test("a job that settles in time clears its timer and reads never appear in pendingWrites", async () => {
+	const clock = fakeTimers();
+	const api = new IngestAPI({ vault: { getName: () => "Research" } } as never, { capabilities: async () => ({ zotero: "7", betterbibtex: "7" }) } as never, { collecting: false } as never, {} as never, async () => {}, undefined, { timers: clock.timers, timeoutMs: { connection: 5 } });
+	const id = api.startJob("connection");
+	assert.equal(clock.scheduled.size, 1);
+	assert.equal([...clock.scheduled.values()][0]?.ms, 5, "per-action overrides apply");
+	assert.deepEqual(api.pendingWrites(), [], "a read never holds the write gate");
+	await tick();
+	assert.equal(api.getJob(id).state, "completed");
+	assert.equal(clock.scheduled.size, 0, "the timer is cleared on settlement");
+	clock.fire();
+	assert.equal(api.getJob(id).state, "completed", "a stale timer cannot fail a completed job");
+	// dispose clears outstanding timers.
+	const hung = new IngestAPI({ vault: { getName: () => "Research" } } as never, { capabilities: () => new Promise(() => {}) } as never, { collecting: false } as never, {} as never, async () => {}, undefined, { timers: clock.timers });
+	hung.startJob("connection");
+	assert.equal(clock.scheduled.size, 1);
+	hung.dispose();
+	assert.equal(clock.scheduled.size, 0);
 });
