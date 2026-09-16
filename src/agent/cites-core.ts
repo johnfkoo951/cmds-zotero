@@ -5,7 +5,7 @@
  * over every scanned note, then maps each note through `citesForNote()`.
  */
 import type { Diagnostic, ZoteroIndex, ZoteroIndexEntry } from "../types";
-import type { CiteStatus, NoteRecord, NoteRef } from "./types";
+import type { CiteStatus, NoteRecord, NoteRef, UncheckedReason } from "./types";
 import { scanCitations, scanFrontmatterCitations, type CitationOccurrence, type FrontmatterCitationField } from "../citations/scan";
 
 export type CitationForm = CitationOccurrence["form"];
@@ -19,13 +19,19 @@ export interface KeyVerdict {
 	citekeyCurrent?: string;
 	hub?: NoteRef;
 	raw?: NoteRef;
+	/** Present exactly when `citeStatus` is `unchecked`: which gate withheld the verdict. */
+	uncheckedReason?: UncheckedReason;
 }
 
-/** Hub and raw-source notes by frontmatter `citekey`, built once per call; several notes per key → the first is used. */
+/** Hub and raw-source notes by exact frontmatter `citekey`, built once per call; several notes per key → the first is used. */
 export interface NoteLookups {
 	hubByCitekey: ReadonlyMap<string, NoteRef | NoteRef[]>;
 	rawByCitekey: ReadonlyMap<string, NoteRef | NoteRef[]>;
-	/** Note paths omitted because frontmatter was malformed; absence verdicts are unsafe while non-empty. */
+	/**
+	 * Note paths omitted from the lookups (malformed frontmatter) or the truncation sentinel; while non-empty a key that
+	 * has no hub may still have one unseen, so vault-absence verdicts (`raw-only`, `dangling`) become `unchecked`
+	 * with `uncheckedReason: discovery-incomplete`. The Zotero-index verdict itself is never affected.
+	 */
 	skipped?: readonly string[];
 }
 
@@ -57,6 +63,7 @@ export interface FileCitation {
 	citekeyCurrent?: string;
 	hub?: NoteRef;
 	raw?: NoteRef;
+	uncheckedReason?: UncheckedReason;
 }
 
 export interface FileCites {
@@ -73,6 +80,7 @@ export interface KeySummary {
 	entryId?: string;
 	hub?: NoteRef;
 	raw?: NoteRef;
+	uncheckedReason?: UncheckedReason;
 	count: number;
 	files: string[];
 }
@@ -101,11 +109,11 @@ export interface CitesSummary {
 
 export interface ReferencesPayload {
 	resolved: { citekey: string; text: string }[];
-	unresolved: { citekey: string; citeStatus: CiteStatus; hint: string }[];
+	unresolved: { citekey: string; citeStatus: CiteStatus; uncheckedReason?: UncheckedReason; hint: string }[];
 	markdown: string;
 }
 
-type ScannedCitation = Omit<FileCitation, "citeStatus" | "matchedHistory" | "entryId" | "citekeyCurrent" | "hub" | "raw">;
+type ScannedCitation = Omit<FileCitation, "citeStatus" | "matchedHistory" | "entryId" | "citekeyCurrent" | "hub" | "raw" | "uncheckedReason">;
 
 /** Verdicts the stale-index gate withholds: each says "not in the index", which a fresh index could overturn. */
 const NEGATIVE_STATUSES: ReadonlySet<CiteStatus> = new Set<CiteStatus>(["raw-only", "dangling"]);
@@ -126,13 +134,32 @@ const DIAGNOSTIC_SEVERITIES: Readonly<Record<Exclude<CiteStatus, "resolved">, Di
 	unchecked: "warning",
 };
 
-const HINTS: Readonly<Record<Exclude<CiteStatus, "resolved">, string>> = {
+const HINTS: Readonly<Record<Exclude<CiteStatus, "resolved" | "unchecked">, string>> = {
 	"hub-only": "Provisional: register the item in Zotero and pin the citekey; the hub's full citation is used meanwhile",
 	"raw-only": "Raw source only: create a hub or register the item in Zotero",
 	dangling: "No Zotero item, hub or raw source note carries this citekey; check the spelling or register the item",
 	ambiguous: "Several Zotero items carry this citekey; pin one with a Citation Key line in Extra",
-	unchecked: "Index stale: run refresh or pass --allow-stale to see the index verdict",
 };
+
+/** `unchecked` hints name the gate that withheld the verdict; `--allow-stale` is offered only for the stale gate. */
+const UNCHECKED_HINTS: Readonly<Record<UncheckedReason, string>> = {
+	"stale-index": "Index stale: run refresh or pass --allow-stale to see the index verdict",
+	"discovery-incomplete": "Vault discovery incomplete: notes with malformed frontmatter (or a truncated scan) were not classified, so a hub or raw source may exist unseen; repair the reported notes (--allow-stale does not apply)",
+};
+
+/** Short cause for `unchecked` in References lines and diagnostics. */
+const UNCHECKED_CAUSES: Readonly<Record<UncheckedReason, string>> = {
+	"stale-index": "index stale",
+	"discovery-incomplete": "vault discovery incomplete",
+};
+
+function hintFor(status: Exclude<CiteStatus, "resolved">, reason: UncheckedReason | undefined): string {
+	return status === "unchecked" ? UNCHECKED_HINTS[reason ?? "stale-index"] : HINTS[status];
+}
+
+function uncheckedCause(reason: UncheckedReason | undefined): string {
+	return UNCHECKED_CAUSES[reason ?? "stale-index"];
+}
 
 const REFERENCES_HEADING = /^##\s+References\s*#*\s*$/i;
 const SECTION_END = /^#{1,2}\s/;
@@ -160,7 +187,12 @@ function pushTo(map: Map<string, ZoteroIndexEntry[]>, key: string, entry: Zotero
 	if (list) list.push(entry); else map.set(key, [entry]);
 }
 
-/** Exact-citekey hits take precedence over history hits (resolution order `citekey` → `citekeyHistory`). */
+/**
+ * Exact-citekey hits take precedence over history hits (resolution order `citekey` → `citekeyHistory`). Hub/raw evidence
+ * is attached before any gate: a positive hub match is `hub-only` even while discovery is incomplete (the hub exists),
+ * whereas "no hub" is only trustworthy when every note was classified, so `raw-only`/`dangling` become `unchecked`
+ * with `uncheckedReason: discovery-incomplete` while `lookups.skipped` is non-empty.
+ */
 function classifyKey(key: string, byCitekey: ReadonlyMap<string, ZoteroIndexEntry[]>, byHistory: ReadonlyMap<string, ZoteroIndexEntry[]>, lookups: NoteLookups): KeyVerdict {
 	const hubs = refs(lookups.hubByCitekey.get(key));
 	const raws = refs(lookups.rawByCitekey.get(key));
@@ -178,7 +210,7 @@ function classifyKey(key: string, byCitekey: ReadonlyMap<string, ZoteroIndexEntr
 		return { citeStatus: "resolved", entryId: entry.id, matchedHistory, ...(matchedHistory ? { citekeyCurrent: entry.citekey } : {}), ...notes };
 	}
 	if (hub) return { citeStatus: "hub-only", ...notes };
-	if (lookups.skipped?.length) return { citeStatus: "unchecked", ...notes };
+	if (lookups.skipped?.length) return { citeStatus: "unchecked", ...notes, uncheckedReason: "discovery-incomplete" };
 	if (raw) return { citeStatus: "raw-only", raw };
 	return { citeStatus: "dangling" };
 }
@@ -186,7 +218,9 @@ function classifyKey(key: string, byCitekey: ReadonlyMap<string, ZoteroIndexEntr
 /**
  * Classifies each distinct key: `resolved` through the index citekey or `citekeyHistory` (several entries → `ambiguous`),
  * else `hub-only` / `raw-only` / `dangling` from the vault lookups. When the index is stale and `allowStale` is false,
- * every negative verdict becomes `unchecked` (hub/raw refs are kept so the caller can still point at the notes).
+ * every negative verdict becomes `unchecked` with `uncheckedReason: stale-index` (hub/raw refs are kept so the caller
+ * can still point at the notes). A verdict already withheld for incomplete discovery keeps that reason: `--allow-stale`
+ * would not make it checkable, so the hint must not suggest it.
  */
 export function classifyKeys(keys: readonly string[], index: ZoteroIndex, lookups: NoteLookups, stale: boolean, allowStale: boolean): Map<string, KeyVerdict> {
 	const byCitekey = new Map<string, ZoteroIndexEntry[]>();
@@ -199,7 +233,7 @@ export function classifyKeys(keys: readonly string[], index: ZoteroIndex, lookup
 	const verdicts = new Map<string, KeyVerdict>();
 	for (const key of uniqueInOrder(keys)) {
 		const verdict = classifyKey(key, byCitekey, byHistory, lookups);
-		verdicts.set(key, withhold && NEGATIVE_STATUSES.has(verdict.citeStatus) ? { ...verdict, citeStatus: "unchecked" } : verdict);
+		verdicts.set(key, withhold && NEGATIVE_STATUSES.has(verdict.citeStatus) ? { ...verdict, citeStatus: "unchecked", uncheckedReason: "stale-index" } : verdict);
 	}
 	return verdicts;
 }
@@ -275,6 +309,7 @@ function verdictFields(verdict: KeyVerdict): KeyVerdict {
 	if (verdict.citekeyCurrent !== undefined) fields.citekeyCurrent = verdict.citekeyCurrent;
 	if (verdict.hub) fields.hub = verdict.hub;
 	if (verdict.raw) fields.raw = verdict.raw;
+	if (verdict.uncheckedReason !== undefined) fields.uncheckedReason = verdict.uncheckedReason;
 	return fields;
 }
 
@@ -310,6 +345,7 @@ export function keysForFiles(files: readonly FileCites[]): KeySummary[] {
 				...(citation.entryId !== undefined ? { entryId: citation.entryId } : {}),
 				...(citation.hub ? { hub: citation.hub } : {}),
 				...(citation.raw ? { raw: citation.raw } : {}),
+				...(citation.uncheckedReason !== undefined ? { uncheckedReason: citation.uncheckedReason } : {}),
 				count: 1,
 				files: [file.path],
 			});
@@ -322,14 +358,16 @@ function occurrenceSuffix(count: number): string {
 	return count === 1 ? "" : ` (${count} occurrences)`;
 }
 
-function diagnosticMessage(status: Exclude<CiteStatus, "resolved">, citekey: string, count: number): string {
+function diagnosticMessage(status: Exclude<CiteStatus, "resolved">, citekey: string, count: number, reason: UncheckedReason | undefined): string {
 	const suffix = occurrenceSuffix(count);
 	switch (status) {
 		case "dangling": return `@${citekey} is not in the Zotero index and has no hub or raw source note${suffix}`;
 		case "hub-only": return `@${citekey} has a hub note but no Zotero item; References will use the hub's full citation (provisional)${suffix}`;
 		case "raw-only": return `@${citekey} has only a raw source note; no hub or Zotero item${suffix}`;
 		case "ambiguous": return `@${citekey} matches several Zotero items; pin one citekey${suffix}`;
-		case "unchecked": return `@${citekey} could not be checked because the index is stale; refresh or pass --allow-stale${suffix}`;
+		case "unchecked": return (reason ?? "stale-index") === "discovery-incomplete"
+			? `@${citekey} could not be checked because vault discovery was incomplete (notes with malformed frontmatter or a truncated scan); a hub or raw source may exist unseen — repair the reported notes; --allow-stale does not apply${suffix}`
+			: `@${citekey} could not be checked because the index is stale; refresh or pass --allow-stale${suffix}`;
 	}
 }
 
@@ -338,14 +376,14 @@ export function citesDiagnostics(files: readonly FileCites[]): CitesDiagnostic[]
 	const diagnostics: CitesDiagnostic[] = [];
 	for (const file of files) {
 		if (file.frontmatterParse === "error") diagnostics.push({ code: "frontmatter-parse-error", severity: "warning", message: "Frontmatter could not be parsed; frontmatter citations were not scanned", path: file.path });
-		const counts = new Map<string, { status: CiteStatus; count: number }>();
+		const counts = new Map<string, { status: CiteStatus; reason: UncheckedReason | undefined; count: number }>();
 		for (const citation of file.citations) {
 			const seen = counts.get(citation.citekey);
-			if (seen) seen.count++; else counts.set(citation.citekey, { status: citation.citeStatus, count: 1 });
+			if (seen) seen.count++; else counts.set(citation.citekey, { status: citation.citeStatus, reason: citation.uncheckedReason, count: 1 });
 		}
-		for (const [citekey, { status, count }] of counts) {
+		for (const [citekey, { status, reason, count }] of counts) {
 			if (status === "resolved") continue;
-			diagnostics.push({ code: DIAGNOSTIC_CODES[status], severity: DIAGNOSTIC_SEVERITIES[status], message: diagnosticMessage(status, citekey, count), path: file.path, citekey });
+			diagnostics.push({ code: DIAGNOSTIC_CODES[status], severity: DIAGNOSTIC_SEVERITIES[status], message: diagnosticMessage(status, citekey, count, reason), path: file.path, citekey });
 		}
 	}
 	return diagnostics;
@@ -395,7 +433,7 @@ export function referencesLine(citekey: string, verdict: KeyVerdict | undefined,
 		}
 		case "raw-only": return verdict.raw ? `${prefix} (raw source only: [[${verdict.raw.basename}]])` : `${prefix} (raw source only)`;
 		case "ambiguous": return `${prefix} (ambiguous: several Zotero items)`;
-		case "unchecked": return `${prefix} (unchecked: index stale)`;
+		case "unchecked": return `${prefix} (unchecked: ${uncheckedCause(verdict.uncheckedReason)})`;
 		default: return `${prefix} (unresolved)`;
 	}
 }
@@ -410,9 +448,10 @@ export function referencesPayload(keys: readonly string[], classified: ReadonlyM
 	const resolved: ReferencesPayload["resolved"] = [];
 	const unresolved: ReferencesPayload["unresolved"] = [];
 	for (const citekey of uniqueInOrder(keys)) {
-		const status = classified.get(citekey)?.citeStatus ?? "dangling";
+		const verdict = classified.get(citekey);
+		const status = verdict?.citeStatus ?? "dangling";
 		if (status === "resolved") resolved.push({ citekey, text: oneLine(bibliography.get(citekey) ?? "") });
-		else unresolved.push({ citekey, citeStatus: status, hint: HINTS[status] });
+		else unresolved.push({ citekey, citeStatus: status, ...(status === "unchecked" && verdict?.uncheckedReason ? { uncheckedReason: verdict.uncheckedReason } : {}), hint: hintFor(status, verdict?.uncheckedReason) });
 	}
 	return { resolved, unresolved, markdown: referencesMarkdown(keys, classified, bibliography, hubFullCitation) };
 }

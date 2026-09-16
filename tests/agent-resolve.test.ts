@@ -278,10 +278,12 @@ test("classifyNotes refuses to choose among multiple matching hubs and warns abo
 	assert.match(warning, /40\. Paper Analyses\/park2021adaptive\/park2021adaptive\.md/);
 });
 
-test("buildNoteIndexes keys hubs and raw sources by lower-case citekey, normalized DOI and arXiv id", () => {
+test("buildNoteIndexes keys hubs and raw sources by exact (case-preserving) citekey, normalized DOI and arXiv id", () => {
 	const indexes = buildNoteIndexes([...notes].reverse());
-	assert.deepEqual(indexes.hubByCitekey.get("ahn2025provisional")?.map(n => n.path), ["40. Paper Analyses/unregistered/unregistered.md"]);
+	assert.deepEqual(indexes.hubByCitekey.get("Ahn2025Provisional")?.map(n => n.path), ["40. Paper Analyses/unregistered/unregistered.md"]);
+	assert.equal(indexes.hubByCitekey.has("ahn2025provisional"), false, "camelCase hub keys are not folded (pandoc matches exactly)");
 	assert.deepEqual(indexes.rawByCitekey.get("ahn2025provisional")?.map(n => n.path), ["10. Raw Sources/2025-01-01-Unregistered.md"]);
+	assert.equal(indexes.rawByCitekey.has("Ahn2025Provisional"), false);
 	assert.deepEqual(indexes.hubByDoi.get("10.1000/synthetic.9999")?.map(n => n.path), ["40. Paper Analyses/unregistered/unregistered.md"]);
 	assert.deepEqual(indexes.rawByDoi.get("10.1000/synthetic.9999")?.map(n => n.path), ["10. Raw Sources/2025-01-01-Unregistered.md"]);
 	assert.deepEqual(indexes.hubByDoi.get("10.48550/arxiv.2103.04567")?.map(n => n.path), ["40. Paper Analyses/park2021adaptive/park2021adaptive.md"]);

@@ -50,8 +50,14 @@ BBT `reachable:true|false|null`; index generation/age/completeness; legacy-plugi
 - Exit **2**: arguments invalid; stderr only, no result JSON.
 - Structured failures have `ok:false`, `reason` and `message` on stdout plus a reason line on stderr.
 - Never choose the first ambiguous candidate. Never interpret connectivity failure as absence.
-- Missing/invalid/incomplete/unknown-age indexes cannot prove absence. Stale negative answers are withheld;
-  `--allow-stale` opts into stale lookup evidence, not writes or fabricated completeness.
+- Missing/invalid/incomplete/unknown-age indexes cannot prove absence. Stale negative answers are withheld as
+  `reason: stale-index` (`indexAnswer` keeps the raw verdict); `--allow-stale` opts into stale lookup evidence,
+  not writes or fabricated completeness.
+- Unrelated unparseable notes never withhold a Zotero-index verdict: `not-found` and `citekeyProvisional:true` are
+  returned beside them, with the omissions in `scan {skipped, truncated}` and `vaultNotes.warnings`. A truncated scan
+  is `reason: discovery-incomplete` (hubs/raw sources may be missing, the index `status` stands); `--allow-stale`
+  does not address it — repair or exclude the listed notes. In `cites`, `unchecked` carries `uncheckedReason`
+  `stale-index` or `discovery-incomplete`; hub-only evidence is attached regardless.
 - Timeouts and lost job results can have unknown outcomes. Do not automatically repeat a mutation;
   run read-only reconcile to inspect current state first.
 

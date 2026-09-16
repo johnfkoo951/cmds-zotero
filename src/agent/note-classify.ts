@@ -17,7 +17,11 @@ export interface ClassifyOptions {
 
 export type NoteKind = "hub" | "raw" | "atom" | "literature" | "other";
 
-/** Lookups over one vault listing; keys are lower-case citekeys, matching-normalized DOIs and arXiv ids. Values are sorted by path. */
+/**
+ * Lookups over one vault listing; keys are exact (case-preserving) citekeys, matching-normalized DOIs and arXiv ids.
+ * Citation keys are matched the way pandoc/BBT match them, so a camelCase hub key must not be folded; `citekey-check`
+ * runs its own case-insensitive collision pass over its own lookup. Values are sorted by path.
+ */
 export interface NoteIndexes {
 	hubByCitekey: Map<string, NoteRecord[]>;
 	rawByCitekey: Map<string, NoteRecord[]>;
@@ -68,7 +72,7 @@ export function buildNoteIndexes(notes: NoteRecord[]): NoteIndexes {
 		if (!note.frontmatter) continue;
 		const kind = noteKind(note);
 		if (kind !== "hub" && kind !== "raw") continue;
-		const citekey = noteCitekey(note).toLowerCase();
+		const citekey = noteCitekey(note);
 		const doi = noteDoi(note);
 		if (kind === "hub") {
 			push(indexes.hubByCitekey, citekey, note);

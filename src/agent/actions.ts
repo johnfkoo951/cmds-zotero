@@ -4,7 +4,7 @@
  * PDF caches) is injected through {@link ActionHost}. Never imports `obsidian`.
  */
 import type { CmdsZoteroSettings, Diagnostic, ZoteroIndex, ZoteroIndexEntry } from "../types";
-import type { ConnectionInfo, Envelope, FailureReason, IndexView, NoteRecord, NoteRef, RankedItem, ResolveOutcome, Selector, VaultNotes, VaultReader } from "./types";
+import type { ConnectionInfo, Envelope, FailureReason, IndexView, NoteRecord, NoteRef, RankedItem, ResolveOutcome, ScanReport, Selector, VaultNotes, VaultReader } from "./types";
 import { HUB_IDENTITY_KEYS } from "./types";
 import { buildEnvelope, infoWarnings, staleGate } from "./connection";
 import { resolveIndex, selectorKind } from "./resolve";
@@ -116,21 +116,46 @@ interface Resolved {
 	view: IndexView;
 	notes: NoteRecord[];
 	vaultNotes: VaultNotes;
+	/** The stale gate withheld a not-found index verdict (`reason: stale-index`). */
 	withheld: boolean;
+	scan: ScanReport;
+	/** Failure to report in the envelope: the stale gate first, else truncated discovery; null when the payload is usable. */
+	failure: { reason: FailureReason; message: string } | null;
 }
 
-/** Shared first half of resolve/identity: selector validation, index lookup, stale gate, vault note classification. */
+function scanOf(host: ActionHost): ScanReport {
+	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	return { skipped: [...scan.skipped], truncated: scan.truncated };
+}
+
+/**
+ * Truncated discovery means notes may be missing entirely, so hub/raw classification cannot be trusted; the message
+ * names the omission and never offers `--allow-stale`, which addresses index age only.
+ */
+function discoveryFailure(scan: ScanReport): { reason: FailureReason; message: string } {
+	const shown = scan.skipped.slice(0, 10);
+	const paths = shown.length ? ` Skipped notes (first ${shown.length} of ${scan.skipped.length}): ${shown.join(", ")}.` : "";
+	return { reason: "discovery-incomplete", message: `Vault discovery was truncated at the note limit and ${scan.skipped.length} notes were skipped; hub and raw-source notes may be missing from vaultNotes, so the vault classification is incomplete. The Zotero-index verdict stands.${paths}` };
+}
+
+/**
+ * Shared first half of resolve/identity: selector validation, index lookup, stale gate, vault note classification.
+ * Only the stale gate withholds a not-found index verdict. Vault-discovery incompleteness (skipped or truncated notes)
+ * affects hub/raw classification, so it is reported in `scan` and `vaultNotes.warnings`, never as `stale-index`.
+ */
 async function resolveCore(host: ActionHost, selector: Selector, allowStale: boolean, view: IndexView): Promise<Resolved> {
 	const check = selectorKind(selector);
 	if (check.error || !check.kind) throw new Error(check.error ?? "Provide exactly one selector.");
 	const outcome = resolveIndex(view.index, selector);
 	const notes = await host.reader.listNotes();
-	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
-	const evidenceIncomplete = scan.truncated || scan.skipped.length > 0;
-	const withheld = outcome.status === "not-found" && (staleGate(host.connection, allowStale) || evidenceIncomplete);
+	const scan = scanOf(host);
+	const withheld = outcome.status === "not-found" && staleGate(host.connection, allowStale);
 	const vaultNotes = classifyNotes(host.vault, notes, outcome.entry, hintsOf(selector, outcome.entry), view.index, { outputFolder: host.settings.outputFolder });
-	if (evidenceIncomplete) vaultNotes.warnings.push(`Vault discovery incomplete: ${scan.skipped.length} skipped; truncated ${scan.truncated}.`);
-	return { outcome, view, notes, vaultNotes, withheld };
+	if (scan.truncated || scan.skipped.length > 0) vaultNotes.warnings.push(`Vault discovery incomplete: ${scan.skipped.length} skipped; truncated ${scan.truncated}. Hub/raw classification may be incomplete; the Zotero-index verdict is unaffected.`);
+	const failure = withheld
+		? { reason: "stale-index" as const, message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` }
+		: scan.truncated ? discoveryFailure(scan) : null;
+	return { outcome, view, notes, vaultNotes, withheld, scan, failure };
 }
 
 function rankedOf(outcome: ResolveOutcome): RankedItem[] { return outcome.ranked; }
@@ -139,9 +164,9 @@ export async function resolveAction(host: ActionHost, request: ResolveRequest): 
 	const index = requireIndex(host, "resolve", 1);
 	if ("failure" in index) return index.failure;
 	const selector = selectorOf(request);
-	const { outcome, view, vaultNotes, withheld } = await resolveCore(host, selector, request.allowStale === true, index.view);
+	const { outcome, view, vaultNotes, withheld, scan, failure } = await resolveCore(host, selector, request.allowStale === true, index.view);
 	const entry = outcome.entry;
-	const base = { ...envelope(host, "resolve", 1, withheld ? { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` } : undefined) };
+	const base = { ...envelope(host, "resolve", 1, failure ?? undefined) };
 	return {
 		...base,
 		status: withheld ? "unavailable" : outcome.status,
@@ -154,6 +179,7 @@ export async function resolveAction(host: ActionHost, request: ResolveRequest): 
 		matchedBy: outcome.matchedBy,
 		ranked: rankedOf(outcome),
 		vaultNotes,
+		scan,
 		citekeyShape: entry ? citekeyShape(entry.citekey) : null,
 		pinnedGuess: entry ? citekeyShape(entry.citekey) === "vault" : null,
 	};
@@ -166,7 +192,7 @@ export async function identityAction(host: ActionHost, request: IdentityRequest)
 	// `--citekey` beside another selector names the vault key without taking part in the lookup.
 	const lookupSelector: Selector = { ...selector };
 	if (selector.citekey && (selector.doi || selector.arxiv || selector.title || selector.query || selector.itemKey)) delete lookupSelector.citekey;
-	const { outcome, view, notes, vaultNotes, withheld } = await resolveCore(host, lookupSelector, request.allowStale === true, index.view);
+	const { outcome, view, notes, vaultNotes, withheld, scan, failure } = await resolveCore(host, lookupSelector, request.allowStale === true, index.view);
 	const entry = outcome.entry;
 	const requestedCitekey = request.citekey ?? null;
 	const frontmatter = identityFrontmatter({ requestedCitekey, outcome, stale: withheld, now: host.now, emittedDoi: emitDoi(request.doi ?? entry?.doi ?? "") });
@@ -189,7 +215,7 @@ export async function identityAction(host: ActionHost, request: IdentityRequest)
 	const citekeyCheck = keyToCheck ? checkCitekey(keyToCheck, view.index, lookup, { doi: hints.doi, arxiv: hints.arxiv, ownId: entry?.id, ownPaths: vaultNotes.hub ? [vaultNotes.hub.path] : [] }) : null;
 	const status = frontmatter.zoteroStatus;
 	return {
-		...envelope(host, "identity", 2, withheld ? { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` } : undefined),
+		...envelope(host, "identity", 2, failure ?? undefined),
 		status: withheld ? "unavailable" : outcome.status,
 		...(withheld ? { indexAnswer: outcome.status } : {}),
 		matchedBy: outcome.matchedBy,
@@ -198,6 +224,7 @@ export async function identityAction(host: ActionHost, request: IdentityRequest)
 		citekeyCurrent,
 		ranked: rankedOf(outcome),
 		vaultNotes,
+		scan,
 		frontmatter,
 		yaml: yamlFragment(frontmatter),
 		s01,
@@ -242,7 +269,7 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	const all = await host.reader.listNotes();
 	const indexes = buildNoteIndexes(all);
 	const lookups = toRefMaps(indexes, host.vault);
-	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	const scan = scanOf(host);
 	lookups.skipped = [...new Set([...(lookups.skipped ?? []), ...scan.skipped, ...(scan.truncated ? ["<vault-scan-truncated>"] : [])])];
 	const withBodies: (NoteRecord & { body: string })[] = [];
 	for (const note of targets) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
@@ -295,7 +322,7 @@ export async function reconcileDryRun(host: ActionHost, request: ReconcileReques
 
 export async function reconcileAction(host: ActionHost, request: ReconcileRequest): Promise<Payload> {
 	const { result, view } = await reconcileDryRun(host, request);
-	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	const scan = scanOf(host);
 	if (!request.apply) return { ...envelope(host, "reconcile", 2), mode: "dry-run", ...result, scan, apply: { mode: "dry-run" }, generatedAt: view?.index.generatedAt ?? null };
 	if (scan.truncated || scan.skipped.length) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: "Vault discovery was incomplete; reconcile apply is refused." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete" }, generatedAt: view?.index.generatedAt ?? null };
 	if (!host.applyReconcile) return { ...envelope(host, "reconcile", 2, { reason: "requires-obsidian", message: "reconcile --apply requires the live Obsidian host." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "requires-obsidian" }, generatedAt: view?.index.generatedAt ?? null };
@@ -358,7 +385,7 @@ export async function diagnosticsAction(host: ActionHost, request: CommonRequest
 		const stale = forcedEvidenceGate || host.connection.index.stale === true;
 		const allowStaleNegative = request.allowStale === true && !forcedEvidenceGate;
 		const lookups = toRefMaps(buildNoteIndexes(listed), host.vault);
-		const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+		const scan = scanOf(host);
 		lookups.skipped = [...new Set([...(lookups.skipped ?? []), ...scan.skipped, ...(scan.truncated ? ["<vault-scan-truncated>"] : [])])];
 		const withBodies: (NoteRecord & { body: string })[] = [];
 		for (const note of citing.slice(0, MAX_CITES_FILES)) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });

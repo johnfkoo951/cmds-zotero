@@ -96,3 +96,120 @@ test("allow-stale cannot turn incomplete index citation misses into dangling ver
 	const files = result.files as {citations:{citeStatus:string}[]}[];
 	assert.equal(files[0].citations[0].citeStatus, "unchecked");
 });
+
+const brokenNote: NoteRecord = { path: "70. Outputs/graphify/broken-description.md", basename: "broken-description", frontmatter: null, frontmatterParse: "error" };
+const camelHub: NoteRecord = { path: "40. Paper Analyses/ahn2026promptsContracts/Ahn 2026 - S00 Hub.md", basename: "Ahn 2026 - S00 Hub", frontmatter: { type: "paper-hub", citekey: "ahn2026promptsContracts", citekeyProvisional: true, zoteroStatus: "not-found" }, frontmatterParse: "ok" };
+
+function withScan(value: ActionHost, extra: NoteRecord[], scan: { skipped: string[]; truncated: boolean }, questionBody = "[@smith2020]"): ActionHost {
+	const all = [...notes, ...extra];
+	value.reader = { ...value.reader, scanWarnings: () => scan, listNotes: async () => all, readNote: async path => path === "Questions/Q.md" ? questionBody : bodies.get(path) ?? "" };
+	return value;
+}
+
+function staleHost(): ActionHost {
+	const value = host();
+	value.connection.index.stale = true;
+	value.connection.index.ageMinutes = 1950;
+	value.indexView = { index, stale: true, ageMinutes: 1950 };
+	return value;
+}
+
+test("fresh index plus one unparseable note: resolve/identity still return not-found instead of a withheld stale-index", async () => {
+	const value = withScan(host(), [brokenNote], { skipped: [brokenNote.path], truncated: false });
+	const resolved = await runAction(value, "resolve", { citekey: "doesNotExist9999" });
+	assert.equal(resolved.ok, true);
+	assert.equal(resolved.reason, undefined);
+	assert.equal(resolved.status, "not-found");
+	assert.equal(resolved.indexAnswer, undefined);
+	assert.deepEqual(resolved.scan, { skipped: [brokenNote.path], truncated: false });
+	assert.ok((resolved.vaultNotes as { warnings: string[] }).warnings.some(warning => warning.includes(brokenNote.path)));
+	assert.ok((resolved.vaultNotes as { warnings: string[] }).warnings.some(warning => warning.startsWith("Vault discovery incomplete")));
+	const identity = await runAction(value, "identity", { citekey: "new2026paper", doi: "10.1000/never.registered", noBibliography: true });
+	assert.equal(identity.ok, true);
+	assert.equal(identity.status, "not-found");
+	const frontmatter = identity.frontmatter as Record<string, unknown>;
+	assert.equal(frontmatter.zoteroStatus, "not-found");
+	assert.equal(frontmatter.citekeyProvisional, true);
+	assert.equal(frontmatter.citekey, "new2026paper");
+	assert.match(identity.callout as string, /Provisional citekey/);
+	assert.deepEqual(identity.scan, { skipped: [brokenNote.path], truncated: false });
+	assert.equal(identity.reason, undefined);
+});
+
+test("cites attaches hub-only evidence for a camelCase paper hub, fresh or stale, even beside skipped notes", async () => {
+	for (const build of [host, staleHost]) {
+		const value = withScan(build(), [camelHub, brokenNote], { skipped: [brokenNote.path], truncated: false }, "[@ahn2026promptsContracts] and [@smith2020]");
+		const result = await runAction(value, "cites", { path: "Questions/Q.md", bibliography: true });
+		const citations = (result.files as { citations: { citekey: string; citeStatus: string; hub?: { path: string } }[] }[])[0].citations;
+		assert.equal(citations[0].citeStatus, "hub-only");
+		assert.equal(citations[0].hub?.path, camelHub.path);
+		assert.equal(citations[1].citeStatus, "resolved");
+		assert.equal((result.summary as { hubOnly: number }).hubOnly, 1);
+		assert.equal((result.summary as { unchecked: number }).unchecked, 0);
+		assert.match((result.references as { markdown: string }).markdown, /- \[@ahn2026promptsContracts\] \[\[Ahn 2026 - S00 Hub\]\] \(provisional\)/);
+	}
+});
+
+test("stale index without allow-stale still withholds not-found as stale-index; allow-stale lifts it even beside skipped notes", async () => {
+	const withheld = await runAction(withScan(staleHost(), [brokenNote], { skipped: [brokenNote.path], truncated: false }), "resolve", { citekey: "doesNotExist9999" });
+	assert.equal(withheld.ok, false);
+	assert.equal(withheld.reason, "stale-index");
+	assert.equal(withheld.status, "unavailable");
+	assert.equal(withheld.indexAnswer, "not-found");
+	assert.match(withheld.message as string, /--allow-stale/);
+	const identityWithheld = await runAction(withScan(staleHost(), [], { skipped: [], truncated: false }), "identity", { citekey: "new2026paper", doi: "10.1000/never.registered", noBibliography: true });
+	assert.equal(identityWithheld.reason, "stale-index");
+	assert.equal((identityWithheld.frontmatter as Record<string, unknown>).zoteroStatus, "unavailable");
+	const allowed = await runAction(withScan(staleHost(), [brokenNote], { skipped: [brokenNote.path], truncated: false }), "resolve", { citekey: "doesNotExist9999", allowStale: true });
+	assert.equal(allowed.ok, true);
+	assert.equal(allowed.status, "not-found");
+	assert.equal(allowed.reason, undefined);
+	const resolvedStale = await runAction(staleHost(), "resolve", { citekey: "smith2020" });
+	assert.equal(resolvedStale.ok, true);
+	assert.equal(resolvedStale.status, "resolved");
+});
+
+test("truncated discovery is reported as discovery-incomplete without touching the index verdict or offering allow-stale", async () => {
+	const scan = { skipped: [brokenNote.path, "70. Outputs/other-broken.md"], truncated: true };
+	const resolved = await runAction(withScan(host(), [brokenNote], scan), "resolve", { citekey: "doesNotExist9999" });
+	assert.equal(resolved.ok, false);
+	assert.equal(resolved.reason, "discovery-incomplete");
+	assert.equal(resolved.status, "not-found");
+	assert.equal(resolved.indexAnswer, undefined);
+	assert.deepEqual(resolved.scan, scan);
+	assert.match(resolved.message as string, /2 notes were skipped/);
+	assert.match(resolved.message as string, new RegExp(brokenNote.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	assert.doesNotMatch(resolved.message as string, /allow-stale/);
+	const identity = await runAction(withScan(host(), [brokenNote], scan), "identity", { citekey: "new2026paper", doi: "10.1000/never.registered", noBibliography: true });
+	assert.equal(identity.reason, "discovery-incomplete");
+	assert.equal((identity.frontmatter as Record<string, unknown>).zoteroStatus, "not-found");
+	assert.equal((identity.frontmatter as Record<string, unknown>).citekeyProvisional, true);
+	const many = { skipped: Array.from({ length: 12 }, (_, i) => `70. Outputs/broken-${i}.md`), truncated: true };
+	const capped = await runAction(withScan(host(), [], many), "resolve", { citekey: "doesNotExist9999" });
+	assert.match(capped.message as string, /first 10 of 12/);
+	assert.doesNotMatch(capped.message as string, /broken-11\.md/);
+	const staleAndTruncated = await runAction(withScan(staleHost(), [], many), "resolve", { citekey: "doesNotExist9999" });
+	assert.equal(staleAndTruncated.reason, "stale-index");
+	const resolvedTruncated = await runAction(withScan(host(), [], many), "resolve", { citekey: "smith2020" });
+	assert.equal(resolvedTruncated.reason, "discovery-incomplete");
+	assert.equal(resolvedTruncated.status, "resolved");
+});
+
+test("cites names discovery-incomplete for vault-absence verdicts beside skipped notes and allow-stale does not lift it", async () => {
+	const value = withScan(host(), [brokenNote], { skipped: [brokenNote.path], truncated: false }, "[@nowhere2025gone]");
+	const result = await runAction(value, "cites", { path: "Questions/Q.md", bibliography: true, allowStale: true });
+	const citation = (result.files as { citations: { citeStatus: string; uncheckedReason?: string }[] }[])[0].citations[0];
+	assert.equal(citation.citeStatus, "unchecked");
+	assert.equal(citation.uncheckedReason, "discovery-incomplete");
+	assert.deepEqual(result.scan, { skipped: [brokenNote.path], truncated: false });
+	const unresolved = (result.references as { unresolved: { uncheckedReason?: string; hint: string }[]; markdown: string }).unresolved[0];
+	assert.equal(unresolved.uncheckedReason, "discovery-incomplete");
+	assert.match(unresolved.hint, /--allow-stale does not apply/);
+	assert.match((result.references as { markdown: string }).markdown, /\(unchecked: vault discovery incomplete\)/);
+	const diagnostic = (result.diagnostics as { code: string; message: string }[]).find(item => item.code === "cite-unchecked");
+	assert.match(diagnostic?.message ?? "", /vault discovery was incomplete/);
+	const stale = await runAction(withScan(staleHost(), [], { skipped: [], truncated: false }, "[@nowhere2025gone]"), "cites", { path: "Questions/Q.md", bibliography: true });
+	const staleCitation = (stale.files as { citations: { citeStatus: string; uncheckedReason?: string }[] }[])[0].citations[0];
+	assert.equal(staleCitation.uncheckedReason, "stale-index");
+	assert.match((stale.references as { markdown: string }).markdown, /\(unchecked: index stale\)/);
+});

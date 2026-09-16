@@ -17,7 +17,10 @@ export interface IdentityFrontmatterInput {
 	/** `--citekey` (or the folder key); null when the agent passed none. */
 	requestedCitekey: string | null;
 	outcome: ResolveOutcome;
-	/** Index older than `indexMaxAgeMinutes`: a not-found verdict is withheld and reported as `unavailable`. */
+	/**
+	 * The stale gate fired (index older than `indexMaxAgeMinutes`, incomplete, or of unknown age, without `--allow-stale`):
+	 * a not-found verdict is withheld and reported as `unavailable`. Vault-discovery incompleteness never sets this.
+	 */
 	stale: boolean;
 	now: Date;
 	/** DOI already passed through `emitDoi` (or the raw `--doi` value; it is normalized again, idempotently). */

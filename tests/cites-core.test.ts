@@ -62,19 +62,55 @@ test("classifyKeys unions current/history identities and refuses ambiguous or ma
 	const ambiguousNotes: NoteLookups = { hubByCitekey: new Map([["local2024key", [hubRef, bothHubRef]]]), rawByCitekey: new Map() };
 	assert.deepEqual(classifyKeys(["local2024key"], index, ambiguousNotes, false, false).get("local2024key"), { citeStatus: "ambiguous" });
 	const malformed: NoteLookups = { hubByCitekey: new Map(), rawByCitekey: new Map(), skipped: ["broken.md"] };
-	assert.deepEqual(classifyKeys(["unknown2024key"], index, malformed, false, false).get("unknown2024key"), { citeStatus: "unchecked" });
+	assert.deepEqual(classifyKeys(["unknown2024key"], index, malformed, false, false).get("unknown2024key"), { citeStatus: "unchecked", uncheckedReason: "discovery-incomplete" });
 });
 
-test("a stale index withholds negative verdicts as unchecked unless allowed", () => {
+test("a stale index withholds negative verdicts as unchecked (stale-index) unless allowed", () => {
 	const withheld = classifyKeys(allKeys, index, lookups, true, false);
 	assert.equal(withheld.get("alpha2020memory")?.citeStatus, "resolved");
 	assert.equal(withheld.get("gamma2019dup")?.citeStatus, "ambiguous");
 	assert.deepEqual(withheld.get("hubonly2022note"), { citeStatus: "hub-only", hub: hubRef });
-	assert.deepEqual(withheld.get("rawonly2023note"), { citeStatus: "unchecked", raw: rawRef });
-	assert.deepEqual(withheld.get("nowhere2025gone"), { citeStatus: "unchecked" });
+	assert.deepEqual(withheld.get("rawonly2023note"), { citeStatus: "unchecked", raw: rawRef, uncheckedReason: "stale-index" });
+	assert.deepEqual(withheld.get("nowhere2025gone"), { citeStatus: "unchecked", uncheckedReason: "stale-index" });
 	const allowed = classifyKeys(allKeys, index, lookups, true, true);
 	assert.equal(allowed.get("nowhere2025gone")?.citeStatus, "dangling");
 	assert.equal(allowed.get("rawonly2023note")?.citeStatus, "raw-only");
+	assert.equal(allowed.get("nowhere2025gone")?.uncheckedReason, undefined);
+});
+
+test("incomplete discovery withholds vault-absence verdicts as discovery-incomplete, keeps hub evidence, and is not lifted by allow-stale", () => {
+	const camelHub = noteRef("SynthVault", "40. Paper Analyses/ahn2026promptsContracts/Ahn 2026 - S00 Hub.md");
+	const incomplete: NoteLookups = { hubByCitekey: new Map([["ahn2026promptsContracts", camelHub], ["hubonly2022note", hubRef]]), rawByCitekey: new Map([["rawonly2023note", rawRef]]), skipped: ["70. Outputs/broken.md"] };
+	const keys = ["ahn2026promptsContracts", "hubonly2022note", "rawonly2023note", "nowhere2025gone", "alpha2020memory"];
+	for (const [stale, allowStale] of [[false, false], [false, true], [true, false], [true, true]] as const) {
+		const verdicts = classifyKeys(keys, index, incomplete, stale, allowStale);
+		assert.deepEqual(verdicts.get("ahn2026promptsContracts"), { citeStatus: "hub-only", hub: camelHub }, `camelCase hub stays hub-only (stale ${stale}, allowStale ${allowStale})`);
+		assert.deepEqual(verdicts.get("hubonly2022note"), { citeStatus: "hub-only", hub: hubRef });
+		assert.deepEqual(verdicts.get("rawonly2023note"), { citeStatus: "unchecked", raw: rawRef, uncheckedReason: "discovery-incomplete" });
+		assert.deepEqual(verdicts.get("nowhere2025gone"), { citeStatus: "unchecked", uncheckedReason: "discovery-incomplete" });
+		assert.equal(verdicts.get("alpha2020memory")?.citeStatus, "resolved");
+	}
+	const verdicts = classifyKeys(keys, index, incomplete, false, true);
+	assert.equal(referencesMarkdown(["nowhere2025gone"], verdicts, new Map(), new Map()), "## References\n- [@nowhere2025gone] (unchecked: vault discovery incomplete)");
+	const payload = referencesPayload(["nowhere2025gone", "rawonly2023note"], verdicts, new Map(), new Map());
+	assert.deepEqual(payload.unresolved.map(u => [u.citekey, u.citeStatus, u.uncheckedReason]), [["nowhere2025gone", "unchecked", "discovery-incomplete"], ["rawonly2023note", "unchecked", "discovery-incomplete"]]);
+	for (const item of payload.unresolved) {
+		assert.match(item.hint, /Vault discovery incomplete/);
+		assert.match(item.hint, /--allow-stale does not apply/);
+		assert.doesNotMatch(item.hint, /pass --allow-stale/);
+	}
+	const file = citesForNote(note("q.md", null, ["[@nowhere2025gone] and [@ahn2026promptsContracts]"]), verdicts);
+	assert.equal(file.citations[0].uncheckedReason, "discovery-incomplete");
+	assert.equal(file.citations[1].uncheckedReason, undefined);
+	const diagnostics = citesDiagnostics([file]);
+	assert.equal(diagnostics[0].code, "cite-unchecked");
+	assert.match(diagnostics[0].message, /vault discovery was incomplete/);
+	assert.doesNotMatch(diagnostics[0].message, /index is stale/);
+	assert.equal(keysForFiles([file])[0].uncheckedReason, "discovery-incomplete");
+	const stale = classifyKeys(["nowhere2025gone"], index, lookups, true, false);
+	const staleFile = citesForNote(note("s.md", null, ["[@nowhere2025gone]"]), stale);
+	assert.match(citesDiagnostics([staleFile])[0].message, /index is stale; refresh or pass --allow-stale/);
+	assert.equal(referencesPayload(["nowhere2025gone"], stale, new Map(), new Map()).unresolved[0].uncheckedReason, "stale-index");
 });
 
 test("references section: RQ-like note cites three keys but lists two", () => {

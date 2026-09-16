@@ -129,7 +129,8 @@ export type FailureReason =
 	| "ambiguous-vault-path" | "endpoint-not-local" | "path-outside-vault" | "no-pdf-attachment" | "attachment-ambiguous"
 	| "attachment-file-missing" | "pdf-too-large" | "pdf-invalid" | "pdfjs-unavailable" | "no-cache" | "quotes-empty"
 	| "inline-too-large" | "timeout" | "plugin-too-old" | "legacy-plugin-enabled"
-	| "index-incomplete" | "invalid-request" | "cache-invalid" | "source-changed" | "apply-failed" | "scan-incomplete";
+	| "index-incomplete" | "invalid-request" | "cache-invalid" | "source-changed" | "apply-failed" | "scan-incomplete"
+	| "discovery-incomplete";
 
 /** Every response carries this envelope; v1 actions keep `apiVersion: 1`, new actions use 2. */
 export interface Envelope {
@@ -146,6 +147,13 @@ export interface Envelope {
 }
 
 export type CiteStatus = "resolved" | "hub-only" | "raw-only" | "dangling" | "ambiguous" | "unchecked";
+/**
+ * Why a `cites` verdict is `unchecked`: `discovery-incomplete` when vault discovery skipped or truncated notes (a hub or
+ * raw source may exist unseen; `--allow-stale` does not apply), `stale-index` when the stale gate withheld a negative.
+ */
+export type UncheckedReason = "discovery-incomplete" | "stale-index";
+/** Additive discovery report returned by resolve/identity/cites/reconcile so callers can see what a vault scan omitted. */
+export interface ScanReport { skipped: string[]; truncated: boolean }
 export type HubClassification = "registered-consistent" | "registered-desynced" | "registered-unpinned" | "provisional-now-registered" | "unregistered-flagged" | "unregistered-unflagged" | "ambiguous" | "unchecked";
 export type PdfStatus = "present" | "missing-file" | "unknown-type" | "none" | "ambiguous" | "unavailable";
 export type MatchStatus = "found" | "multiple" | "fuzzy" | "not-found";
