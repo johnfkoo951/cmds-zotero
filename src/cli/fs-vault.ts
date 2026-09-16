@@ -2,6 +2,8 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYamlText } from "yaml";
+import { readLocalFile } from "../local-file";
+import { parseNoteText } from "../frontmatter-read";
 import type { NoteRecord, VaultReader } from "../agent/types";
 import { normalizeSettings } from "../settings-data";
 import type { CmdsZoteroSettings } from "../types";
@@ -33,20 +35,15 @@ export async function locateVault(name: string, explicitPath: string | null, hom
 	return { location: { name, path: await fs.realpath(candidates[0]) }, ambiguous: false, candidates };
 }
 
-export function parseFrontmatter(text: string): { frontmatter: Record<string, unknown> | null; frontmatterParse: "ok" | "error"; body: string } {
-	const withoutBOM = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(withoutBOM);
-	if (!match) return { frontmatter: null, frontmatterParse: "ok", body: withoutBOM };
-	const body = withoutBOM.slice(match[0].length);
-	try {
-		const parsed: unknown = parseYamlText(match[1]);
-		return { frontmatter: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null, frontmatterParse: "ok", body };
-	} catch { return { frontmatter: null, frontmatterParse: "error", body }; }
+export function parseFrontmatter(text: string): ReturnType<typeof parseNoteText> {
+	return parseNoteText(text, parseYamlText);
 }
 
 /** Offline read-only vault access over the filesystem: refuses symlinks and anything outside the vault root. */
 export class FsVaultReader implements VaultReader {
+	private report = { skipped: [] as string[], truncated: false };
 	constructor(private root: string, private name: string) {}
+	scanWarnings(): { skipped: string[]; truncated: boolean } { return { skipped: [...this.report.skipped], truncated: this.report.truncated }; }
 
 	vaultName(): string { return this.name; }
 
@@ -56,32 +53,31 @@ export class FsVaultReader implements VaultReader {
 		const rel = relative(this.root, target);
 		if (!rel || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel)) throw new Error("Path escapes the vault.");
 		const real = await fs.realpath(target);
-		if (real !== target && !real.startsWith(this.root + sep)) throw new Error("Path resolves outside the vault.");
+		if (real !== target) throw new Error("Path resolves outside the vault.");
 		return target;
 	}
 
 	async listNotes(): Promise<NoteRecord[]> {
 		const notes: NoteRecord[] = [];
+		this.report = { skipped: [], truncated: false };
 		const walk = async (dir: string): Promise<void> => {
-			if (notes.length >= MAX_LISTED_NOTES) return;
+			if (notes.length >= MAX_LISTED_NOTES) { this.report.truncated = true; return; }
 			let entries: import("node:fs").Dirent[];
-			try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+			try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { this.report.skipped.push(relative(this.root, dir)); return; }
 			entries.sort((a, b) => a.name.localeCompare(b.name));
 			for (const entry of entries) {
-				if (notes.length >= MAX_LISTED_NOTES) return;
-				if (entry.isSymbolicLink()) continue;
+				if (notes.length >= MAX_LISTED_NOTES) { this.report.truncated = true; return; }
+				if (entry.isSymbolicLink()) { this.report.skipped.push(relative(this.root, join(dir, entry.name))); continue; }
 				const full = join(dir, entry.name);
 				if (entry.isDirectory()) { if (!entry.name.startsWith(".")) await walk(full); continue; }
 				if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
 				const relPath = relative(this.root, full).split(sep).join("/");
 				let text: string;
 				try {
-					const stat = await fs.stat(full);
-					if (stat.size > MAX_NOTE_BYTES) continue;
-					text = await fs.readFile(full, "utf8");
-				} catch { continue; }
-				const head = text.startsWith("---") ? text : "";
-				const parsed = parseFrontmatter(head);
+					text = await this.readNote(relPath);
+				} catch { this.report.skipped.push(relPath); continue; }
+				const parsed = parseFrontmatter(text);
+				if (parsed.frontmatterParse === "error") this.report.skipped.push(relPath);
 				notes.push({ path: relPath, basename: entry.name.replace(/\.md$/, ""), frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse });
 			}
 		};
@@ -94,7 +90,7 @@ export class FsVaultReader implements VaultReader {
 		const stat = await fs.stat(full);
 		if (!stat.isFile()) throw new Error(`Note not found: ${path}`);
 		if (stat.size > MAX_NOTE_BYTES) throw new Error(`Note exceeds ${MAX_NOTE_BYTES / 1024 / 1024} MiB: ${path}`);
-		return fs.readFile(full, "utf8");
+		return Buffer.from((await readLocalFile(full, { maxBytes: MAX_NOTE_BYTES, minBytes: 0, magic: () => true })).bytes).toString("utf8");
 	}
 
 	async exists(path: string): Promise<boolean> {
@@ -106,7 +102,7 @@ export class FsVaultReader implements VaultReader {
 			const full = await this.resolveInside(path);
 			const stat = await fs.stat(full);
 			if (!stat.isFile() || stat.size > maxBytes) return null;
-			return await fs.readFile(full, "utf8");
+			return Buffer.from((await readLocalFile(full, { maxBytes, minBytes: 0, magic: () => true })).bytes).toString("utf8");
 		} catch { return null; }
 	}
 

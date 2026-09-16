@@ -31,3 +31,15 @@ A desktop-only, local-first Zotero integration: verified identities and index, c
 - `item.attachments` returns an array with `open`, `path`, optional `annotations`. Parse and validate its URI rather than expecting a `key` property.
 - Annotations have 0-based position.pageIndex; Zotero PDF URIs have 1-based page numbers. Image paths are local and must never be committed.
 - Native Zotero local API is optional and not required by this implementation. No SQLite access.
+
+## Agent contract 2
+
+- Normative behavior: `docs/agent-contract-v2/contract.md`; implementation status: `docs/0.4-agent-contract-plan.md`.
+- Shared agent types live in `src/agent/types.ts`. Pure `src/agent/*`, `pdf/cache`, `pdf/locate`, `frontmatter-read`, and `local-file` must load without a runtime `obsidian` import. Host adapters own environment access.
+- Read-only actions use a snapshot/peek, never an implicit refresh or note-map publication. Zotero writes are forbidden. Never replay an accepted or uncertain mutating request after a timeout.
+- Missing, malformed, incomplete or unknown-age index evidence cannot prove absence. `allow-stale` changes only stale read verdicts; it never authorizes reconcile writes.
+- Reconcile writes only the five `HUB_WRITABLE_KEYS`, only actual paper hubs outside Raw Sources, and only monotonic transitions. Preserve raw presence of malformed values; do not turn malformed into absent. Current key equality alone proves pinning; history and registration are insufficient.
+- Keep source-change, YAML round-trip, callback-time and post-write checks. Never claim whole-file CAS against external editors or automatically roll back over a concurrent edit.
+- PDF/image reads use the shared no-symlink, bounded, magic-checked local reader. PDF links use attachment keys. Scope/hash-bind cache reads and never issue confirmed callout titles from changed evidence.
+- Caches contain full paper text. Ensure private ignore rules before writes; ignored and tracked states differ. Fixtures/docs must be synthetic and must not contain local user paths or library exports.
+- The portable skill reference is generated: edit the canonical contract, run `node scripts/sync-contract.mjs`, then `--check`. Test skill installation only into a fixture target unless real installation is requested.

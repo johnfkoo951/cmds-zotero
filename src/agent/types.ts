@@ -89,6 +89,8 @@ export function noteRef(vault: string, path: string): NoteRef {
 /** Read-only vault access shared by live (Obsidian) and offline (fs) hosts. Paths are vault-relative with `/`. */
 export interface VaultReader {
 	vaultName(): string;
+	/** Additive discovery report; hosts must not silently lose malformed or truncated notes. */
+	scanWarnings?(): { skipped: string[]; truncated: boolean };
 	/** Every Markdown note with parsed frontmatter (no body). Implementations cap at 20,000 files and skip dot-directories. */
 	listNotes(): Promise<NoteRecord[]>;
 	/** Full text of one note; throws when absent or outside the vault. */
@@ -109,7 +111,7 @@ export interface IndexInfo {
 	stale: boolean | null;
 	maxAgeMinutes: number;
 }
-export interface GitInfo { repo: boolean; indexIgnored: boolean | null; cacheIgnored: boolean | null }
+export interface GitInfo { repo: boolean; indexIgnored: boolean | null; cacheIgnored: boolean | null; indexTracked?: boolean | null; cacheTracked?: boolean | null }
 
 export interface ConnectionInfo {
 	mode: "live" | "offline";
@@ -126,7 +128,8 @@ export type FailureReason =
 	| "requires-obsidian" | "bbt-unreachable" | "stale-index" | "index-missing" | "index-invalid" | "bundle-missing"
 	| "ambiguous-vault-path" | "endpoint-not-local" | "path-outside-vault" | "no-pdf-attachment" | "attachment-ambiguous"
 	| "attachment-file-missing" | "pdf-too-large" | "pdf-invalid" | "pdfjs-unavailable" | "no-cache" | "quotes-empty"
-	| "inline-too-large" | "timeout" | "plugin-too-old" | "legacy-plugin-enabled";
+	| "inline-too-large" | "timeout" | "plugin-too-old" | "legacy-plugin-enabled"
+	| "index-incomplete" | "invalid-request" | "cache-invalid" | "source-changed" | "apply-failed" | "scan-incomplete";
 
 /** Every response carries this envelope; v1 actions keep `apiVersion: 1`, new actions use 2. */
 export interface Envelope {
@@ -153,7 +156,7 @@ export const HUB_IDENTITY_KEYS = ["citekey", "citekeyProvisional", "doi", "zoter
 export const HUB_WRITABLE_KEYS = ["citekeyProvisional", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"] as const;
 
 export interface HubIdentityFrontmatter {
-	citekey: string;
+	citekey?: string;
 	citekeyProvisional: boolean;
 	doi: string;
 	zoteroID?: string;

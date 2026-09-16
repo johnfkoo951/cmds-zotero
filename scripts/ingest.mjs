@@ -3,16 +3,19 @@
 // validated index for read-only actions. Every response is JSON on stdout with an envelope; see
 // skills/cmds-zotero/references/cli-contract-v2.md.
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+globalThis.require ??= createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE = join(HERE, 'ingest-core.mjs');
 
-const V1_ACTIONS = ['connection', 'refresh', 'resolve', 'diagnostics'];
-const V2_ACTIONS = ['info', 'identity', 'cites', 'reconcile', 'pdf-text', 'locate'];
+const ACTION_API_VERSION = { connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, 'pdf-text': 2, locate: 2 };
+const V1_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 1);
+const V2_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 2);
 const OFFLINE_CAPABLE = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'locate']);
 const LIVE_ONLY = new Set(['refresh', 'pdf-text']);
 
@@ -143,68 +146,85 @@ function evaluate(expression) {
 
 async function runLive() {
 	const versions = evaluate(`{apiVersion:p.service.apiVersion,apiVersions:p.service.apiVersions||[p.service.apiVersion]}`);
-	if (versions.kind !== 'result') return { bridge: versions };
+	if (versions.kind !== 'result') return { bridge: versions, phase: 'discovery' };
 	const apiVersions = Array.isArray(versions.value.apiVersions) ? versions.value.apiVersions : [versions.value.apiVersion];
-	if (V2_ACTIONS.includes(action) && !apiVersions.includes(2)) return { bridge: { kind: 'too-old', apiVersions } };
+	if (!apiVersions.includes(2)) {
+		if (V2_ACTIONS.includes(action)) return { bridge: { kind: 'too-old', apiVersions }, phase: 'discovery' };
+		if (action === 'resolve' || action === 'diagnostics') return { bridge: { kind: 'too-old-read', apiVersions }, phase: 'discovery' };
+		if (action === 'refresh' && Object.keys(request).length) return { bridge: { kind: 'too-old', apiVersions }, phase: 'discovery' };
+		// Old-host connection and an unflagged explicit refresh preserve their v1 behavior and are wrapped below.
+	}
 	let id = null;
 	for (let attempt = 0; attempt < 4; attempt++) {
 		const started = evaluate(`p.service.startJob(${JSON.stringify(action)},${JSON.stringify(request)})`);
 		if (started.kind === 'result') { id = started.value; break; }
 		if (started.kind === 'plugin-error' && /Too many active/.test(started.message) && attempt < 3) { await delay(1000 * 2 ** attempt); continue; }
-		return { bridge: started };
+		if (started.kind === 'plugin-error') return { bridge: started, phase: 'discovery' };
+		return { bridge: started, phase: 'submission-uncertain' };
 	}
 	const deadline = Date.now() + timeoutMs;
 	while (true) {
 		const job = evaluate(`p.service.getJob(${JSON.stringify(id)})`);
-		if (job.kind !== 'result') return { bridge: job };
-		if (job.value.state === 'failed') return { bridge: { kind: 'plugin-error', message: job.value.error ?? 'Ingest request failed.' } };
+		if (job.kind !== 'result') return { bridge: job, phase: 'accepted' };
+		if (job.value.state === 'failed') return { bridge: { kind: 'plugin-error', message: job.value.error ?? 'Ingest request failed.' }, phase: 'accepted' };
 		if (job.value.state === 'completed') return { result: job.value.result };
-		if (job.value.state !== 'pending') return { bridge: { kind: 'plugin-error', message: 'Unsupported job response.' } };
-		if (Date.now() >= deadline) return { bridge: { kind: 'timeout', message: `Timed out after ${timeoutMs / 1000}s waiting for the plugin job.` } };
+		if (job.value.state !== 'pending') return { bridge: { kind: 'plugin-error', message: 'Unsupported job response.' }, phase: 'accepted' };
+		if (Date.now() >= deadline) return { bridge: { kind: 'timeout', message: `Timed out after ${timeoutMs / 1000}s waiting for the plugin job.` }, phase: 'accepted' };
 		await delay(500);
 	}
 }
 
 async function runOffline(obsidianError) {
-	if (!existsSync(CORE)) return { apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'bundle-missing', message: 'scripts/ingest-core.mjs is missing; run npm run build:core.', checkedAt: new Date().toISOString(), connection: null };
+	if (!existsSync(CORE)) return { apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'bundle-missing', message: 'scripts/ingest-core.mjs is missing; run npm run build:core.', checkedAt: new Date().toISOString(), connection: unknownConnection('Offline core bundle is missing.', 'offline') };
 	const core = await import(pathToFileURL(CORE).href);
 	return core.runAction({ action, vault, vaultPath: parsed.values['--vault-path'] ?? null, request, obsidianError: obsidianError ?? null, now: new Date() });
 }
 
-function emit(payload) {
-	process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
-	const refused = payload && payload.apply && payload.apply.mode === 'refused';
+function unknownConnection(obsidianError, mode = offline ? 'offline' : 'live') {
+	return { mode, obsidian: 'unavailable', ...(obsidianError ? { obsidianError } : {}), plugin: { status: 'unknown', version: null, apiVersions: null }, bbt: { reachable: null }, index: { source: 'none', path: '', schemaVersion: null, generatedAt: null, ageMinutes: null, count: null, complete: null, stale: null, maxAgeMinutes: 60 }, legacyPluginEnabled: null, git: null };
+}
+function structuredFailure(reason, message, refused = false) {
+	return { apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason, message, ...(V1_ACTIONS.includes(action) ? { status: 'unavailable' } : {}), checkedAt: new Date().toISOString(), connection: unknownConnection(message), ...(refused && action === 'reconcile' && request.apply ? { mode: 'apply', apply: { mode: 'refused', refusedReason: reason } } : {}) };
+}
+function legacyEnvelope(payload) {
+	if (payload && payload.contract === 2 && payload.connection) return payload;
+	const capabilities = payload?.capabilities;
+	const connection = unknownConnection(null);
+	connection.mode = 'live'; connection.obsidian = 'ok'; connection.plugin = { status: 'too-old', version: null, apiVersions: [1] };
+	if (capabilities?.zotero && capabilities?.betterbibtex) connection.bbt = { reachable: true, zotero: capabilities.zotero, betterbibtex: capabilities.betterbibtex };
+	return { apiVersion: 1, contract: 2, apiVersions: [1, 2], action, vault, ok: true, checkedAt: new Date().toISOString(), connection, ...payload };
+}
+async function emit(payload) {
+	await new Promise((resolve, reject) => process.stdout.write(JSON.stringify(payload, null, 2) + '\n', error => error ? reject(error) : resolve()));
+	const refused = payload?.apply?.mode === 'refused';
+	const partial = payload?.apply?.mode === 'partial';
 	const strictFail = request.strict && Array.isArray(payload?.diagnostics) && payload.diagnostics.some(d => d.severity === 'error');
-	if (payload && (payload.ok === false || payload.status === 'unavailable' || refused || strictFail)) {
-		process.stderr.write(`reason: ${payload.reason ?? (refused ? payload.apply.refusedReason : payload.status === 'unavailable' ? 'unavailable' : 'strict')}\n`);
+	if (payload && (payload.ok === false || payload.status === 'unavailable' || refused || partial || strictFail)) {
+		process.stderr.write(`reason: ${payload.reason ?? (refused ? payload.apply.refusedReason : partial ? 'apply-failed' : payload.status === 'unavailable' ? 'unavailable' : 'strict')}\n`);
 		process.exitCode = 1;
 	}
 }
 
-try {
+async function main() {
 	if (!offline) {
 		const live = await runLive();
-		if (live.result) { emit(live.result); process.exit(); }
+		if (live.result) { await emit(legacyEnvelope(live.result)); return; }
 		const bridge = live.bridge;
-		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') {
-			emit({ apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', message: bridge.message, ...(V1_ACTIONS.includes(action) ? { status: 'unavailable' } : {}), checkedAt: new Date().toISOString(), connection: null });
-			process.exit();
+		if (live.phase === 'accepted' || live.phase === 'submission-uncertain') {
+			await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', `${bridge.message ?? 'The job result is unavailable.'} The submission may have been accepted; do not resubmit automatically.`)); return;
 		}
-		if (bridge.kind === 'too-old') {
-			emit({ apiVersion: 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'plugin-too-old', message: `The loaded plugin supports API versions ${bridge.apiVersions.join(',')}; ${action} needs 2.`, checkedAt: new Date().toISOString(), connection: null });
-			process.exit();
+		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') { await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message)); return; }
+		if (bridge.kind === 'too-old' || bridge.kind === 'too-old-read') {
+			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !(action === 'reconcile' && request.apply)) { await emit(await runOffline(`Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`)); return; }
+			await emit(structuredFailure('plugin-too-old', `The loaded plugin supports API versions ${bridge.apiVersions.join(',')}; ${action} needs contract 2.`, true)); return;
 		}
-		if (LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply)) {
-			emit({ apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'requires-obsidian', message: bridge.message, ...(V1_ACTIONS.includes(action) ? { status: 'unavailable' } : {}), checkedAt: new Date().toISOString(), connection: null });
-			process.exit();
-		}
-		emit(await runOffline(bridge.message));
-		process.exit();
+		if (LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply)) { await emit(structuredFailure('requires-obsidian', bridge.message)); return; }
+		await emit(await runOffline(bridge.message)); return;
 	}
-	if (LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply)) fail(`${action}${request.apply ? ' --apply' : ''} requires Obsidian; drop --offline.`);
+	if (LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply)) { await emit(structuredFailure('requires-obsidian', `${action}${request.apply ? ' --apply' : ''} requires the live host.`, true)); return; }
 	if (!OFFLINE_CAPABLE.has(action)) fail(`${action} is not available offline.`);
-	emit(await runOffline(null));
-} catch (error) {
-	process.stderr.write(JSON.stringify({ apiVersion: 1, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'requires-obsidian', status: 'unavailable', message: error instanceof Error ? error.message : 'CLI request failed.' }) + '\n');
-	process.exitCode = 1;
+	await emit(await runOffline(null));
 }
+
+try { await main(); }
+catch (error) { await emit(structuredFailure('requires-obsidian', error instanceof Error ? error.message : 'CLI request failed.')); }

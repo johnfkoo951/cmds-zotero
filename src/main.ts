@@ -1,10 +1,22 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
+import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TFile, parseYaml, stringifyYaml } from "obsidian";
 import { BbtService } from "./bbt";
 import { IndexService } from "./index-service";
 import { ImportService } from "./importer";
 import { IngestAPI } from "./ingest-api";
+import type { ActionHost, AgentAction, PdfTextRequest, RefreshRequest } from "./agent/actions";
+import { buildConnection } from "./agent/connection";
+import { ObsidianVaultReader } from "./obsidian-vault";
+import { PdfTextService } from "./pdf/extract";
+import { applyReconcile } from "./reconcile-apply";
+import { probeGit } from "./git-probe";
+import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import * as nodePath from "node:path";
+import { readLocalFile } from "./local-file";
+import { validateIndex } from "./identity";
+import { rpc } from "./api/transport";
 import { VaultLinks } from "./vault-links";
-import { VaultIndexStorage, relativePath } from "./vault-storage";
+import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
 import { citekeyAtCursor, parseProtocolRequest } from "./protocol";
 import { pdfURI, noteDeepLink, markdownLink } from "./uris";
@@ -30,6 +42,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	private bibliographyFlights = new Map<string, Promise<string>>();
 	private warming: Promise<void> | null = null;
 	private lastView: MarkdownView | null = null;
+	private pdfText!: PdfTextService;
 
 	async onload(): Promise<void> {
 		const stored: unknown = await this.loadData();
@@ -94,12 +107,95 @@ export default class CMDSZoteroPlugin extends Plugin {
 		const links: VaultLinks = new VaultLinks(this.app, () => this.settings, () => this.active && this.links === links);
 		this.links = links;
 		this.importer = new ImportService(this.app, this.bbt, () => this.settings);
-		this.service = new IngestAPI(this.app, this.bbt, this.index, this.links, async index => {
+		const pdfText: PdfTextService = new PdfTextService(this.app, undefined, (): boolean => this.active && this.index === indexService && this.pdfText === pdfText);
+		this.pdfText = pdfText;
+		const onIndex = async (index: ZoteroIndex): Promise<void> => {
 			if (!this.active || this.index !== indexService) return;
 			const changed = this.lastIndex?.generatedAt !== index.generatedAt;
 			this.lastIndex = index;
 			if (changed) { this.bibliographyCache.clear(); await this.links.publish(index); this.refreshViews(); }
+		};
+		this.service = new IngestAPI(this.app, this.bbt, this.index, this.links, onIndex, (action, request, now) => this.agentHost(action, request, now, onIndex, indexService, pdfText));
+	}
+
+
+	private async agentHost(action: AgentAction, request: unknown, now: Date, onIndex: (index: ZoteroIndex) => Promise<void>, indexToken: IndexService, pdfToken: PdfTextService): Promise<ActionHost> {
+		const reader = new ObsidianVaultReader(this.app);
+		const index = await indexToken.peek();
+		const adapter = this.app.vault.adapter;
+		const indexExists = await adapter.exists(this.settings.zoteroIndexPath);
+		const root = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
+		const bbtInfo = action === "connection" ? await this.bbt.capabilities().then(value => ({ reachable: true, zotero: value.zotero, betterbibtex: value.betterbibtex }), error => ({ reachable: false, error: error instanceof Error ? error.message : "BBT unreachable" })) : { reachable: null };
+		const enabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
+		const connection = buildConnection({
+			mode: "live", obsidian: "ok", pluginVersion: this.manifest.version, pluginApiVersions: [1, 2], pluginEnabled: true, bbt: bbtInfo,
+			index: { source: index ? "plugin" : "none", path: this.settings.zoteroIndexPath, generatedAt: index?.generatedAt ?? null, count: index?.count ?? null, complete: index?.complete ?? null, schemaVersion: index?.schemaVersion ?? null },
+			maxAgeMinutes: this.settings.indexMaxAgeMinutes, legacyPluginEnabled: enabled ? enabled.has("cmds-link-zotero") : null,
+			git: root ? await probeGit(root, this.settings.zoteroIndexPath) : null, now,
 		});
+		const host: ActionHost = {
+			vault: this.app.vault.getName(), now, connection, settings: this.settings,
+			indexView: index ? { index, ageMinutes: connection.index.ageMinutes ?? Number.POSITIVE_INFINITY, stale: connection.index.stale !== false } : null,
+			indexFailure: index ? null : indexExists ? { reason: "index-invalid", message: "The index file exists but failed validation; run refresh explicitly." } : { reason: "index-missing", message: "No validated Zotero index is available; run refresh explicitly." }, reader,
+			bibliography: (entry, style) => this.bibliographyForStyle(entry, style), bibliographyReason: null,
+			vaultLinks: (entry, current) => this.links.find(entry, current),
+			pdfCache: {
+				list: async dir => { await assertVaultBoundary(this.app, dir); return (await adapter.exists(dir)) ? (await adapter.list(dir)).files.map(path => path.split("/").pop() ?? path) : []; },
+				read: async path => {
+					if (!root) return null;
+					try {
+						await assertVaultBoundary(this.app, path);
+						const bytes = (await readLocalFile(nodePath.join(root, relativePath(path)), { maxBytes: 32 * 1024 * 1024, minBytes: 0, magic: () => true })).bytes;
+						return Buffer.from(bytes).toString("utf8");
+					} catch { return null; }
+				},
+				statLocal: async path => { try { if (await fs.realpath(path) !== path) return null; const stat = await fs.lstat(path); return stat.isFile() && !stat.isSymbolicLink() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null; } catch { return null; } },
+				fileHash: async path => {
+					if (!root) return null;
+					try { await assertVaultBoundary(this.app, path); const full = nodePath.join(root, relativePath(path)); const bytes = (await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 5, magic: ["255044462d"], label: "PDF" })).bytes; return { sha256: createHash("sha256").update(bytes).digest("hex"), absolutePath: full }; } catch { return null; }
+				},
+			},
+			vaultPdfPaths: async () => this.app.vault.getFiles().filter(file => file.extension.toLowerCase() === "pdf").map(file => file.path).sort(),
+		};
+		host.refresh = async (refresh: RefreshRequest) => {
+			const outcome = await indexToken.refresh({ force: refresh.ifOlderThanMinutes === undefined, ...(refresh.ifOlderThanMinutes ? { ifOlderThanMs: refresh.ifOlderThanMinutes * 60000 } : {}) });
+			await onIndex(outcome.index);
+			return { host: await this.agentHost("info", {}, new Date(), onIndex, indexToken, pdfToken), refreshed: outcome.refreshed, reason: outcome.reason, ageMinutesBefore: outcome.ageMinutesBefore };
+		};
+		host.extractPdf = async (target, pdfRequest: PdfTextRequest) => {
+			if (!target.localPath) throw new Error("The PDF file is unavailable.");
+			if (target.item && target.attachment.key) {
+				const entry = index?.entries.find(candidate => candidate.id === target.item?.id);
+				if (!entry) throw new Error("The PDF parent item is no longer in the index.");
+				return pdfToken.extract({ kind: "attachment", libraryType: entry.libraryType, libraryID: entry.libraryID, attachmentKey: target.attachment.key, id: entry.id, path: target.localPath }, { force: pdfRequest.force });
+			}
+			return pdfToken.extract({ kind: "file", path: target.attachment.path ?? "", absolutePath: target.localPath }, { force: pdfRequest.force });
+		};
+		host.applyReconcile = async result => applyReconcile({
+			read: async path => { await assertVaultBoundary(this.app, path); const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error(`Hub not found: ${path}`); return this.app.vault.read(file); },
+			file: path => { const file = this.app.vault.getAbstractFileByPath(path); return file instanceof TFile ? file : null; },
+			processFrontMatter: async (file, change) => {
+				await assertVaultBoundary(this.app, file.path);
+				const current = this.app.vault.getAbstractFileByPath(file.path);
+				if (!(current instanceof TFile)) return Promise.reject(new Error(`Hub not found: ${file.path}`));
+				return this.app.fileManager.processFrontMatter(current, (fm: Record<string, unknown>) => {
+					const currentEnabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
+					if (!currentEnabled || currentEnabled.has("cmds-link-zotero")) throw new Error("Legacy plugin state changed before apply.");
+					change(fm);
+				});
+			},
+			canWrite: () => this.active && this.index === indexToken && this.pdfText === pdfToken,
+			snapshot: async () => {
+				const current = await indexToken.peek();
+				const bbtReachable = await this.bbt.isReachable();
+				const pdfPaths = await host.vaultPdfPaths();
+				const checked = new Date();
+				const currentEnabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
+				return { index: current, indexValid: current !== null && validateIndex(current), indexComplete: current?.complete === true, indexFresh: indexToken.isStale(current, checked.getTime()) === false, live: this.active && this.index === indexToken && this.pdfText === pdfToken, bbtReachable, legacyPluginEnabled: currentEnabled ? currentEnabled.has("cmds-link-zotero") : null, vault: this.app.vault.getName(), pdfPaths, now: checked, expiresAt: current ? Date.parse(current.generatedAt) + (this.settings.indexMaxAgeMinutes + 1) * 60000 : 0 };
+			},
+			yaml: { parse: parseYaml, stringify: stringifyYaml },
+		}, result);
+		return host;
 	}
 
 	async saveSettings(next: CmdsZoteroSettings): Promise<void> {
@@ -110,6 +206,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		relativePath(settings.outputFolder);
 		relativePath(settings.imageFolder);
 		await this.saveData(settings);
+		this.service.dispose();
 		this.bbt.dispose();
 		this.settings = settings;
 		this.lastIndex = null;
@@ -120,6 +217,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	onunload(): void {
 		this.active = false;
+		this.service?.dispose();
 		this.bbt?.dispose();
 		if (this.mapTimer !== undefined) window.clearTimeout(this.mapTimer);
 	}
@@ -141,13 +239,21 @@ export default class CMDSZoteroPlugin extends Plugin {
 	}
 
 	/** CSL bibliography text for one entry, cached per index generation and style; concurrent requests share one flight. */
-	bibliographyFor(entry: ZoteroIndexEntry): Promise<string> {
-		const key = `${entry.id}|${this.settings.bibliographyStyle}`;
+	bibliographyFor(entry: ZoteroIndexEntry): Promise<string> { return this.bibliographyForStyle(entry, this.settings.bibliographyStyle); }
+
+	private bibliographyForStyle(entry: ZoteroIndexEntry, style: string): Promise<string> {
+		const key = `${entry.id}|${style}`;
 		const cached = this.bibliographyCache.get(key);
 		if (cached !== undefined) return Promise.resolve(cached);
 		const flight = this.bibliographyFlights.get(key);
 		if (flight) return flight;
-		const request = this.bbt.bibliography(entry).then(text => { const trimmed = text.trim(); this.bibliographyCache.set(key, trimmed); return trimmed; }).finally(() => { this.bibliographyFlights.delete(key); });
+		const rendered = style === this.settings.bibliographyStyle
+			? this.bbt.bibliography(entry)
+			: rpc(this.settings.bbtEndpoint, "item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID], this.settings.requestTimeoutMs).then(value => {
+				if (typeof value !== "string") throw new Error("Invalid BBT bibliography response");
+				return value;
+			});
+		const request = rendered.then(text => { const trimmed = text.trim(); this.bibliographyCache.set(key, trimmed); return trimmed; }).finally(() => { this.bibliographyFlights.delete(key); });
 		this.bibliographyFlights.set(key, request);
 		return request;
 	}

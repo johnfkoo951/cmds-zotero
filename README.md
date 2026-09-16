@@ -4,7 +4,7 @@
 
 Verified Zotero sources, citations, annotations, and literature notes for a local-first research vault. By CMDSPACE.
 
-**Version 0.3.0 is a development version, not a community-approved release.** 0.3.0 adds inline citekey completion, references and annotation sidebars, batch note updates, and a callout-based literature note layout after a review of ZotLit 2.1.4 and the archived Zotero Integration plugin; see [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md) for what was adopted and what was deliberately left out. The 0.2.0 baseline below still describes the live-tested scope. It has been tested on Obsidian 1.13.7 with Zotero 9.0.6 / Better BibTeX 9.0.63 in two desktop vaults. Live checks cover index rebuilding, APA bibliography, text/image imports, preservation on repeat imports, renamed-note deep links, and cross-vault lookup. Group libraries, the interactive citation picker, and receiving/round-tripping links in Hookmark still require manual acceptance. Keep existing integrations until your workflow is verified.
+**Version 0.4.0 is in development/release preparation, not a published or community-approved release.** Its ten-action agent contract adds identity, citation validation, guarded hub reconciliation, PDF text and quote locators without new UI. See the [contract](docs/agent-contract-v2/contract.md) and [implementation status](docs/0.4-agent-contract-plan.md). The following 0.3.0 description and live checks are historical, not acceptance evidence for 0.4.0. 0.3.0 adds inline citekey completion, references and annotation sidebars, batch note updates, and a callout-based literature note layout after a review of ZotLit 2.1.4 and the archived Zotero Integration plugin; see [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md) for what was adopted and what was deliberately left out. The 0.2.0 baseline below still describes the live-tested scope. It has been tested on Obsidian 1.13.7 with Zotero 9.0.6 / Better BibTeX 9.0.63 in two desktop vaults. Live checks cover index rebuilding, APA bibliography, text/image imports, preservation on repeat imports, renamed-note deep links, and cross-vault lookup. Group libraries, the interactive citation picker, and receiving/round-tripping links in Hookmark still require manual acceptance. Keep existing integrations until your workflow is verified.
 
 ## Scope
 
@@ -84,16 +84,61 @@ The TypeScript contract in [`src/types.ts`](src/types.ts) is authoritative. Sche
 
 Resolution distinguishes **resolved**, **ambiguous**, **not-found**, and **unavailable**. Consumers must not silently choose the first candidate or treat offline as absence. Legacy indexes are identity-untrusted until rebuilt. Attachment enrichment failure is not evidence that an item has no PDF. Read local indexes as sensitive data, not as public source fixtures.
 
-See [`src/ingest-api.ts`](src/ingest-api.ts) and [`scripts/ingest.mjs`](scripts/ingest.mjs) for the paper-ingest service and CLI contract. The plugin provides no independent HTTP listener. Consumers should retain their direct-BBT/offline fallback rather than infer success from firing an asynchronous UI command.
+See [`src/ingest-api.ts`](src/ingest-api.ts) and [`scripts/ingest.mjs`](scripts/ingest.mjs) for the paper-ingest service and CLI contract. The plugin provides no independent HTTP listener. Consumers should use the CLI’s capability-aware offline fallback rather than infer success from firing an asynchronous UI command. Do not copy older string-based BBT item.search curl examples: BBT 9.0.64 was measured rejecting that shape; use the documented filtered RPC contract.
 
-The CLI starts one bounded in-memory job and waits for its terminal JSON result, rather than relying on long promises being returned by the desktop CLI:
+### Agent CLI (contract 2)
+
+| Action | Purpose | Offline |
+| --- | --- | --- |
+| connection | Probe local BBT readiness and host state | Yes |
+| info | Index age/counts/libraries/settings and privacy warnings; no refresh | Yes |
+| refresh | Explicit index refresh, optionally `--if-older-than` | No |
+| resolve | Citekey, item key/library, DOI, arXiv, title or query | Yes |
+| identity | Proposed hub YAML/S01, bibliography, current/pending PIN state | Yes |
+| cites | Body/frontmatter citation verdicts and References text | Yes |
+| reconcile | Hub audit; five-key writes only with explicit `--apply` | Dry-run |
+| diagnostics | Index, identity, citation and privacy diagnostics | Yes |
+| pdf-text | Bundled pdf.js extraction into a private cache | No |
+| locate | Quote locations from that cache, with verification state | Yes |
 
 ```sh
 node scripts/ingest.mjs --vault "Research" --action connection
-node scripts/ingest.mjs --vault "Research" --action refresh
-node scripts/ingest.mjs --vault "Research" --action resolve --citekey Example2026
-node scripts/ingest.mjs --vault "Research" --action diagnostics
+node scripts/ingest.mjs --vault "Research" --action refresh --if-older-than 60
+node scripts/ingest-ro.mjs --vault "Research" --action identity --citekey example2024Graph --doi "10.1234/example"
+node scripts/ingest-ro.mjs --vault "Research" --offline --vault-path /path/to/vault --action cites --path "20. Wiki/25. Questions" --recursive --strict
+node scripts/ingest.mjs --vault "Research" --action pdf-text --citekey example2024Graph --pages "1-5"
+node scripts/ingest-ro.mjs --vault "Research" --action locate --citekey example2024Graph --quote "An exact quotation from the source"
+node scripts/ingest-ro.mjs --vault "Research" --action reconcile
 ```
+
+All responses add `contract:2`, `apiVersions:[1,2]`, `ok`, `checkedAt`, and `connection`.
+The four legacy actions retain payload `apiVersion:1`; the six new ones use 2.
+Exit **0** includes usable not-found/ambiguous/dry-run reports; **1** means unavailable/refused/partial apply failure
+or strict error diagnostics; **2** means invalid arguments. Structured failures are JSON on stdout plus a reason on stderr.
+A timeout after submission has an uncertain outcome: never automatically repeat a write. Inspect with a read-only action.
+
+Read-only actions no longer implicitly refresh or publish note maps. `ingest-ro.mjs` rejects mutations and cannot
+route to an old live API that might write on read. Offline queries use the configured index (default
+`80. References/zotero-index.json`); missing, invalid, incomplete or unknown-age evidence cannot prove absence.
+A stale negative is withheld unless `--allow-stale`; that flag **never authorizes apply**.
+
+**The non-owned-note write exception:** after inspecting a dry-run, explicit `reconcile --apply` may update only
+`citekeyProvisional`, `zoteroID`, `zoteroSelectURI`, `zoteroStatus`, and `zoteroCheckedAt` on paper hubs.
+It requires live BBT, a fresh complete index and the legacy plugin disabled. It preserves citekey, DOI, bodies and
+Raw Sources, refuses malformed/conflicting identities and unsafe YAML, and reports concurrent changes and partial failures.
+No whole-file CAS against external editors is promised. There is no automatic repair or rollback over concurrent edits.
+`resolved` plus `citekeyProvisional:true` means registered but not pinned; manually pin `Citation Key: <vault-key>`
+in Zotero Extra and explicitly refresh. Historical keys are not proof of a current PIN.
+
+`pdf-text` reads local PDFs up to 64 MiB using the bundled public pdf.js API. The cache contains **full paper text**.
+The plugin protects `.cmds-zotero/` with an internal `.gitignore`; also ignore the configured index in your repository.
+Git diagnostics distinguish ignored from already tracked data. Untracking does not erase published history.
+`locate` separates physical page position from printed page labels and uses attachment keys in PDF links.
+Unverified/changed-source/fuzzy results are not confirmed quote evidence.
+
+Install the copied agent skill with `node scripts/install-skill.mjs`; inspect options with `--help`.
+The [portable reference](skills/cmds-zotero/references/cli-contract-v2.md) is generated from the canonical contract;
+`node scripts/sync-contract.mjs --check` detects drift.
 
 Imported notes use `zoteroID` to retain their paths after renaming or citekey changes. Initial YAML becomes user-owned; refreshed metadata lives in managed sections. Annotation image names include library scope and content hashes: changed source images create new versions without deleting older or user-modified assets. Existing notes without ownership markers are not automatically adopted. Change the output folder to import alongside them.
 
@@ -120,8 +165,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # tracked working-tree files
 node scripts/sanitize.mjs --staged  # staged additions/changes, reads index bytes
-node scripts/version-bump.mjs 0.3.1 # synchronizes package, lock, manifest, versions
-node scripts/verify-release.mjs 0.3.1
+node scripts/version-bump.mjs 0.4.0 # synchronizes package, lock, manifest, versions
+node scripts/verify-release.mjs 0.4.0
 ```
 
 Tests use synthetic fixtures. The sanitizer reports matching file/line/rule without printing secrets; it is a heuristic and does not replace manual staged-diff inspection or review of private repository links. CI uses `npm ci`, lint, typecheck, tests, and production build on Node 22. The prepared release workflow requires an exact stable semver tag **without `v`**, matching manifest/package/lock/versions; it builds three plugin assets and publishes their provenance bundle. **Pushing such a tag publishes a release: obtain approval first.** A prepared workflow does not imply a release, successful CI run, or community submission has occurred.

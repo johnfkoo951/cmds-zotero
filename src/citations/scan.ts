@@ -44,3 +44,46 @@ export function scanCitations(text: string): CitationOccurrence[] {
 export function uniqueCitekeys(text: string): string[] {
 	return [...new Set(scanCitations(text).map(item => item.citekey))];
 }
+
+/** Frontmatter fields whose string-array items are bare citekeys (Citation Standard `cites`, `supports`, `counters`). */
+export const FRONTMATTER_BARE_KEY_FIELDS = ["cites", "supports", "counters"] as const;
+/** Frontmatter fields whose strings may carry `[@key]` tokens; bare `@key` and `[[wikilinks]]` are not citations there. */
+export const FRONTMATTER_TOKEN_FIELDS = ["evidenceFor", "evidenceAgainst", "sourceCallout", "hypotheses"] as const;
+
+export type FrontmatterCitationField = (typeof FRONTMATTER_BARE_KEY_FIELDS)[number] | (typeof FRONTMATTER_TOKEN_FIELDS)[number];
+
+export interface FrontmatterCitation {
+	citekey: string;
+	field: FrontmatterCitationField;
+	form: "bare" | "pandoc";
+}
+
+const BARE_KEY = new RegExp(`^(?:${KEY})$`);
+
+function stringItems(value: unknown): string[] {
+	if (typeof value === "string") return [value];
+	if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+	return [];
+}
+
+/**
+ * Citations declared in frontmatter: bare keys in `cites`/`supports`/`counters` and `[@key]` tokens inside the strings
+ * of `evidenceFor`/`evidenceAgainst`/`sourceCallout`/`hypotheses`. Fields come out in that fixed order, items in YAML
+ * order, every occurrence kept. `[[wikilinks]]`, bare `@key` inside YAML values and the note's own `citekey` are ignored.
+ */
+export function scanFrontmatterCitations(frontmatter: Record<string, unknown>): FrontmatterCitation[] {
+	const own = typeof frontmatter.citekey === "string" ? frontmatter.citekey.trim() : "";
+	const found: FrontmatterCitation[] = [];
+	for (const field of FRONTMATTER_BARE_KEY_FIELDS) {
+		for (const item of stringItems(frontmatter[field])) {
+			const citekey = item.trim();
+			if (BARE_KEY.test(citekey)) found.push({ citekey, field, form: "bare" });
+		}
+	}
+	for (const field of FRONTMATTER_TOKEN_FIELDS) {
+		for (const item of stringItems(frontmatter[field])) {
+			for (const occurrence of scanCitations(item)) if (occurrence.form === "pandoc") found.push({ citekey: occurrence.citekey, field, form: "pandoc" });
+		}
+	}
+	return own ? found.filter(item => item.citekey !== own) : found;
+}

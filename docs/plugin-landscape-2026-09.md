@@ -42,3 +42,15 @@ Deliberately not adopted:
 - A general template engine (Liquid/Nunjucks/Eta). The renderer stays built-in and preservation-aware; layout options are settings, not scripts.
 - Wholesale managed-region replacement. CMDS Zotero keeps per-section hashes so edited generated text is preserved and reported.
 - Two-way sync to Zotero, PDF Utility style annotation extraction, DOCX export, MCP exposure, read-status columns.
+
+## CMDS Zotero 0.4 direction (2026-09-14)
+
+| Area | 0.4 implementation target | Deliberate boundary |
+| --- | --- | --- |
+| Agent access | Ten-action contract, live/offline snapshots, identity and citation diagnostics | No MCP server or new UI |
+| Hub lifecycle | Explicit five-key reconcile apply with monotonic transitions and conflict guards | No automatic Zotero PIN, note renaming, Raw Source/body writes |
+| Quote provenance | Bundled pdf.js page text and scope-bound private caches | No external PDF utility; unverified matches remain unverified |
+| Coexistence | Existing 0.3 UI remains; human reading/writing UX can stay in ZotLit | No SQLite, companion, template-engine or AGPL code adoption |
+
+This is release-preparation scope, not a claim of a published release or completed live acceptance.
+See [the contract](agent-contract-v2/contract.md) and [implementation evidence](0.4-agent-contract-plan.md).

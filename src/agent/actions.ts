@@ -1,0 +1,556 @@
+/**
+ * Action orchestration shared by the live host (IngestAPI inside Obsidian) and the offline host (scripts/ingest-core.mjs).
+ * Pure with respect to the environment: everything the host knows (index, vault notes, connection, bibliography access,
+ * PDF caches) is injected through {@link ActionHost}. Never imports `obsidian`.
+ */
+import type { CmdsZoteroSettings, Diagnostic, ZoteroIndex, ZoteroIndexEntry } from "../types";
+import type { ConnectionInfo, Envelope, FailureReason, IndexView, NoteRecord, NoteRef, RankedItem, ResolveOutcome, Selector, VaultNotes, VaultReader } from "./types";
+import { HUB_IDENTITY_KEYS } from "./types";
+import { buildEnvelope, infoWarnings, staleGate } from "./connection";
+import { resolveIndex, selectorKind } from "./resolve";
+import { buildNoteIndexes, classifyNotes, noteKind } from "./note-classify";
+import { citekeyShape, emitDoi, entryArxiv, normalizeArxiv, normalizeDoi } from "./search";
+import { callout, identityFrontmatter, pickPdf, s01Lines, yamlFragment } from "./identity-fields";
+import { buildNoteLookup, checkCitekey } from "./citekey-check";
+import { citedKeys, citesDiagnostics, citesForNote, classifyKeys, hubFullCitationLine, keysForFiles, referencesPayload, summarize } from "./cites-core";
+import type { NoteLookups } from "./cites-core";
+import { reconcileNotes } from "./reconcile-core";
+import type { ReconcileResult } from "./reconcile-core";
+import { diagnostic } from "../diagnostics";
+import type { AgentDiagnostic } from "../diagnostics";
+import { cachePrefix, parseCacheName, pickNewest, validateCache, verifyCache, PDF_TEXT_CACHE_DIR } from "../pdf/cache";
+import type { PdfTextCache } from "../pdf/cache";
+import type { ExtractResult } from "../pdf/extract";
+import { extractQuoteCallouts, locateBatch } from "../pdf/locate";
+import type { LocateRequest } from "../pdf/locate";
+import { createHash } from "node:crypto";
+
+export const MAX_CITES_FILES = 2000;
+
+export interface BibliographyProvider {
+	/** Rendered bibliography text or null when the style failed; throws when BBT is unreachable. */
+	(entry: ZoteroIndexEntry, style: string): Promise<string | null>;
+}
+
+export interface PdfCacheReader {
+	list(dir: string): Promise<string[]>;
+	read(path: string): Promise<string | null>;
+	statLocal(absolutePath: string): Promise<{ size: number; mtimeMs: number } | null>;
+	/** sha256 of a vault-relative PDF (`--file` targets); null when absent or refused. */
+	fileHash(vaultRelativePath: string): Promise<{ sha256: string; absolutePath: string } | null>;
+}
+
+export type AgentAction = "connection" | "info" | "refresh" | "resolve" | "identity" | "cites" | "reconcile" | "diagnostics" | "pdf-text" | "locate";
+export const AGENT_ACTIONS: readonly AgentAction[] = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate"];
+export const ACTION_API_VERSION: Readonly<Record<AgentAction, 1 | 2>> = {
+	connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, "pdf-text": 2, locate: 2,
+};
+
+export interface ActionHost {
+	vault: string;
+	now: Date;
+	connection: ConnectionInfo;
+	settings: CmdsZoteroSettings;
+	indexView: IndexView | null;
+	/** Why the index is unusable, when `indexView` is null. */
+	indexFailure: { reason: FailureReason; message: string } | null;
+	reader: VaultReader;
+	bibliography: BibliographyProvider | null;
+	bibliographyReason: "bbt-unreachable" | "offline" | "disabled" | null;
+	vaultLinks(entry: ZoteroIndexEntry, index: ZoteroIndex): Promise<{ links: { vault: string; path: string; uri: string }[]; warnings: string[] }>;
+	pdfCache: PdfCacheReader;
+	/** Vault-relative PDF paths (at least those under `80. References/Attachments/`). */
+	vaultPdfPaths(): Promise<string[]>;
+	refresh?: (request: RefreshRequest) => Promise<{ host: ActionHost; refreshed: boolean; reason: "forced" | "stale" | "fresh"; ageMinutesBefore: number | null }>;
+	extractPdf?: (target: LocateTarget, request: PdfTextRequest) => Promise<ExtractResult>;
+	applyReconcile?: (result: ReconcileResult, request: ReconcileRequest) => Promise<unknown>;
+}
+
+export interface CommonRequest { allowStale?: boolean }
+export interface ResolveRequest extends Selector, CommonRequest { refresh?: boolean }
+export interface IdentityRequest extends ResolveRequest { rawSource?: string; attachment?: string; style?: string; noBibliography?: boolean }
+export interface CitesRequest extends CommonRequest { path: string; recursive?: boolean; bibliography?: boolean; style?: string; strict?: boolean }
+export interface ReconcileRequest extends CommonRequest { folders?: string[]; apply?: boolean; strict?: boolean }
+export interface LocateRequestArgs { path?: string; citekey?: string; itemKey?: string; libraryID?: number; file?: string; quote?: string; attachment?: string }
+export interface RefreshRequest { ifOlderThanMinutes?: number }
+export interface PdfTextRequest { citekey?: string; itemKey?: string; libraryID?: number; file?: string; attachment?: string; pages?: string; force?: boolean }
+export type ActionRequest = ResolveRequest | IdentityRequest | CitesRequest | ReconcileRequest | LocateRequestArgs | RefreshRequest | PdfTextRequest | CommonRequest | Record<string, never>;
+
+type Payload = Envelope & Record<string, unknown>;
+
+function envelope(host: ActionHost, action: string, apiVersion: 1 | 2, failure?: { reason: FailureReason; message: string }): Envelope {
+	return buildEnvelope(action, host.vault, apiVersion, host.connection, host.now, failure);
+}
+
+function requireIndex(host: ActionHost, action: string, apiVersion: 1 | 2): { view: IndexView } | { failure: Payload } {
+	if (host.indexView) return { view: host.indexView };
+	const failure = host.indexFailure ?? { reason: "index-missing" as const, message: "No validated Zotero index is available; refresh the index with Obsidian open." };
+	return { failure: { ...envelope(host, action, apiVersion, failure), ...(apiVersion === 1 ? { status: "unavailable", message: failure.message } : {}) } };
+}
+
+function selectorOf(request: Selector): Selector {
+	const selector: Selector = {};
+	for (const key of ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query"] as const) {
+		const value = request[key];
+		if (value !== undefined && value !== null && value !== "") (selector as Record<string, unknown>)[key] = value;
+	}
+	return selector;
+}
+
+function hintsOf(selector: Selector, entry: ZoteroIndexEntry | null): { doi?: string; arxiv?: string; citekey?: string } {
+	const doi = normalizeDoi(selector.doi ?? entry?.doi ?? "");
+	const arxiv = (selector.arxiv ? normalizeArxiv(selector.arxiv) : "") || (entry ? entryArxiv(entry) : "");
+	return { ...(doi ? { doi } : {}), ...(arxiv ? { arxiv } : {}), ...(selector.citekey ? { citekey: selector.citekey } : {}) };
+}
+
+function evidenceOf(entry: ZoteroIndexEntry): unknown[] {
+	return entry.attachments.flatMap(attachment => attachment.annotations.map(annotation => ({ annotationKey: annotation.key, attachmentKey: attachment.key, page: annotation.page, pageLabel: annotation.pageLabel, uri: annotation.uri })));
+}
+
+function reducedItem(entry: ZoteroIndexEntry): Record<string, unknown> {
+	return { id: entry.id, itemKey: entry.itemKey, libraryID: entry.libraryID, libraryType: entry.libraryType, ...(entry.groupID === undefined ? {} : { groupID: entry.groupID }), citekey: entry.citekey, citekeyHistory: entry.citekeyHistory, title: entry.title, authors: entry.authors, year: entry.year, doi: emitDoi(entry.doi), zoteroSelectURI: entry.zoteroSelectURI };
+}
+
+interface Resolved {
+	outcome: ResolveOutcome;
+	view: IndexView;
+	notes: NoteRecord[];
+	vaultNotes: VaultNotes;
+	withheld: boolean;
+}
+
+/** Shared first half of resolve/identity: selector validation, index lookup, stale gate, vault note classification. */
+async function resolveCore(host: ActionHost, selector: Selector, allowStale: boolean, view: IndexView): Promise<Resolved> {
+	const check = selectorKind(selector);
+	if (check.error || !check.kind) throw new Error(check.error ?? "Provide exactly one selector.");
+	const outcome = resolveIndex(view.index, selector);
+	const notes = await host.reader.listNotes();
+	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	const evidenceIncomplete = scan.truncated || scan.skipped.length > 0;
+	const withheld = outcome.status === "not-found" && (staleGate(host.connection, allowStale) || evidenceIncomplete);
+	const vaultNotes = classifyNotes(host.vault, notes, outcome.entry, hintsOf(selector, outcome.entry), view.index, { outputFolder: host.settings.outputFolder });
+	if (evidenceIncomplete) vaultNotes.warnings.push(`Vault discovery incomplete: ${scan.skipped.length} skipped; truncated ${scan.truncated}.`);
+	return { outcome, view, notes, vaultNotes, withheld };
+}
+
+function rankedOf(outcome: ResolveOutcome): RankedItem[] { return outcome.ranked; }
+
+export async function resolveAction(host: ActionHost, request: ResolveRequest): Promise<Payload> {
+	const index = requireIndex(host, "resolve", 1);
+	if ("failure" in index) return index.failure;
+	const selector = selectorOf(request);
+	const { outcome, view, vaultNotes, withheld } = await resolveCore(host, selector, request.allowStale === true, index.view);
+	const entry = outcome.entry;
+	const base = { ...envelope(host, "resolve", 1, withheld ? { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` } : undefined) };
+	return {
+		...base,
+		status: withheld ? "unavailable" : outcome.status,
+		...(withheld ? { indexAnswer: outcome.status } : {}),
+		...(outcome.message ? { message: outcome.message } : {}),
+		...(entry ? { entry, matchedHistory: outcome.matchedHistory, evidence: evidenceOf(entry), vaultLinks: await host.vaultLinks(entry, view.index) } : {}),
+		...(outcome.status === "ambiguous" ? { candidates: outcome.candidates } : {}),
+		generatedAt: view.index.generatedAt,
+		query: outcome.query,
+		matchedBy: outcome.matchedBy,
+		ranked: rankedOf(outcome),
+		vaultNotes,
+		citekeyShape: entry ? citekeyShape(entry.citekey) : null,
+		pinnedGuess: entry ? citekeyShape(entry.citekey) === "vault" : null,
+	};
+}
+
+export async function identityAction(host: ActionHost, request: IdentityRequest): Promise<Payload> {
+	const index = requireIndex(host, "identity", 2);
+	if ("failure" in index) return index.failure;
+	const selector = selectorOf(request);
+	// `--citekey` beside another selector names the vault key without taking part in the lookup.
+	const lookupSelector: Selector = { ...selector };
+	if (selector.citekey && (selector.doi || selector.arxiv || selector.title || selector.query || selector.itemKey)) delete lookupSelector.citekey;
+	const { outcome, view, notes, vaultNotes, withheld } = await resolveCore(host, lookupSelector, request.allowStale === true, index.view);
+	const entry = outcome.entry;
+	const requestedCitekey = request.citekey ?? null;
+	const frontmatter = identityFrontmatter({ requestedCitekey, outcome, stale: withheld, now: host.now, emittedDoi: emitDoi(request.doi ?? entry?.doi ?? "") });
+	const citekeyCurrent = entry?.citekey ?? null;
+	const pdf = pickPdf(entry ?? emptyEntry(), request.attachment);
+	const style = request.style ?? host.settings.bibliographyStyle;
+	let bibliography: { style: string; text: string } | null = null;
+	let bibliographyReason: string | undefined = request.noBibliography ? "disabled" : host.bibliographyReason ?? undefined;
+	if (!request.noBibliography && entry && host.bibliography) {
+		try {
+			const text = await host.bibliography(entry, style);
+			if (text) bibliography = { style, text }; else bibliographyReason = "style-error";
+		} catch { bibliographyReason = "bbt-unreachable"; }
+	}
+	const unavailableReason = withheld ? "stale-index" : outcome.status === "unavailable" ? outcome.message : undefined;
+	const s01 = s01Lines({ frontmatter, citekeyCurrent, bibliography: bibliography?.text ?? null, pdf, rawSource: request.rawSource ?? null, rawNotes: vaultNotes.raw, candidateCount: outcome.status === "ambiguous" ? outcome.candidates.length : undefined, unavailableReason });
+	const lookup = buildNoteLookup(host.vault, notes);
+	const hints = hintsOf(selector, entry);
+	const keyToCheck = frontmatter.citekey || entry?.citekey || "";
+	const citekeyCheck = keyToCheck ? checkCitekey(keyToCheck, view.index, lookup, { doi: hints.doi, arxiv: hints.arxiv, ownId: entry?.id, ownPaths: vaultNotes.hub ? [vaultNotes.hub.path] : [] }) : null;
+	const status = frontmatter.zoteroStatus;
+	return {
+		...envelope(host, "identity", 2, withheld ? { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` } : undefined),
+		status: withheld ? "unavailable" : outcome.status,
+		...(withheld ? { indexAnswer: outcome.status } : {}),
+		matchedBy: outcome.matchedBy,
+		query: outcome.query,
+		item: entry ? reducedItem(entry) : null,
+		citekeyCurrent,
+		ranked: rankedOf(outcome),
+		vaultNotes,
+		frontmatter,
+		yaml: yamlFragment(frontmatter),
+		s01,
+		callout: callout(status, frontmatter.citekey ?? "", frontmatter.zoteroCheckedAt, citekeyCheck?.pinInstruction ?? null, { citekeyCurrent, candidateCount: outcome.status === "ambiguous" ? outcome.candidates.length : undefined, unavailableReason }),
+		bibliography,
+		...(bibliographyReason && !bibliography ? { bibliographyReason } : {}),
+		pdf,
+		citekeyCheck,
+		identityKeys: [...HUB_IDENTITY_KEYS],
+		generatedAt: view.index.generatedAt,
+	};
+}
+
+function emptyEntry(): ZoteroIndexEntry {
+	return { id: "0:AAAAAAAA", libraryID: 1, libraryType: "user", itemKey: "AAAAAAAA", citekey: "", citekeyHistory: [], title: "", authors: [], year: "", doi: "", url: "", collections: [], tags: [], attachmentPath: "", zoteroSelectURI: "", attachments: [], attachmentStatus: "unavailable", contentHash: "", metadata: {} };
+}
+
+function toRefMaps(indexes: ReturnType<typeof buildNoteIndexes>, vault: string): NoteLookups & { hubByDoi: Map<string, NoteRef[]>; rawByDoi: Map<string, NoteRef[]> } {
+	const convert = (source: Map<string, NoteRecord[]>): Map<string, NoteRef[]> => new Map([...source].map(([key, records]) => [key, records.map(record => ({ path: record.path, basename: record.basename, uri: `obsidian://open?${new URLSearchParams({ vault, file: record.path }).toString()}` }))]));
+	return { hubByCitekey: convert(indexes.hubByCitekey), rawByCitekey: convert(indexes.rawByCitekey), hubByDoi: convert(indexes.hubByDoi), rawByDoi: convert(indexes.rawByDoi), skipped: indexes.skipped };
+}
+
+async function notesUnder(host: ActionHost, path: string, recursive: boolean): Promise<{ notes: NoteRecord[]; truncated: boolean; isFile: boolean }> {
+	const clean = path.replace(/^\/+|\/+$/g, "");
+	const all = await host.reader.listNotes();
+	const exact = all.find(note => note.path === clean || note.path === `${clean}.md`);
+	if (exact) return { notes: [exact], truncated: false, isFile: true };
+	const prefix = clean ? `${clean}/` : "";
+	const inside = all.filter(note => note.path.startsWith(prefix) && (recursive || !note.path.slice(prefix.length).includes("/")));
+	return { notes: inside.slice(0, MAX_CITES_FILES), truncated: inside.length > MAX_CITES_FILES, isFile: false };
+}
+
+export async function citesAction(host: ActionHost, request: CitesRequest): Promise<Payload> {
+	const index = requireIndex(host, "cites", 2);
+	if ("failure" in index) return index.failure;
+	const view = index.view;
+	const forcedEvidenceGate = host.connection.index.complete !== true || host.connection.index.stale === null;
+	const stale = forcedEvidenceGate || host.connection.index.stale === true;
+	const allowStaleNegative = request.allowStale === true && !forcedEvidenceGate;
+	const { notes: targets, truncated, isFile } = await notesUnder(host, request.path, request.recursive === true);
+	if (!targets.length && !isFile) return { ...envelope(host, "cites", 2, { reason: "path-outside-vault", message: `No Markdown notes found at ${request.path}.` }) };
+	const all = await host.reader.listNotes();
+	const indexes = buildNoteIndexes(all);
+	const lookups = toRefMaps(indexes, host.vault);
+	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	lookups.skipped = [...new Set([...(lookups.skipped ?? []), ...scan.skipped, ...(scan.truncated ? ["<vault-scan-truncated>"] : [])])];
+	const withBodies: (NoteRecord & { body: string })[] = [];
+	for (const note of targets) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
+	const allKeys = [...new Set(withBodies.flatMap(note => citedKeys(note)))];
+	const verdicts = classifyKeys(allKeys, view.index, lookups, stale, allowStaleNegative);
+	const files = withBodies.map(note => citesForNote(note, verdicts));
+	const keys = keysForFiles(files);
+	let references: unknown = null;
+	let referencesReason: string | undefined;
+	if (request.bibliography) {
+		const bibliography = new Map<string, string>();
+		const hubFull = new Map<string, string>();
+		const style = request.style ?? host.settings.bibliographyStyle;
+		const byId = new Map(view.index.entries.map(entry => [entry.id, entry]));
+		for (const key of allKeys) {
+			const verdict = verdicts.get(key);
+			if (!verdict) continue;
+			if (verdict.citeStatus === "resolved" && verdict.entryId && host.bibliography) {
+				const entry = byId.get(verdict.entryId);
+				if (entry) { try { const text = await host.bibliography(entry, style); if (text) bibliography.set(key, text); } catch { referencesReason = "bbt-unreachable"; } }
+			} else if (verdict.citeStatus === "resolved" && !host.bibliography) referencesReason = host.bibliographyReason ?? "offline";
+			if (verdict.hub) { const line = hubFullCitationLine(await host.reader.readNote(verdict.hub.path)); if (line) hubFull.set(key, line); }
+		}
+		references = referencesPayload(allKeys, verdicts, bibliography, hubFull);
+	}
+	const diagnostics = citesDiagnostics(files);
+	return { ...envelope(host, "cites", 2), files, keys, references, ...(referencesReason ? { referencesReason } : {}), summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
+}
+
+export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean }> {
+	const view = host.indexView;
+	// Preserve raw freshness for proposals/apply: allowStale relaxes reporting only and never turns stale evidence fresh.
+	const stale = view ? host.connection.index.complete !== true || host.connection.index.stale !== false : true;
+	const listed = await host.reader.listNotes();
+	const notes: NoteRecord[] = [];
+	for (const note of listed) {
+		const kind = noteKind(note);
+		if (kind === "hub" || (kind === "raw" && typeof note.frontmatter?.citekey === "string")) notes.push({ ...note, body: await host.reader.readNote(note.path) });
+		else notes.push(note);
+	}
+	const pdfPaths = await host.vaultPdfPaths();
+	const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders });
+	const sourceByPath = new Map(notes.filter(note => note.body !== undefined).map(note => [note.path, note.body as string]));
+	for (const note of result.notes) {
+		const source = sourceByPath.get(note.path);
+		if (source !== undefined) (note as typeof note & { sourceHash: string }).sourceHash = createHash("sha256").update(source).digest("hex");
+	}
+	return { result, view, stale };
+}
+
+export async function reconcileAction(host: ActionHost, request: ReconcileRequest): Promise<Payload> {
+	const { result, view } = await reconcileDryRun(host, request);
+	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	if (!request.apply) return { ...envelope(host, "reconcile", 2), mode: "dry-run", ...result, scan, apply: { mode: "dry-run" }, generatedAt: view?.index.generatedAt ?? null };
+	if (scan.truncated || scan.skipped.length) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: "Vault discovery was incomplete; reconcile apply is refused." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete" }, generatedAt: view?.index.generatedAt ?? null };
+	if (!host.applyReconcile) return { ...envelope(host, "reconcile", 2, { reason: "requires-obsidian", message: "reconcile --apply requires the live Obsidian host." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "requires-obsidian" }, generatedAt: view?.index.generatedAt ?? null };
+	const applied = await host.applyReconcile(result, request);
+	const applyState = applied && typeof applied === "object" ? applied as { mode?: unknown; refusedReason?: unknown; notes?: unknown } : {};
+	const failed = applyState.mode !== "applied";
+	const outcomes = new Map<string, { status?: unknown; reason?: unknown }>();
+	if (Array.isArray(applyState.notes)) for (const item of applyState.notes as unknown[]) {
+		if (item && typeof item === "object" && "path" in item && typeof item.path === "string") outcomes.set(item.path, item as { status?: unknown; reason?: unknown });
+	}
+	const notes = result.notes.map(note => {
+		const outcome = outcomes.get(note.path);
+		return { ...note, applied: outcome?.status === "applied", ...(typeof outcome?.reason === "string" ? { skippedReason: outcome.reason } : {}) };
+	});
+	const reason = applyState.mode === "refused" && typeof applyState.refusedReason === "string" ? applyState.refusedReason as FailureReason : "apply-failed";
+	return { ...envelope(host, "reconcile", 2, failed ? { reason, message: applyState.mode === "refused" ? `Reconcile apply was refused: ${reason}.` : "Reconcile apply was only partially completed; inspect per-note outcomes before retrying." } : undefined), mode: "apply", ...result, notes, scan, apply: applied, generatedAt: view?.index.generatedAt ?? null };
+}
+
+export async function infoAction(host: ActionHost): Promise<Payload> {
+	const view = host.indexView;
+	const index = view?.index ?? null;
+	const libraries = new Map<string, { libraryID: number; libraryType: string; groupID?: number; count: number }>();
+	for (const entry of index?.entries ?? []) {
+		const key = `${entry.libraryType}:${entry.libraryID}`;
+		const current = libraries.get(key) ?? { libraryID: entry.libraryID, libraryType: entry.libraryType, ...(entry.groupID === undefined ? {} : { groupID: entry.groupID }), count: 0 };
+		current.count++;
+		libraries.set(key, current);
+	}
+	return {
+		...envelope(host, "info", 2),
+		plugin: { version: host.connection.plugin.version, apiVersions: host.connection.plugin.apiVersions, legacyPluginEnabled: host.connection.legacyPluginEnabled },
+		index: {
+			present: index !== null, path: host.connection.index.path, schemaVersion: host.connection.index.schemaVersion, generatedAt: host.connection.index.generatedAt,
+			...(host.indexFailure ? { failure: host.indexFailure } : {}),
+			ageMinutes: host.connection.index.ageMinutes, stale: host.connection.index.stale, maxAgeMinutes: host.connection.index.maxAgeMinutes,
+			count: index?.count ?? null, complete: index?.complete ?? null, libraries: [...libraries.values()],
+			withPdf: index ? index.entries.filter(entry => entry.attachments.some(a => a.path?.toLowerCase().endsWith(".pdf"))).length : null,
+			withAnnotations: index ? index.entries.filter(entry => entry.attachments.some(a => a.annotations.length > 0)).length : null,
+			diagnosticsCount: index?.diagnostics.length ?? null,
+		},
+		settings: { zoteroIndexPath: host.settings.zoteroIndexPath, outputFolder: host.settings.outputFolder, bibliographyStyle: host.settings.bibliographyStyle, indexMaxAgeMinutes: host.settings.indexMaxAgeMinutes, peerVaults: host.settings.peerVaults.map(peer => peer.name) },
+		git: host.connection.git,
+		warnings: infoWarnings(host.connection),
+	};
+}
+
+/** v1 diagnostics plus the contract-2 codes from reconcile (dry-run) and cites over research-question/synthesis notes. */
+export async function diagnosticsAction(host: ActionHost, request: CommonRequest): Promise<Payload> {
+	const index = requireIndex(host, "diagnostics", 1);
+	if ("failure" in index) return index.failure;
+	const view = index.view;
+	const diagnostics: (Diagnostic | AgentDiagnostic)[] = [...view.index.diagnostics];
+	const listed = await host.reader.listNotes();
+	for (const note of listed) if (note.frontmatter?.citekeyProvisional === true) diagnostics.push({ code: "provisional-citekey", severity: "warning", message: `Provisional citekey: ${note.path}. Pin it in Zotero; do not rename the note automatically.`, path: note.path } as AgentDiagnostic);
+	const { result } = await reconcileDryRun(host, { allowStale: request.allowStale });
+	diagnostics.push(...result.diagnostics);
+	const citing = listed.filter(note => typeof note.frontmatter?.type === "string" && ["research-question", "synthesis"].includes(note.frontmatter.type));
+	if (citing.length) {
+		const forcedEvidenceGate = host.connection.index.complete !== true || host.connection.index.stale === null;
+		const stale = forcedEvidenceGate || host.connection.index.stale === true;
+		const allowStaleNegative = request.allowStale === true && !forcedEvidenceGate;
+		const lookups = toRefMaps(buildNoteIndexes(listed), host.vault);
+		const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+		lookups.skipped = [...new Set([...(lookups.skipped ?? []), ...scan.skipped, ...(scan.truncated ? ["<vault-scan-truncated>"] : [])])];
+		const withBodies: (NoteRecord & { body: string })[] = [];
+		for (const note of citing.slice(0, MAX_CITES_FILES)) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
+		const keys = [...new Set(withBodies.flatMap(note => citedKeys(note)))];
+		const verdicts = classifyKeys(keys, view.index, lookups, stale, allowStaleNegative);
+		diagnostics.push(...citesDiagnostics(withBodies.map(note => citesForNote(note, verdicts))));
+	}
+	if (host.connection.legacyPluginEnabled) diagnostics.push(diagnostic("legacy-plugin-enabled", "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing."));
+	if (host.connection.index.stale) diagnostics.push(diagnostic("index-stale", `The index is ${host.connection.index.ageMinutes} minutes old (limit ${host.connection.index.maxAgeMinutes}).`));
+	if (host.connection.git?.repo && (host.connection.git.indexIgnored === false || host.connection.git.cacheIgnored === false)) diagnostics.push(diagnostic("index-in-git", "The vault is a git repository and the index or the .cmds-zotero cache is not ignored; add both to .gitignore and untrack the index."));
+	return { ...envelope(host, "diagnostics", 1), generatedAt: view.index.generatedAt, complete: view.index.complete, count: view.index.count, diagnostics };
+}
+
+export interface LocateTarget {
+	item: { id: string; citekey: string } | null;
+	attachment: { key: string | null; openURI: string | null; path: string | null };
+	prefix: string;
+	/** For `--file` targets the exact cache name is known from the content hash. */
+	exactName?: string;
+	localPath: string | null;
+}
+
+/** Resolves the PDF target of pdf-text/locate: a Zotero attachment (by citekey or item key) or a vault-relative file. */
+export async function locateTarget(host: ActionHost, request: LocateRequestArgs, citekeyFromNote: string | null): Promise<{ target: LocateTarget } | { failure: { reason: FailureReason; message: string; candidates?: unknown[] } }> {
+	if (request.file) {
+		const hash = await host.pdfCache.fileHash(request.file);
+		if (!hash) return { failure: { reason: "path-outside-vault", message: `PDF not found inside the vault: ${request.file}` } };
+		const prefix = cachePrefix({ kind: "file" });
+		return { target: { item: null, attachment: { key: null, openURI: null, path: request.file }, prefix, exactName: `${prefix}-${hash.sha256.slice(0, 16)}.json`, localPath: hash.absolutePath } };
+	}
+	if (!host.indexView) return { failure: host.indexFailure ?? { reason: "index-missing", message: "No validated Zotero index is available." } };
+	const citekey = request.citekey ?? citekeyFromNote;
+	const selector: Selector = request.itemKey ? { itemKey: request.itemKey, libraryID: request.libraryID } : { citekey: citekey ?? "" };
+	if (!selector.itemKey && !selector.citekey) return { failure: { reason: "no-pdf-attachment", message: "Provide --citekey, --item-key with --library, or --file." } };
+	const outcome = resolveIndex(host.indexView.index, selector);
+	if (outcome.status !== "resolved" || !outcome.entry) return { failure: { reason: "no-pdf-attachment", message: `Item ${outcome.status}: ${JSON.stringify(selector)}` } };
+	const entry = outcome.entry;
+	const pdf = pickPdf(entry, request.attachment);
+	if (pdf.pdfStatus === "ambiguous") return { failure: { reason: "attachment-ambiguous", message: "Several PDF attachments; pass --attachment KEY.", candidates: pdf.candidates } };
+	if (pdf.pdfStatus === "missing-file" || pdf.pdfStatus === "unavailable") return { failure: { reason: "attachment-file-missing", message: pdf.pdfStatus === "unavailable" ? "Attachment lookup failed at the last refresh; refresh the index." : "The PDF attachment is indexed but its file is not on this machine (not downloaded); this is not evidence that the item has no PDF." } };
+	if (pdf.pdfStatus !== "present" || !pdf.attachmentKey || !pdf.path) return { failure: { reason: "no-pdf-attachment", message: `No PDF attachment is indexed for @${entry.citekey} (pdfStatus ${pdf.pdfStatus}).` } };
+	const prefix = cachePrefix({ kind: "attachment", libraryType: entry.libraryType, libraryID: entry.libraryID, attachmentKey: pdf.attachmentKey });
+	return { target: { item: { id: entry.id, citekey: entry.citekey }, attachment: { key: pdf.attachmentKey, openURI: pdf.openURI, path: pdf.path }, prefix, localPath: pdf.path } };
+}
+
+type CacheLookup = { status: "found"; path: string; cache: PdfTextCache } | { status: "missing" } | { status: "invalid" };
+async function findCache(host: ActionHost, target: LocateTarget): Promise<CacheLookup> {
+	const names = (await host.pdfCache.list(PDF_TEXT_CACHE_DIR)).filter(name => name.endsWith(".json"));
+	if (target.exactName) {
+		if (!names.includes(target.exactName)) return { status: "missing" };
+		const raw = await host.pdfCache.read(`${PDF_TEXT_CACHE_DIR}/${target.exactName}`);
+		if (!raw) return { status: "invalid" };
+		try { const parsed: unknown = JSON.parse(raw); return validateCache(parsed) ? { status: "found", path: `${PDF_TEXT_CACHE_DIR}/${target.exactName}`, cache: parsed } : { status: "invalid" }; }
+		catch { return { status: "invalid" }; }
+	}
+	const entries: { name: string; extractedAt: string; cache: PdfTextCache }[] = [];
+	let relevant = false;
+	let invalid = false;
+	for (const name of names) {
+		const parsedName = parseCacheName(name);
+		if (!parsedName || !name.startsWith(`${target.prefix}-`)) continue;
+		relevant = true;
+		const raw = await host.pdfCache.read(`${PDF_TEXT_CACHE_DIR}/${name}`);
+		if (!raw) { invalid = true; continue; }
+		try { const parsed: unknown = JSON.parse(raw); if (validateCache(parsed)) entries.push({ name, extractedAt: parsed.extractedAt, cache: parsed }); else invalid = true; } catch { invalid = true; }
+	}
+	const newest = pickNewest(entries, target.prefix);
+	if (!newest) return relevant && invalid ? { status: "invalid" } : { status: "missing" };
+	const hit = entries.find(entry => entry.name === newest.name);
+	return hit ? { status: "found", path: `${PDF_TEXT_CACHE_DIR}/${hit.name}`, cache: hit.cache } : { status: "invalid" };
+}
+
+export async function locateAction(host: ActionHost, request: LocateRequestArgs): Promise<Payload> {
+	let quotes: LocateRequest[] = [];
+	let citekeyFromNote: string | null = null;
+	if (request.path) {
+		const body = await host.reader.readNote(request.path);
+		const notes = await host.reader.listNotes();
+		const note = notes.find(candidate => candidate.path === request.path || candidate.path === `${request.path}.md`);
+		const fmKey = typeof note?.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;
+		if (request.citekey && fmKey && request.citekey !== fmKey) throw new Error(`--citekey ${request.citekey} disagrees with the note's citekey ${fmKey}.`);
+		citekeyFromNote = fmKey;
+		quotes = extractQuoteCallouts(body).map(item => ({ line: item.line, quote: item.quote }));
+	}
+	if (request.quote) quotes.push({ quote: request.quote });
+	if (!quotes.length) return { ...envelope(host, "locate", 2, { reason: "quotes-empty", message: request.path ? "The note has no [!quote] callouts." : "Pass --quote or --path." }) };
+	const resolved = await locateTarget(host, request, citekeyFromNote);
+	if ("failure" in resolved) return { ...envelope(host, "locate", 2, { reason: resolved.failure.reason, message: resolved.failure.message }), ...(resolved.failure.candidates ? { candidates: resolved.failure.candidates } : {}) };
+	const target = resolved.target;
+	const found = await findCache(host, target);
+	if (found.status !== "found") {
+		const failure = found.status === "invalid" ? { reason: "cache-invalid" as const, message: "A matching PDF text cache exists but is corrupt or exceeds validation limits; re-extract with --force." } : { reason: "no-cache" as const, message: "No extracted text for this PDF yet; run pdf-text with Obsidian open." };
+		return { ...envelope(host, "locate", 2, failure), item: target.item, attachment: target.attachment };
+	}
+	const stat = target.localPath ? await host.pdfCache.statLocal(target.localPath) : null;
+	const verified = verifyCache(found.cache, stat);
+	if (verified === false) return { ...envelope(host, "locate", 2, { reason: "source-changed", message: "The PDF changed after text extraction; re-extract before locating quotes." }), item: target.item, attachment: target.attachment, cache: { path: found.path, sha256: found.cache.sha256, extractedAt: found.cache.extractedAt, pageCount: found.cache.pageCount, verified } };
+	const batch = locateBatch(found.cache.pages, quotes, { openURI: target.attachment.openURI });
+	return {
+		...envelope(host, "locate", 2),
+		item: target.item, attachment: { key: target.attachment.key, openURI: target.attachment.openURI, ...(target.attachment.key ? {} : { path: target.attachment.path }) },
+		cache: { path: found.path, sha256: found.cache.sha256, extractedAt: found.cache.extractedAt, pageCount: found.cache.pageCount, verified },
+		results: batch.results, summary: batch.summary, warnings: batch.warnings,
+	};
+}
+
+
+export function validateActionRequest(action: AgentAction, value: unknown): asserts value is ActionRequest {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A request object is required.");
+	const request = value as Record<string, unknown>;
+	const allowed: Record<AgentAction, readonly string[]> = {
+		connection: [], info: [], refresh: ["ifOlderThanMinutes"], resolve: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh"],
+		identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
+		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale"],
+		"pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"], locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
+	};
+	for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
+	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
+	for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote"]) { const value = request[key]; if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`); }
+	if ("libraryID" in request && (!Number.isSafeInteger(request.libraryID) || (request.libraryID as number) < 1)) throw new Error("libraryID must be a positive integer.");
+	if ("ifOlderThanMinutes" in request && (!Number.isSafeInteger(request.ifOlderThanMinutes) || (request.ifOlderThanMinutes as number) < 1 || (request.ifOlderThanMinutes as number) > 10080)) throw new Error("ifOlderThanMinutes must be between 1 and 10080.");
+	if ("folders" in request && (!Array.isArray(request.folders) || request.folders.some(folder => typeof folder !== "string" || !folder.trim()))) throw new Error("folders must be an array of non-empty paths.");
+	if (request.itemKey !== undefined && (typeof request.itemKey !== "string" || !/^[A-Z0-9]{8}$/.test(request.itemKey) || request.libraryID === undefined)) throw new Error("itemKey requires eight uppercase letters/digits and libraryID.");
+	if ((request.year !== undefined || request.author !== undefined) && request.title === undefined && request.query === undefined) throw new Error("year and author narrow title or query only.");
+	if (action === "resolve" || action === "identity") {
+		const selectors = ["citekey", "itemKey", "doi", "arxiv", "title", "query"].filter(key => request[key] !== undefined);
+		if (action === "resolve" && selectors.length !== 1) throw new Error("resolve requires exactly one selector.");
+		if (action === "identity" && (selectors.length < 1 || selectors.filter(key => key !== "citekey").length > 1)) throw new Error("identity requires one selector and may pair a vault citekey with one lookup selector.");
+	}
+	if (action === "cites" && request.path === undefined) throw new Error("cites requires path.");
+	if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined).length !== 1) throw new Error("pdf-text requires exactly one target.");
+	if (action === "locate") {
+		const targets = ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined);
+		if (request.path === undefined && (targets.length !== 1 || request.quote === undefined)) throw new Error("locate requires path, or one target with quote.");
+		if (typeof request.quote === "string" && Buffer.byteLength(request.quote) > 8192) throw new Error("quote must be at most 8 KiB.");
+	}
+}
+
+function pagesRequested(spec: string | undefined, pageCount: number): number[] {
+	if (!spec) return [];
+	const result = new Set<number>();
+	for (const part of spec.split(",")) {
+		const match = /^(\d+)(?:-(\d+))?$/.exec(part.trim());
+		if (!match) throw new Error("pages must be comma-separated page numbers or ranges.");
+		const first = Number(match[1]); const last = Number(match[2] ?? match[1]);
+		if (first < 1 || last < first || last > pageCount) throw new Error(`pages are outside 1-${pageCount}.`);
+		for (let page = first; page <= last; page++) result.add(page);
+	}
+	return [...result].sort((a, b) => a - b);
+}
+
+export async function connectionAction(host: ActionHost): Promise<Payload> { return { ...envelope(host, "connection", 1), capabilities: host.connection.bbt.reachable === true ? { zotero: host.connection.bbt.zotero, betterbibtex: host.connection.bbt.betterbibtex } : null }; }
+
+export async function refreshAction(host: ActionHost, request: RefreshRequest): Promise<Payload> {
+	if (!host.refresh) return { ...envelope(host, "refresh", 1, { reason: "requires-obsidian", message: "refresh requires the live Obsidian host." }), status: "unavailable" };
+	const outcome = await host.refresh(request);
+	const view = outcome.host.indexView;
+	if (!view) {
+		const checked = requireIndex(outcome.host, "refresh", 1);
+		return "failure" in checked ? checked.failure : { ...envelope(outcome.host, "refresh", 1, { reason: "index-invalid", message: "Refresh returned no validated index." }), status: "unavailable" };
+	}
+	return { ...envelope(outcome.host, "refresh", 1), count: view.index.count, complete: view.index.complete, generatedAt: view.index.generatedAt, diagnostics: view.index.diagnostics, refreshed: outcome.refreshed, refreshReason: outcome.reason, ageMinutesBefore: outcome.ageMinutesBefore };
+}
+
+export async function pdfTextAction(host: ActionHost, request: PdfTextRequest): Promise<Payload> {
+	if (!host.extractPdf) return { ...envelope(host, "pdf-text", 2, { reason: "requires-obsidian", message: "pdf-text requires the live Obsidian host." }) };
+	const resolved = await locateTarget(host, request, null);
+	if ("failure" in resolved) return { ...envelope(host, "pdf-text", 2, resolved.failure), ...(resolved.failure.candidates ? { candidates: resolved.failure.candidates } : {}) };
+	const extraction = await host.extractPdf(resolved.target, request);
+	const selected = pagesRequested(request.pages, extraction.extracted.pageCount);
+	const inlinePages = selected.map(page => extraction.extracted.pages[page - 1]);
+	if (Buffer.byteLength(JSON.stringify(inlinePages)) > 200 * 1024) return { ...envelope(host, "pdf-text", 2, { reason: "inline-too-large", message: "Selected inline page text exceeds 200 KiB; request fewer pages." }), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache };
+	return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: extraction.warnings };
+}
+
+export async function runAction(host: ActionHost, action: AgentAction, request: unknown = {}): Promise<Payload> {
+	validateActionRequest(action, request);
+	let effectiveHost = host;
+	if ((action === "resolve" || action === "identity") && (request as ResolveRequest).refresh === true) {
+		if (!host.refresh) return { ...envelope(host, action, ACTION_API_VERSION[action], { reason: "requires-obsidian", message: "Explicit refresh requires the live Obsidian host." }), ...(action === "resolve" ? { status: "unavailable" } : {}) };
+		effectiveHost = (await host.refresh({})).host;
+	}
+	switch (action) {
+		case "connection": return connectionAction(host);
+		case "info": return infoAction(host);
+		case "refresh": return refreshAction(host, request as RefreshRequest);
+		case "resolve": return resolveAction(effectiveHost, request as ResolveRequest);
+		case "identity": return identityAction(effectiveHost, request as IdentityRequest);
+		case "cites": return citesAction(host, request as CitesRequest);
+		case "reconcile": return reconcileAction(host, request as ReconcileRequest);
+		case "diagnostics": return diagnosticsAction(host, request as CommonRequest);
+		case "pdf-text": return pdfTextAction(host, request as PdfTextRequest);
+		case "locate": return locateAction(host, request as LocateRequestArgs);
+	}
+}

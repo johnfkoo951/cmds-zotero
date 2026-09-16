@@ -17,6 +17,10 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = join(repoRoot, 'skills', 'cmds-zotero');
 
 const args = process.argv.slice(2);
+if (args.includes('--help') || args.includes('-h')) {
+	process.stdout.write('Usage: node scripts/install-skill.mjs [--target DIR] [--check] [--force]\n');
+	process.exit(0);
+}
 let target = join(homedir(), '.claude', 'skills', 'cmds-zotero');
 let check = false;
 let force = false;

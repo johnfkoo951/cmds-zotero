@@ -1,26 +1,31 @@
-import { App, TFile } from "obsidian";
+import { App, TFile, parseYaml } from "obsidian";
 import type { NoteRecord, VaultReader } from "./agent/types";
 import { assertVaultBoundary, relativePath } from "./vault-storage";
+import { parseNoteText } from "./frontmatter-read";
 
 export const MAX_LISTED_NOTES = 20000;
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 
-/** Read-only vault access for the live host, backed by the metadata cache for frontmatter and the vault API for bodies. */
+/** Reads actual note text: a missing metadata-cache entry must not hide malformed YAML. */
 export class ObsidianVaultReader implements VaultReader {
+	private report = { skipped: [] as string[], truncated: false };
 	constructor(private app: App) {}
-
 	vaultName(): string { return this.app.vault.getName(); }
+	scanWarnings(): { skipped: string[]; truncated: boolean } { return { skipped: [...this.report.skipped], truncated: this.report.truncated }; }
 
-	listNotes(): Promise<NoteRecord[]> {
+	async listNotes(): Promise<NoteRecord[]> {
 		const notes: NoteRecord[] = [];
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			if (notes.length >= MAX_LISTED_NOTES) break;
-			const cache = this.app.metadataCache.getFileCache(file);
-			const frontmatter = cache?.frontmatter ? { ...cache.frontmatter } : null;
-			if (frontmatter) delete (frontmatter as Record<string, unknown>).position;
-			notes.push({ path: file.path, basename: file.basename, frontmatter, frontmatterParse: "ok" });
+		this.report = { skipped: [], truncated: false };
+		const files = this.app.vault.getMarkdownFiles().filter(file => !file.path.split("/").some(part => part.startsWith("."))).sort((a, b) => a.path.localeCompare(b.path));
+		for (const file of files) {
+			if (notes.length >= MAX_LISTED_NOTES) { this.report.truncated = true; break; }
+			try {
+				const parsed = parseNoteText(await this.readNote(file.path), parseYaml);
+				if (parsed.frontmatterParse === "error") this.report.skipped.push(file.path);
+				notes.push({ path: file.path, basename: file.basename, frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse });
+			} catch { this.report.skipped.push(file.path); }
 		}
-		return Promise.resolve(notes);
+		return notes;
 	}
 
 	async readNote(path: string): Promise<string> {
@@ -29,7 +34,9 @@ export class ObsidianVaultReader implements VaultReader {
 		const file = this.app.vault.getAbstractFileByPath(relative);
 		if (!(file instanceof TFile)) throw new Error(`Note not found: ${relative}`);
 		if (file.stat.size > MAX_NOTE_BYTES) throw new Error(`Note exceeds ${MAX_NOTE_BYTES / 1024 / 1024} MiB: ${relative}`);
-		return this.app.vault.cachedRead(file);
+		const text = await this.app.vault.read(file);
+		if (Buffer.byteLength(text) > MAX_NOTE_BYTES) throw new Error("Note grew beyond the size limit.");
+		return text;
 	}
 
 	async exists(path: string): Promise<boolean> {

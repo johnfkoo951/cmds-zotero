@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanCitations, uniqueCitekeys } from "../src/citations/scan";
+import { scanCitations, scanFrontmatterCitations, uniqueCitekeys } from "../src/citations/scan";
 import { colorName, parseHexColor } from "../src/annotations/colors";
 import { matchScore } from "../src/citations/score";
 import { relatedCitekeys } from "../src/related";
@@ -61,4 +61,30 @@ test("new settings normalize with defaults and reject invalid values", () => {
 	assert.equal(settings.referencesFollowActiveNote, false);
 	assert.equal(normalizeSettings({ citationTrigger: "bogus" }).citationTrigger, "bracket");
 	assert.equal(normalizeSettings({ headingHighlightColor: "none" }).headingHighlightColor, "none");
+});
+
+test("frontmatter scan reads bare-key arrays and [@key] tokens, ignoring wikilinks, bare @keys and the note's own citekey", () => {
+	const found = scanFrontmatterCitations({
+		citekey: "self2020own",
+		cites: ["alpha2020memory", " beta2021old ", "@atsign2019no", "[[wiki2018no]]", 42, "", "self2020own"],
+		supports: "gamma2019single",
+		counters: [{ nested: "object2017no" }],
+		evidenceFor: ["[[Some note]] backs [@delta2018tok, p. 4] but bare @epsilon2017no and [[@zeta2016wiki]] do not count", "[@self2020own; @eta2015tok]"],
+		evidenceAgainst: "None [@theta2014tok]",
+		sourceCallout: ["[@iota2013tok]"],
+		hypotheses: "H1 [@kappa2012tok]",
+		title: "[@lambda2011no] not a scanned field",
+	});
+	assert.deepEqual(found, [
+		{ citekey: "alpha2020memory", field: "cites", form: "bare" },
+		{ citekey: "beta2021old", field: "cites", form: "bare" },
+		{ citekey: "gamma2019single", field: "supports", form: "bare" },
+		{ citekey: "delta2018tok", field: "evidenceFor", form: "pandoc" },
+		{ citekey: "eta2015tok", field: "evidenceFor", form: "pandoc" },
+		{ citekey: "theta2014tok", field: "evidenceAgainst", form: "pandoc" },
+		{ citekey: "iota2013tok", field: "sourceCallout", form: "pandoc" },
+		{ citekey: "kappa2012tok", field: "hypotheses", form: "pandoc" },
+	]);
+	assert.deepEqual(scanFrontmatterCitations({}), []);
+	assert.deepEqual(scanFrontmatterCitations({ cites: ["dup2010twice", "dup2010twice"] }).length, 2);
 });

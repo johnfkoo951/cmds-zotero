@@ -1,108 +1,149 @@
 import type { App } from "obsidian";
 import type { BbtService } from "./bbt";
-import type { IndexService } from "./index-service";
-import type { ZoteroIndex, Diagnostic } from "./types";
+import { resolveInIndex, type IndexService } from "./index-service";
+import type { ZoteroIndex } from "./types";
 import type { VaultLinks } from "./vault-links";
+import { ACTION_API_VERSION, AGENT_ACTIONS, runAction, validateActionRequest, type ActionHost, type AgentAction, type ResolveRequest } from "./agent/actions";
+import { buildEnvelope } from "./agent/connection";
+import type { FailureReason } from "./agent/types";
 
-export interface ResolveRequest {
-	citekey?: string;
-	itemKey?: string;
-	libraryID?: number;
-	refresh?: boolean;
-}
-
-export type IngestAction = "connection" | "refresh" | "resolve" | "diagnostics";
+export type IngestAction = AgentAction;
 export interface IngestJob {
 	state: "pending" | "completed" | "failed";
+	createdAt: string;
+	finishedAt?: string;
 	result?: unknown;
 	error?: string;
 }
+export type ActionHostFactory = (action: AgentAction, request: unknown, now: Date) => Promise<ActionHost>;
+
+const MAX_JOBS = 16;
+const TERMINAL_TTL_MS = 10 * 60 * 1000;
 
 export class IngestAPI {
-	readonly apiVersion = 1;
+	readonly apiVersion = 2;
+	readonly apiVersions = [1, 2] as const;
 	private jobs = new Map<string, IngestJob>();
 	private sequence = 0;
-
-	startJob(action: IngestAction, request: ResolveRequest = {}): string {
-		if (!["connection", "refresh", "resolve", "diagnostics"].includes(action)) throw new Error("Unsupported ingest action.");
-		if (this.jobs.size >= 16) {
-			for (const [key, job] of this.jobs) if (job.state !== "pending") this.jobs.delete(key);
-			if (this.jobs.size >= 16) throw new Error("Too many active ingest requests.");
-		}
-		const id = `${Date.now()}-${++this.sequence}`;
-		this.jobs.set(id, { state: "pending" });
-		void (async () => {
-			try {
-				let result: unknown;
-				if (action === "connection") result = await this.connection();
-				else if (action === "diagnostics") result = await this.diagnose();
-				else if (action === "resolve") result = await this.resolve(request);
-				else {
-					const { index, vault } = await this.ensureIndex(true);
-					result = { apiVersion: 1, vault, count: index.count, complete: index.complete, generatedAt: index.generatedAt, diagnostics: index.diagnostics };
-				}
-				this.jobs.set(id, { state: "completed", result });
-			} catch (error) { this.jobs.set(id, { state: "failed", error: error instanceof Error ? error.message : "Ingest request failed." }); }
-		})();
-		return id;
-	}
-
-	getJob(id: string): IngestJob {
-		return this.jobs.get(id) ?? { state: "failed", error: "Request expired or the plugin was reloaded. Start a new request." };
-	}
 	private activeRequests = 0;
-	get busy(): boolean { return this.activeRequests > 0; }
+	private alive = true;
+
 	constructor(
 		private app: App,
 		private bbt: BbtService,
 		private index: IndexService,
 		private links: VaultLinks,
 		private onIndex: (index: ZoteroIndex) => Promise<void>,
+		private hostFactory?: ActionHostFactory,
 	) {}
 
-	async connection() {
-		return { apiVersion: this.apiVersion, vault: this.app.vault.getName(), capabilities: await this.bbt.capabilities() };
+	get busy(): boolean { return this.activeRequests > 0; }
+
+	private prune(now = Date.now()): void {
+		for (const [id, job] of this.jobs) {
+			if (job.state === "pending" || !job.finishedAt) continue;
+			if (now - Date.parse(job.finishedAt) >= TERMINAL_TTL_MS) this.jobs.delete(id);
+		}
 	}
 
-	async ensureIndex(force = false) {
+	startJob(action: IngestAction, request: unknown = {}): string {
+		if (!AGENT_ACTIONS.includes(action)) throw new Error("Unsupported ingest action.");
+		validateActionRequest(action, request);
+		this.prune();
+		if (!this.alive) throw new Error("CMDS Zotero service was unloaded.");
+		if (this.jobs.size >= MAX_JOBS) throw new Error("Too many active ingest requests.");
+		const id = `${Date.now()}-${++this.sequence}`;
+		this.jobs.set(id, { state: "pending", createdAt: new Date().toISOString() });
+		this.activeRequests++;
+		void this.execute(action, request).then(result => {
+			if (!this.alive || !this.jobs.has(id)) return;
+			this.jobs.set(id, { ...this.jobs.get(id)!, state: "completed", result, finishedAt: new Date().toISOString() });
+		}, error => {
+			if (!this.alive || !this.jobs.has(id)) return;
+			this.jobs.set(id, { ...this.jobs.get(id)!, state: "failed", error: error instanceof Error ? error.message : "Ingest request failed.", finishedAt: new Date().toISOString() });
+		}).finally(() => { this.activeRequests--; });
+		return id;
+	}
+
+	getJob(id: string): IngestJob {
+		this.prune();
+		const job = this.jobs.get(id);
+		if (!job) return { state: "failed", createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(), error: "Request expired, was consumed, or the plugin was reloaded. Do not resubmit a possibly completed write; inspect current state first." };
+		if (job.state === "completed") this.jobs.delete(id);
+		return { ...job };
+	}
+
+	dispose(): void {
+		this.alive = false;
+		this.jobs.clear();
+	}
+
+	async ensureIndex(force = false): Promise<{ apiVersion: 1; vault: string; index: ZoteroIndex }> {
 		this.activeRequests++;
 		try {
 			const index = await this.index.get(force);
 			await this.onIndex(index);
-			return { apiVersion: this.apiVersion, vault: this.app.vault.getName(), index };
+			return { apiVersion: 1, vault: this.app.vault.getName(), index };
 		} finally { this.activeRequests--; }
 	}
 
-	async resolve(request: ResolveRequest) {
-		if (typeof request !== "object" || request === null) throw new Error("A resolution request is required.");
-		const query = request.citekey ?? request.itemKey;
-		if (typeof query !== "string" || !query.trim() || query.length > 1000) throw new Error("Provide a citekey or item key.");
-		if (request.libraryID !== undefined && (!Number.isInteger(request.libraryID) || request.libraryID < 1)) throw new Error("Library ID must be a positive integer.");
-		if (request.itemKey && (!/^[A-Z0-9]{8}$/.test(request.itemKey) || request.libraryID === undefined)) throw new Error("Stable resolution requires an eight-character item key and a library ID.");
-		try {
-			const { index } = await this.ensureIndex(request.refresh === true);
-			const result = await this.index.resolve(query, { libraryID: request.libraryID, itemKey: request.itemKey });
-			if (result.status !== "resolved") return { apiVersion: this.apiVersion, ...result, generatedAt: index.generatedAt };
-			return {
-				apiVersion: this.apiVersion, ...result, generatedAt: index.generatedAt,
-				vaultLinks: await this.links.find(result.entry, index),
-				evidence: result.entry.attachments.flatMap(attachment => attachment.annotations.map(annotation => ({
-					annotationKey: annotation.key, attachmentKey: attachment.key, page: annotation.page,
-					pageLabel: annotation.pageLabel, uri: annotation.uri,
-				}))),
-			};
-		} catch (error) {
-			return { apiVersion: this.apiVersion, status: "unavailable" as const, message: error instanceof Error ? error.message : "Zotero is unavailable." };
+	async connection(): Promise<{ apiVersion: 1; vault: string; capabilities: { zotero: string; betterbibtex: string }; [key: string]: unknown }> {
+		if (this.hostFactory) return await this.execute("connection", {}) as never;
+		const capabilities = await this.bbt.capabilities();
+		return { apiVersion: 1, vault: this.app.vault.getName(), capabilities };
+	}
+
+	async resolve(request: ResolveRequest): Promise<
+		| { status: "resolved"; entry: ZoteroIndex["entries"][number]; matchedHistory?: boolean; [key: string]: unknown }
+		| { status: "ambiguous"; candidates?: ZoteroIndex["entries"]; [key: string]: unknown }
+		| { status: "not-found" | "unavailable"; message?: string; [key: string]: unknown }
+	> {
+		validateActionRequest("resolve", request);
+		if (!this.hostFactory) {
+			const index = request.refresh === true ? (await this.ensureIndex(true)).index : await this.index.peek();
+			if (!index) return { status: "unavailable", message: "No validated Zotero index is available." };
+			const query = request.itemKey ?? request.citekey ?? "";
+			return resolveInIndex(index, query, { libraryID: request.libraryID, itemKey: request.itemKey });
+		}
+		const payload = await this.execute("resolve", request) as Record<string, unknown>;
+		return payload as never;
+	}
+
+	async diagnose(): Promise<{ generatedAt: string | null; complete: boolean | null; count: number | null; diagnostics: { severity: string; code: string; message: string }[]; [key: string]: unknown }> {
+		if (!this.hostFactory) {
+			const index = await this.index.peek();
+			if (!index) throw new Error("No validated Zotero index is available.");
+			return { generatedAt: index.generatedAt, complete: index.complete, count: index.count, diagnostics: index.diagnostics };
+		}
+		return await this.execute("diagnostics", {}) as never;
+	}
+
+	private async execute(action: AgentAction, request: unknown): Promise<unknown> {
+		if (!this.hostFactory) {
+			if (action === "connection") return this.connectionLegacy();
+			if (action === "refresh") {
+				const options = request as { ifOlderThanMinutes?: number };
+				const outcome = await this.index.refresh({ force: options.ifOlderThanMinutes === undefined, ...(options.ifOlderThanMinutes ? { ifOlderThanMs: options.ifOlderThanMinutes * 60000 } : {}) });
+				await this.onIndex(outcome.index);
+				return { apiVersion: 1, vault: this.app.vault.getName(), count: outcome.index.count, complete: outcome.index.complete, generatedAt: outcome.index.generatedAt, diagnostics: outcome.index.diagnostics, refreshed: outcome.refreshed };
+			}
+			throw new Error("The agent runtime host is unavailable.");
+		}
+		const now = new Date();
+		const host = await this.hostFactory(action, request, now);
+		try { return await runAction(host, action, request); }
+		catch (error) {
+			const message = error instanceof Error ? error.message : "Agent action failed.";
+			let reason: FailureReason = action === "reconcile" ? "apply-failed" : "invalid-request";
+			if (/64 MiB|too large/i.test(message)) reason = "pdf-too-large";
+			else if (/PDF|pdf\.js|extraction/i.test(message)) reason = "pdf-invalid";
+			const failure = buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, now, { reason, message });
+			return { ...failure, ...(ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {}) };
 		}
 	}
 
-	async diagnose() {
-		const { index } = await this.ensureIndex();
-		const diagnostics: Diagnostic[] = [...index.diagnostics];
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(file)?.frontmatter;
-			if (fm?.citekeyProvisional === true) diagnostics.push({ code: "provisional-citekey", severity: "warning", message: `Provisional citekey: ${file.path}. Pin it in Zotero; do not rename the note automatically.` });
-		}
-		return { apiVersion: this.apiVersion, vault: this.app.vault.getName(), generatedAt: index.generatedAt, complete: index.complete, count: index.count, diagnostics };
+	private async connectionLegacy(): Promise<unknown> {
+		return { apiVersion: 1, vault: this.app.vault.getName(), capabilities: await this.bbt.capabilities() };
 	}
+
 }

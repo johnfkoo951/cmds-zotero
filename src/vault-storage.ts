@@ -2,6 +2,7 @@ import { App, FileSystemAdapter, normalizePath } from "obsidian";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { privateIgnoreCoversAll } from "./agent/git-ignore";
 import type { IndexStorage } from "./types";
 
 export function relativePath(value: string): string {
@@ -47,7 +48,8 @@ export async function ensureCmdsIgnore(app: App): Promise<void> {
 	const ignore = `${CMDS_DIR}/.gitignore`;
 	await assertVaultBoundary(app, ignore);
 	await ensureDirectory(app, ignore);
-	if (!(await app.vault.adapter.exists(ignore))) await app.vault.adapter.write(ignore, "*\n");
+	const old = await app.vault.adapter.exists(ignore) ? await app.vault.adapter.read(ignore) : "";
+	if (!privateIgnoreCoversAll(old)) await app.vault.adapter.write(ignore, old + (old && !old.endsWith("\n") ? "\n" : "") + "*\n");
 }
 
 export class VaultIndexStorage implements IndexStorage {
@@ -87,6 +89,7 @@ export class VaultIndexStorage implements IndexStorage {
 			await adapter.write(temp, content);
 			if (await adapter.read(temp) !== content) throw new Error("Index staging verification failed.");
 			if (current !== null) {
+				await ensureCmdsIgnore(this.app);
 				const backup = `.cmds-zotero/backups/index-${Date.now()}-${token}.json`;
 				await assertVaultBoundary(this.app, backup);
 				await ensureDirectory(this.app, backup);

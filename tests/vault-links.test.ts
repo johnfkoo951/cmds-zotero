@@ -19,7 +19,7 @@ test('note-map publication is serialized and checks lifecycle after awaits',asyn
     name:'mock-host',setup(build){
       build.onResolve({filter:/^obsidian$/},()=>({path:'obsidian',namespace:'mock'}));
       build.onResolve({filter:/vault-storage$/},()=>({path:'storage',namespace:'mock'}));
-      build.onLoad({filter:/.*/,namespace:'mock'},args=>({contents:args.path==='obsidian'?'export class App{};export class TFile{};':'export async function assertVaultBoundary(app){await app.boundary();} export async function ensureDirectory(){} export const relativePath=x=>x;'}));
+      build.onLoad({filter:/.*/,namespace:'mock'},args=>({contents:args.path==='obsidian'?'export class App{};export class TFile{};':'export async function assertVaultBoundary(app){await app.boundary();} export async function ensureDirectory(){} export async function ensureCmdsIgnore(){} export const relativePath=x=>x;'}));
     },
   }]});
   const {VaultLinks}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));

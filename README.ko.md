@@ -4,7 +4,7 @@
 
 검증된 Zotero 원문·인용·주석·문헌노트를 로컬 중심 연구 볼트에 연결합니다. By CMDSPACE.
 
-**0.3.0은 개발 버전이며 커뮤니티 승인 릴리스가 아닙니다.** 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, Hookmark에서의 링크 수신·왕복은 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
+**0.4.0은 개발·릴리스 준비 단계이며 공개·커뮤니티 승인 릴리스가 아닙니다.** UI 추가 없이 10개 액션의 에이전트 계약으로 identity·인용 검사·보호된 허브 정합성 갱신·PDF 텍스트·인용 페이지 탐색을 제공합니다. [계약 정본](docs/agent-contract-v2/contract.md)과 [구현 상태](docs/0.4-agent-contract-plan.md)를 참고하세요. 아래 0.3.0 설명과 실측은 과거 기록이며 0.4.0 인수 검증을 의미하지 않습니다. 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, Hookmark에서의 링크 수신·왕복은 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
 
 ## 범위
 
@@ -84,16 +84,61 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 조회 결과는 **resolved**, **ambiguous**, **not-found**, **unavailable**로 구분합니다. 첫 후보를 자동 선택하거나 오프라인을 문헌 부재로 해석하지 마세요. 기존 인덱스는 재구축 전까지 식별자를 신뢰할 수 없습니다. 첨부 보강 실패는 PDF가 없다는 증거가 아닙니다. 로컬 인덱스는 공개 테스트 fixture가 아닌 민감한 데이터입니다.
 
-Paper ingest 서비스·CLI 계약은 [`src/ingest-api.ts`](src/ingest-api.ts), [`scripts/ingest.mjs`](scripts/ingest.mjs)를 참고하세요. 별도 HTTP 리스너를 만들지 않습니다. 소비자는 비동기 UI 명령을 실행했다는 이유만으로 완료를 추정하지 말고 direct-BBT/오프라인 fallback을 유지해야 합니다.
+Paper ingest 서비스·CLI 계약은 [`src/ingest-api.ts`](src/ingest-api.ts), [`scripts/ingest.mjs`](scripts/ingest.mjs)를 참고하세요. 별도 HTTP 리스너를 만들지 않습니다. 소비자는 비동기 UI 명령으로 완료를 추정하지 말고 CLI의 capability-aware 오프라인 fallback을 사용하세요. BBT 9.0.64에서 문자열 item.search 요청이 거부된 것으로 실측되었으므로 과거 curl 예시를 복사하지 말고 필터 조건을 사용하는 공식 RPC 계약을 따르세요.
 
-CLI는 데스크톱 CLI의 장시간 Promise 반환에 의존하지 않고, 용량이 제한된 메모리 작업을 한 번 시작한 뒤 종료된 JSON 결과를 기다립니다.
+### 에이전트 CLI (계약 2)
+
+| 액션 | 역할 | 오프라인 |
+| --- | --- | --- |
+| connection | 로컬 BBT·호스트 연결 검사 | 가능 |
+| info | 인덱스 시각·건수·라이브러리·설정·노출 경고, refresh 없음 | 가능 |
+| refresh | 명시적 갱신, `--if-older-than` 지원 | 불가 |
+| resolve | citekey·item key/library·DOI·arXiv·제목·query 조회 | 가능 |
+| identity | 허브 YAML/S01 제안, 참고문헌, PIN 대기 상태 | 가능 |
+| cites | 본문·프론트매터 인용 검사 및 References 생성 | 가능 |
+| reconcile | 허브 감사, 명시적 `--apply`만 5개 키 기록 | dry-run만 |
+| diagnostics | 인덱스·identity·인용·개인정보 진단 | 가능 |
+| pdf-text | 내장 pdf.js로 비공개 텍스트 캐시 생성 | 불가 |
+| locate | 캐시에서 인용 페이지와 검증 상태 반환 | 가능 |
 
 ```sh
 node scripts/ingest.mjs --vault "Research" --action connection
-node scripts/ingest.mjs --vault "Research" --action refresh
-node scripts/ingest.mjs --vault "Research" --action resolve --citekey Example2026
-node scripts/ingest.mjs --vault "Research" --action diagnostics
+node scripts/ingest.mjs --vault "Research" --action refresh --if-older-than 60
+node scripts/ingest-ro.mjs --vault "Research" --action identity --citekey example2024Graph --doi "10.1234/example"
+node scripts/ingest-ro.mjs --vault "Research" --offline --vault-path /path/to/vault --action cites --path "20. Wiki/25. Questions" --recursive --strict
+node scripts/ingest.mjs --vault "Research" --action pdf-text --citekey example2024Graph --pages "1-5"
+node scripts/ingest-ro.mjs --vault "Research" --action locate --citekey example2024Graph --quote "An exact quotation from the source"
+node scripts/ingest-ro.mjs --vault "Research" --action reconcile
 ```
+
+모든 응답에 `contract:2`, `apiVersions:[1,2]`, `ok`, `checkedAt`, `connection`을 추가합니다.
+기존 4개 액션의 payload는 `apiVersion:1`, 신규 6개는 2입니다.
+종료 **0**은 유효한 not-found/ambiguous/dry-run도 포함하고, **1**은 실행 불가·apply 거부/부분 실패·strict 오류,
+**2**는 인자 오류입니다. 구조화 실패는 stdout JSON과 stderr 이유 한 줄로 반환합니다.
+제출 이후 timeout은 미실행의 증거가 아닙니다. 쓰기를 자동 반복하지 말고 읽기 전용 결과로 현 상태를 확인하세요.
+
+읽기 전용 액션은 암묵적으로 인덱스·note-map을 갱신하지 않습니다. `ingest-ro.mjs`는 쓰기 요청과
+조회 중 쓰기 가능한 구형 live API 경로를 차단합니다. 오프라인은 설정된 인덱스(기본
+`80. References/zotero-index.json`)를 읽습니다. 누락·손상·불완전·시각 미확인 인덱스로 부재를 단정하지 않습니다.
+오래된 인덱스의 부정 판정은 `--allow-stale` 없이는 보류하며, 이 flag로 **apply를 허가하지 않습니다**.
+
+**비소유 노트 쓰기 예외:** dry-run 검토 후 명시적으로 `reconcile --apply`를 실행하면 paper hub의
+`citekeyProvisional`, `zoteroID`, `zoteroSelectURI`, `zoteroStatus`, `zoteroCheckedAt`만 갱신할 수 있습니다.
+실시간 BBT·신선하고 완전한 인덱스·legacy 비활성 상태가 필요합니다. citekey·DOI·본문·Raw Sources는
+변경하지 않고, 잘못된 값·identity 충돌·안전하지 않은 YAML은 거절하며 동시 편집과 부분 실패를 보고합니다.
+외부 편집기에 대한 완전한 파일 CAS나 동시 편집을 덮는 자동 rollback은 보장하지 않습니다.
+`resolved` + `citekeyProvisional:true`는 등록됐지만 PIN 대기인 상태입니다. Zotero Extra에
+`Citation Key: <vault-key>`를 수동 지정하고 명시적 refresh로 확인하세요. 과거 key 매칭은 현재 PIN 증거가 아닙니다.
+
+`pdf-text`는 내장 공개 pdf.js API로 최대 64 MiB 로컬 PDF를 읽고 **원문 전체 텍스트**를 캐시합니다.
+플러그인은 `.cmds-zotero/.gitignore`로 내부 캐시를 보호합니다. 저장소에서는 설정된 인덱스도 ignore하세요.
+Git 진단은 ignore와 이미 추적 중인 상태를 구분합니다. untrack해도 과거 공개 이력은 지워지지 않습니다.
+`locate`는 물리 페이지와 인쇄 라벨을 구분하고 PDF URI에 첨부 key를 사용합니다.
+미검증·원본 변경·fuzzy 결과를 확정 인용 근거로 사용하지 마세요.
+
+에이전트 스킬은 `node scripts/install-skill.mjs`로 복사 설치하며 옵션은 `--help`에서 확인합니다.
+[배포용 참조](skills/cmds-zotero/references/cli-contract-v2.md)는 계약 정본에서 생성되고
+`node scripts/sync-contract.mjs --check`로 드리프트를 검사합니다.
 
 가져온 노트는 `zoteroID`로 이름·citekey 변경 뒤에도 경로를 유지합니다. 최초 YAML은 사용자 관리 영역이며 이후 메타데이터는 관리 섹션에서 갱신됩니다. 이미지명에는 라이브러리와 content hash가 포함되어 원본이 바뀌면 새 버전을 추가하고 구버전·사용자 수정 이미지를 삭제하지 않습니다. 소유권 마커가 없는 기존 노트는 자동 편입하지 않으므로, 나란히 가져오려면 출력 폴더를 바꾸세요.
 
@@ -120,8 +165,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # 추적 중인 작업 파일 검사
 node scripts/sanitize.mjs --staged  # Git index의 추가·변경 파일 검사
-node scripts/version-bump.mjs 0.3.1 # package/lock/manifest/versions 동기화
-node scripts/verify-release.mjs 0.3.1
+node scripts/version-bump.mjs 0.4.0 # package/lock/manifest/versions 동기화
+node scripts/verify-release.mjs 0.4.0
 ```
 
 테스트는 합성 데이터만 사용합니다. 새니타이저는 비밀값 대신 파일·줄·규칙만 출력하는 휴리스틱이며 staged diff와 private 저장소 링크의 수동 검토를 대체하지 않습니다. CI는 Node 22에서 `npm ci`, lint, typecheck, test, production build를 수행합니다. 준비된 릴리스 workflow는 manifest/package/lock/versions와 일치하는 **v 접두사 없는 정식 semver 태그**를 요구하며 세 플러그인 파일과 provenance bundle을 배포합니다. **해당 태그를 push하면 릴리스가 공개되므로 먼저 승인을 받으세요.** Workflow 준비는 릴리스·CI 성공·커뮤니티 등록을 완료했다는 뜻이 아닙니다.

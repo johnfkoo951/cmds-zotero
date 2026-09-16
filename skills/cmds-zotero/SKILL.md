@@ -1,199 +1,115 @@
 ---
 name: cmds-zotero
-description: Agent CLI for the CMDS Zotero Obsidian plugin (contract 2) — resolve a paper by citekey, DOI, arXiv id or title; emit verified Zotero identity frontmatter and the S01 block for paper hubs; validate [@citekey] citations and generate ## References; extract Zotero PDF text and recover page locators for [!quote] callouts; reconcile provisional citekeys; read plugin diagnostics. Use when the user says "paper ingest", "citekey", "Zotero identity", "DOI lookup", "arXiv lookup", "page locator", "quote page", "References 생성", "provisional citekey", "/lint identity", or when an agent needs Zotero data inside an Obsidian vault. NOT for ZotLit, Zotero's UI, or editing Zotero items (the plugin is read-only toward Zotero).
+description: Agent CLI for CMDS Zotero (contract 2). Resolve papers by citekey, DOI, arXiv or title; produce hub identity and S01 text; validate citations and generate References; extract PDF text and locate quotes; reconcile provisional citekeys. Use for paper ingest, Zotero identity, DOI lookup, page locators, quote pages, References 생성, or provisional citekey diagnostics. NOT for editing Zotero items or driving ZotLit UI.
 ---
 
-# CMDS Zotero Agent CLI (contract v2)
+# CMDS Zotero agent CLI
 
-Teach agents to use the CMDS Zotero agent CLI for resolving bibliographic items, capturing verified identities, scanning citations, extracting and locating quoted text in PDFs, and reconciling Zotero hub metadata with vault frontmatter.
+Use the versioned service, not hand-written BBT curl or asynchronous UI commands.
+Zotero is always read-only. Returned YAML/Markdown is a proposal, not evidence that notes were updated.
 
-## Command Form
+## Commands
 
-All commands require `--vault VAULT_NAME`. Many support `--vault-path ABS_PATH` and `--offline` for vault-file-based queries. Live-only actions are `refresh` and `pdf-text` (with `--file` for cache-only).
-
-```bash
-node ${CMDS_ZOTERO_ROOT}/scripts/ingest.mjs --vault <VaultName> --action <action> [flags]
-# read-only wrapper for commands that must not refresh, extract or write:
-node ${CMDS_ZOTERO_ROOT}/scripts/ingest-ro.mjs --vault <VaultName> --action <action> [flags]
+```sh
+node ${CMDS_ZOTERO_ROOT}/scripts/ingest.mjs --vault "Research" --action info
+node ${CMDS_ZOTERO_ROOT}/scripts/ingest-ro.mjs --vault "Research" --action resolve --doi "10.1234/example"
 ```
 
-`${CMDS_ZOTERO_ROOT}` is rewritten to the absolute plugin repository path by `scripts/install-skill.mjs`; the skill is copied, never symlinked.
+The installer replaces `${CMDS_ZOTERO_ROOT}` with the repository path and copies the skill; it never symlinks it.
+Use `ingest-ro.mjs` for read-only contexts such as query. It rejects refresh, extraction and apply.
+Every call needs `--vault`. `--vault-path` is an optional absolute path for offline discovery.
+Run `--help` for the complete action-specific flag list.
 
-### Exit Codes
-- **0**: ok:true — action succeeded
-- **1**: ok:false — action ran but returned an error (check reason field)
-- **2**: argument error — invalid flags, missing required args, or unrecognized action
+| Need | Action | Example flags |
+| --- | --- | --- |
+| Inspect index age/counts/libraries/settings | info | none; never refreshes |
+| Probe Obsidian/plugin/BBT | connection | optionally `--offline` |
+| Explicitly refresh | refresh | optionally `--if-older-than 60` |
+| Resolve identity | resolve | one of `--citekey`, `--item-key ... --library ...`, `--doi`, `--arxiv`, `--title`, `--query` |
+| Propose hub YAML and S01 | identity | selectors as above; optionally vault `--citekey` plus one other selector, `--raw-source`, `--no-bibliography`, `--style` |
+| Validate body/frontmatter citations | cites | `--path "20. Wiki/25. Questions" --recursive --bibliography`; optional `--strict` |
+| Audit hubs | reconcile | default dry-run; optional `--folders "40. Paper Analyses"`, `--strict` |
+| Apply reviewed hub identity fields | reconcile | `--apply`; explicit authorization required |
+| Extract PDF text | pdf-text | `--citekey KEY` or `--item-key KEY --library ID` or `--file "80. References/Attachments/example.pdf"`; optional `--attachment`, `--pages "1-5,9"`, `--force` |
+| Find exact quote pages | locate | `--citekey KEY --quote "quoted text"`, or `--path "40. Paper Analyses/example2024Graph/Atom.md"`; optional explicit PDF target |
+| Combined diagnostics | diagnostics | optional `--allow-stale` |
 
-## Decision Table: When to Use Each Action
+`--year` and `--author` narrow title/query selectors. Query/prefix matches rank candidates; they do not resolve by themselves.
+`--refresh` is explicit and live-only on resolve/identity. `--pages` selects text to inline, not a partial-source cache.
+PDF extraction is live-only even with `--file`; offline locate reads an existing cache.
 
-| Goal | Action | Flags | Notes |
-|------|--------|-------|-------|
-| Start: inspect vault + index | `info` | `--vault` | Returns index metadata, settings, warnings. Entry point for diagnosis. |
-| Refresh index (live only) | `refresh` | `--vault [--if-older-than MINUTES]` | Returns reason (forced, stale, fresh). Prevents accidental rebuilds. |
-| Resolve item by selector | `resolve` | `--vault --citekey/--doi/--title/--item-key` | Returns status (resolved, ambiguous, not-found, unavailable), matches, entry. |
-| Get verified identity + frontmatter | `identity` | `--vault --citekey/--doi/--title/--item-key` | Returns citekey, DOI, zoteroID, zoteroSelectURI, zoteroStatus, pinInstruction if needed. |
-| Scan citations in notes | `cites` | `--vault --path FILE/FOLDER [--recursive] [--bibliography] [--allow-stale]` | Returns files, citations, referencesSection, keys array, diagnostics. |
-| Locate quoted text in PDFs | `locate` | `--vault --path ATOM.md --quote TEXT \| --citekey KEY --quote TEXT` | Returns matches with page, locator (p.N or p.N-M), URI, score, snippet. |
-| Extract PDF text (live only) | `pdf-text` | `--vault --citekey KEY \| --item-key KEY --library ID \| --file REL.pdf [--pages "1-5"]` | Returns pages array, cache metadata, extractedAt. Caches in `.cmds-zotero/pdf-text/`. |
-| Reconcile hub records | `reconcile` | `--vault [--folders PATH] [--apply] [--allow-stale]` | Dry-run by default. --apply commits citekeyProvisional, zoteroID, zoteroSelectURI, zoteroStatus, zoteroCheckedAt. |
-| Check connection + capabilities | `connection` | `--vault [--offline]` | Returns capabilities (zotero, betterbibtex, metadata, attachments, annotations, bibliography). Pre-flight for /ingest. |
-| Run diagnostics | `diagnostics` | `--vault` | Returns codes (citekey-unregistered, identity-desync, index-stale, etc.). Respects --strict. |
+## Response and exit interpretation
 
-## Identity Vocabulary (7 Keys + Canonical Ordering)
+Every structured response has `contract:2`, `apiVersions:[1,2]`, `apiVersion`, `action`, `vault`, `ok`,
+`checkedAt`, and `connection`. The four legacy actions connection/refresh/resolve/diagnostics retain payload API 1.
+New actions use API 2. Connection includes live/offline mode; Obsidian `ok|unavailable`; plugin status/version;
+BBT `reachable:true|false|null`; index generation/age/completeness; legacy-plugin state; Git coverage.
 
-These keys form the response's `frontmatter` object and the vault note's YAML fragment. **Order is fixed** for byte-identical round-trips:
+- Exit **0**: usable result, including `status:not-found` or `ambiguous`, dry-run, and reports.
+- Exit **1**: unavailable/invalid execution, apply refusal/partial failure, or strict error diagnostics.
+- Exit **2**: arguments invalid; stderr only, no result JSON.
+- Structured failures have `ok:false`, `reason` and `message` on stdout plus a reason line on stderr.
+- Never choose the first ambiguous candidate. Never interpret connectivity failure as absence.
+- Missing/invalid/incomplete/unknown-age indexes cannot prove absence. Stale negative answers are withheld;
+  `--allow-stale` opts into stale lookup evidence, not writes or fabricated completeness.
+- Timeouts and lost job results can have unknown outcomes. Do not automatically repeat a mutation;
+  run read-only reconcile to inspect current state first.
 
-| Key | Type | Value Rules | When Set | Role |
-|-----|------|-------------|----------|------|
-| `citekey` | string | Lowercase, hyphenated (PDFs: ~key@suffix). Valid against `p7` convention. | Always, if resolved | Current BBT key |
-| `citekeyProvisional` | boolean | `true` if item has no BBT key yet, or resolved under different key | When unregistered or renamed | Staging for Zotero Extra field |
-| `doi` | string | Normalized (uppercase suffix, no URL prefix) | If item has DOI | Canonical reference |
-| `zoteroID` | integer | Zotero item ID | Always, if resolved | Local reference |
-| `zoteroSelectURI` | string | `zotero://select/library/items/ITEMKEY` | Always, if resolved | URI for Zotero selection |
-| `zoteroStatus` | enum | `resolved \| not-found \| unavailable \| ambiguous \| provisional` | Always, if resolved | Last verify verdict |
-| `zoteroCheckedAt` | ISO 8601 | Timestamp of last `resolve` or `identity` call | Always, if resolved | Cache freshness |
+## Hub identity vocabulary
 
-### YAML Fragment Rules
-- One field per line; JSON-quoted string values; bare booleans; omit null
-- Fixed order (canonical → reconciliation byte-matches)
-- Example (all fields present):
+| Key | Meaning |
+| --- | --- |
+| citekey | Requested/existing vault key, not automatically replaced by the BBT key; absent if none requested |
+| doi | Case-preserved normalized DOI, or empty string if absent |
+| citekeyProvisional | False only with unambiguous identity and exact CURRENT key equality |
+| zoteroID | String `libraryID:itemKey`, for example `1:AAAA2345` |
+| zoteroSelectURI | Parent-item selection URI |
+| zoteroStatus | resolved, not-found, unavailable or ambiguous |
+| zoteroCheckedAt | UTC ISO timestamp |
+
+Example fragment for an item registered under the requested current key (synthetic, not a full response):
+
 ```yaml
-citekey: doe-2024-intro
+citekey: "example2024Graph"
 citekeyProvisional: false
-doi: 10.1234/EXAMPLE
-zoteroID: 12345
-zoteroSelectURI: zotero://select/library/items/ABC123DEF456
-zoteroStatus: resolved
-zoteroCheckedAt: "2026-09-14T10:30:00Z"
+doi: "10.1234/example"
+zoteroID: "1:AAAA2345"
+zoteroSelectURI: "zotero://select/library/items/AAAA2345"
+zoteroStatus: "resolved"
+zoteroCheckedAt: "2026-09-14T10:30:00.000Z"
 ```
 
-## Offline Mode & Vault Paths
+Registered-but-unpinned is `resolved` plus `citekeyProvisional:true`.
+History can resolve an item but is not proof of a current PIN.
+To pin manually, add **`Citation Key: example2024Graph`** to the item's Zotero Extra field,
+explicitly refresh the index, then verify identity again. Never rename vault files to match a BBT default key.
+The plugin cannot pin items in Zotero.
 
-**Offline flag**: `--offline` enables vault-file-based index fallback (no Obsidian/plugin required). Actions that support it: `connection`, `info`, `resolve`, `identity`, `cites`, `reconcile`, `diagnostics`, `locate`.
+## Offline use
 
-**Vault path resolution** (when `--offline` or explicit `--vault-path` used):
-1. If `--vault-path ABS_PATH` given, use it directly
-2. Else scan `vault-dir/.obsidian/app.json` → `baseDir` property
-3. Fallback to home expansion if path is portable
-
-**File-based index**: Lives at `.cmds-zotero/index.json` in vault root. Schema version in `meta.schemaVersion`. Older versions trigger `reason: stale-index`.
-
-## Rules: Citekey, Resolution, & Provisional Flow
-
-### Citekey Convention
-- Lowercase, alphanumeric + hyphen: `[a-z0-9-]+`
-- Optional suffix for disambiguation: `key@v1`, `key@alt`
-- PDFs with same key: `key@pdf-1`, `key@pdf-2`
-- Invalid citekeys (uppercase, spaces, special chars) fail validation and block reconcile --apply
-
-### Resolution Matching (ranked)
-1. **citekey exact**: item.citekey === selector
-2. **title prefix**: item.title.toLowerCase().startsWith(selector.toLowerCase())
-3. **title tokens**: item.title splits on word boundaries; selector matches 2+ tokens in order
-4. **query**: full-text cross title, authors, DOI, arXiv ID, ISBN
-
-### Provisional Citekey Pattern
-When `identity` returns `citekeyProvisional: true`:
-1. User copies `citekey` value from response (e.g., `smith-2020-methodology`)
-2. User pastes into Zotero item's **Extra** field: `Obsidian Citekey Provisional: <citekey>`
-3. User saves in Zotero
-4. User runs `identity` again
-5. Response now shows `citekeyProvisional: false` (item is registered)
-6. Note's frontmatter auto-updates (if reconcile --apply was run)
-
-## Stale Index Behavior
-
-When index is older than `--if-older-than MINUTES` (or config default):
-- `refresh` returns `reason: stale` and `ok: false` unless `--allow-stale`
-- `info` returns `stale: true` + warning
-- `cites`, `resolve`, `identity`: return `ok: false, reason: stale-index` **unless** `--allow-stale` supplied
-- `reconcile`: returns verdicts marked `unchecked` (warning in summary)
-- Diagnostics: emits `index-stale` code
-
-## Exit Code & Reason Examples
-
-| Status | Exit | Reason | When |
-|--------|------|--------|------|
-| ✓ Resolved | 0 | (no reason) | Item matched uniquely |
-| ✗ Not found | 1 | not-found | No item matches selector |
-| ✗ Ambiguous | 1 | ambiguous | 2+ items match equally |
-| ✗ Connection failed | 1 | bbt-unreachable | BBT HTTP timeout/404 |
-| ✗ Offline + no cache | 1 | index-missing | --offline but no `.cmds-zotero/index.json` |
-| ✗ Stale index | 1 | stale-index | Index old, --allow-stale not given |
-| ✗ Arg error | 2 | (none) | Invalid flag, missing required arg |
-
-## Response Envelope
-
-All actions return JSON envelope:
-
-```json
-{
-  "apiVersion": 1 or 2,
-  "contract": 2,
-  "apiVersions": [1, 2],
-  "action": "resolve|identity|cites|...",
-  "vault": "vault-name",
-  "ok": true,
-  "reason": null,
-  "message": null,
-  "checkedAt": "2026-09-14T10:30:00Z",
-  "connection": {
-    "mode": "live|offline",
-    "obsidian": true|false,
-    "plugin": { "installed": true, "enabled": true, "version": "0.4.0" },
-    "bbt": { "installed": true, "http": "http://127.0.0.1:23119", "version": "14.0.0" },
-    "index": { "present": true, "path": ".cmds-zotero/index.json", "schemaVersion": 2 },
-    "git": { "installed": true, "remote": "https://github.com/...", "branch": "main" }
-  },
-  "…action-specific fields…": {}
-}
+```sh
+node ${CMDS_ZOTERO_ROOT}/scripts/ingest-ro.mjs --vault "Research" --vault-path /path/to/vault --offline --action identity --citekey example2024Graph --doi "10.1234/example"
+node ${CMDS_ZOTERO_ROOT}/scripts/ingest-ro.mjs --vault "Research" --offline --action cites --path "20. Wiki/25. Questions" --recursive
+node ${CMDS_ZOTERO_ROOT}/scripts/ingest-ro.mjs --vault "Research" --offline --action locate --citekey example2024Graph --quote "An exact quotation from the source"
 ```
 
-### Connection Object
-- **mode**: "live" (Obsidian reachable) or "offline" (file-based)
-- **obsidian**: boolean; presence does not require plugin
-- **plugin**: {installed, enabled, version} — bbexport-compatible fields
-- **bbt**: {installed, http, version}
-- **index**: {present, path, schemaVersion, ageMinutes, stale}
-- **git**: {installed, remote, branch, lastCommit, uncommittedChanges}
+Without `--vault-path`, the CLI resolves the name from the desktop Obsidian vault registry; duplicate names require an explicit path.
+The index defaults to `80. References/zotero-index.json`, overridden by plugin settings. Validate top-level `schemaVersion:2`.
+Offline connection probes only local BBT readiness. Other offline actions do not contact BBT or write files.
 
-## Offline Examples
+## Reconcile and privacy boundaries
 
-### Check if offline mode is available
-```bash
-cmds-zotero connection --vault my-vault --offline
-# Returns connection.mode: "offline" if vault-path is discoverable and index exists
-```
+Dry-run first. Apply is allowed only on actual paper hubs outside Raw Sources and writes exactly:
+`citekeyProvisional`, `zoteroID`, `zoteroSelectURI`, `zoteroStatus`, `zoteroCheckedAt`.
+It never writes citekey, DOI, body/S01, atom notes, raw sources or filenames.
+It refuses offline, stale/incomplete/invalid evidence, unreachable/unknown BBT, and enabled/unknown legacy state.
+Malformed existing keys or conflicting identities require human review, not silent replacement.
+YAML round-trip and concurrent-change guards can skip hand-formatted notes. No unconditional rollback or full-file CAS is promised.
+Repeated no-op applies do not churn timestamps. Always inspect applied/skipped/integrity outcomes.
 
-### Resolve item in offline mode
-```bash
-cmds-zotero resolve --vault my-vault --offline --citekey doe-2024
-# Falls back to .cmds-zotero/index.json; returns status from cached data
-```
+PDF page positions and printed labels are separate; open-pdf links use the ATTACHMENT key, not parent item key.
+Use only unambiguous verified matches for confirmed quote callout titles. Fuzzy or changed-source evidence needs review.
+`.cmds-zotero/pdf-text/` contains full paper text. Keep `.cmds-zotero/` and the configured index private and gitignored.
+Ignored files can still be tracked; untracking does not erase prior public history.
 
-### Scan citations without Obsidian
-```bash
-cmds-zotero cites --vault my-vault --vault-path /abs/path/to/vault --offline --path notes/
-# Reads files directly; no plugin needed
-```
-
-### Locate quotes in cached PDFs
-```bash
-cmds-zotero locate --vault my-vault --citekey doe-2024 --quote "epistemology" --offline
-# Searches .cmds-zotero/pdf-text/ cache; returns matches with page + locator
-```
-
-## Key Behaviors by Action
-
-- **refresh**: Live only; rebuilds index unless `--if-older-than` blocks it
-- **resolve**: Stateless; can run offline from cache; returns ranked matches + vaultNotes classification
-- **identity**: Like resolve + returns frontmatter YAML + S01 lines + pinInstruction + bibliography + PDF metadata
-- **cites**: Scans vault notes; returns citations array + referencesSection + diagnostics; respects stale-index warning
-- **locate**: Pure cache query (no API); extracts callouts from query citekey's PDF; returns page, locator, score, snippet
-- **pdf-text**: Live only; extracts PDF text to `.cmds-zotero/pdf-text/` with `--force` re-extract option
-- **reconcile**: Dry-run by default; --apply commits only 5 keys (citekeyProvisional, zoteroID, zoteroSelectURI, zoteroStatus, zoteroCheckedAt)
-- **diagnostics**: Union of resolved items, citations, identity mismatches, plugins, index state
-
-## Further Reading
-
-See `references/cli-contract-v2.md` for detailed endpoint specifications, request/response shapes, and error codes per action.
+See `references/cli-contract-v2.md` for the complete normative safety, limits, transport and transition contract.
