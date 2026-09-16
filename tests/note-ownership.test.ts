@@ -55,7 +55,7 @@ test("partitionOwnedNotes owns only marker-carrying notes inside the output fold
 		"References/Zotero/unreadable.md",
 	]);
 	assert.deepEqual(reads.sort(), ["References/Zotero/@koo2022 (copy).md", "References/Zotero/@koo2022.md", "References/Zotero/@lee2019.md", "References/Zotero/@park2021.md", "References/Zotero/unreadable.md"], "only resolved notes inside the output folder are read");
-	assert.equal(ownershipSummary(partition), "Owned: 2 · Linked but not owned: 6 (use Adopt in 0.5)");
+	assert.equal(ownershipSummary(partition), "Owned: 2 · Linked but not owned: 6 (not updated)");
 });
 
 test("partitionOwnedNotes with an empty output folder owns nothing and reads nothing", async () => {

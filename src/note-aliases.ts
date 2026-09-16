@@ -3,7 +3,8 @@
  * Evidence, strongest first: `zoteroID`, then `zoteroSelectURI`, then the ZotLit `zotero-key` (only while the index holds
  * exactly one library), then citekey equality against the current key or its history — and citekey evidence counts only
  * for notes whose basename starts with `@` or whose `type` is one of `ZOTERO_NOTE_TYPES`. Notes carrying a foreign identity
- * (Bookends, DEVONthink, any other `type`) are never claimed: Bookends auto-citekeys share the lastname+year shape of BBT keys.
+ * (`bookendsID`, any other `type`, or — on notes without a Zotero note type — a Bookends/DEVONthink link) are never
+ * claimed: Bookends auto-citekeys share the lastname+year shape of BBT keys.
  */
 import type { ZoteroIndexEntry } from "./types";
 import { ZOTERO_NOTE_TYPES } from "./agent/types";
@@ -56,15 +57,16 @@ function isZoteroType(type: string): boolean {
 }
 
 /**
- * True for notes that belong to another reference manager's convention: a `bookendsID`, a `bookends://` or
- * `x-devonthink-item://` link anywhere in the frontmatter, or a `type` outside `ZOTERO_NOTE_TYPES`.
+ * True for notes that belong to another reference manager's convention: a `bookendsID` or a `type` outside
+ * `ZOTERO_NOTE_TYPES` are hard markers; a `bookends://` or `x-devonthink-item://` link anywhere in the frontmatter counts
+ * only for notes without a Zotero note `type` (a typed hub or raw source may link its PDF through DEVONthink).
  */
 export function hasForeignIdentity(frontmatter: Frontmatter | undefined): boolean {
 	if (!frontmatter) return false;
 	const bookends = frontmatter.bookendsID;
 	if (bookends !== undefined && bookends !== null && bookends !== "") return true;
 	const type = typeOf(frontmatter);
-	if (type && !isZoteroType(type)) return true;
+	if (type) return !isZoteroType(type);
 	for (const value of Object.values(frontmatter)) {
 		for (const item of Array.isArray(value) ? value : [value]) if (typeof item === "string" && FOREIGN_LINK.test(item)) return true;
 	}

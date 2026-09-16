@@ -44,5 +44,5 @@ export async function partitionOwnedNotes(index: ZoteroIndex, notes: OwnershipNo
 
 /** One-line summary for the batch report. */
 export function ownershipSummary(partition: OwnedPartition): string {
-	return `Owned: ${partition.owned.length} · Linked but not owned: ${partition.linkedNotOwned.length} (use Adopt in 0.5)`;
+	return `Owned: ${partition.owned.length} · Linked but not owned: ${partition.linkedNotOwned.length} (not updated)`;
 }

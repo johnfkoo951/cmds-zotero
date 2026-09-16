@@ -72,9 +72,9 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 - **citekey 자동완성.** `[@` 뒤에 citekey·제목·저자·연도 일부를 입력합니다(공백은 `_`). Enter는 `[@citekey]`, Shift+Enter는 `@citekey`를 넣고, `[[` 안에서는 위키링크 형태로 완성합니다. 서제스터는 로컬 인덱스만 읽으며 캐시가 없으면 백그라운드 로드를 시작합니다. 트리거를 "At sign"으로 바꾸면 단어 시작의 `@` 뒤에서도 동작하고, "Off"로 끌 수 있습니다.
 - **참고문헌 사이드바**(`Open references sidebar`). 활성 노트의 `[@key]`, `@key`, `[[@key]]`를 프론트매터와 코드펜스를 제외하고 스캔해 문헌마다 한 번씩 BBT의 설정 스타일 참고문헌을 표시합니다. 미해결·중복 키는 이유와 함께 붉게 표시됩니다. 문헌노트·Zotero 항목·PDF 열기, 첫 인용 위치로 이동, "Copy bibliography"로 목록 복사가 가능합니다.
-- **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID` 또는 citekey로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
+- **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID`, select URI, ZotLit 키 또는 `@citekey` 파일명으로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
 - **Find notes citing a source**는 항목의 현재·이전 citekey를 볼트 전체에서 찾아 첫 인용 위치로 엽니다.
-- **Update all owned literature notes**는 이 플러그인이 소유한 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀을 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
+- **Update all owned literature notes**는 출력 폴더 안에서 소유권 마커를 가진 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀·연결됐지만 비소유를 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
 
 가져온 노트는 CMDS 콜아웃 레이아웃을 사용합니다: `[!Cite]`, `[!Abstract]`, 인라인 Dataview 필드를 담은 `[!md]`(역할별 저자, 저널, 권·호, 출판사, 쪽, DOI, ISBN, 컬렉션, 관련 문헌 `[[@citekey]]`), Zotero select URI와 `file://` 첨부 링크를 담은 `[!LINK]`, 그리고 `[!Highlight]`·`[!Image]`·`[!Note]` 주석 콜아웃. 하이라이트 본문은 `<mark class="cmds-zotero-hl-<color>">`로 감싸며 색상은 Zotero 팔레트에서 가장 가까운 색조입니다. 설정한 제목용 색상(기본 gray)의 하이라이트는 `#####` 제목이 됩니다. "Excluded tags"(기본 `obscite`)의 태그는 제외합니다. 프론트매터에는 identity 키와 함께 `zotero_title`, `zotero_author`, `zotero_year`, `zotero_journal`, `zotero_doi`, `zotero_url`, `zotero_tags`가 들어가며 생성 후에는 사용자 소유입니다.
 

@@ -237,10 +237,10 @@ test("classifyNotes matches hubs through citekey history and ZotLit notes throug
 	const ambiguousKey = classifyNotes(vault, zotlitOnly, park, {}, twoLibraries);
 	assert.equal(ambiguousKey.literatureNote, null);
 	assert.deepEqual(ambiguousKey.other.map(r => r.path), ["20. Wiki/@park2021adaptive.md"]);
-	// 0.5 R14: inside the output folder an untyped, `@`-less citekey match is still the plugin's own note.
+	// 0.5 R14: the output folder ranks a matched note as the literature note but is never citekey evidence.
 	const folder = classifyNotes(vault, zotlitOnly, park, {}, twoLibraries, { outputFolder: "/20. Wiki/" });
 	assert.equal(folder.literatureNote?.path, "20. Wiki/@park2021adaptive.md");
-	assert.deepEqual(folder.other.map(r => r.path), ["20. Wiki/park-summary.md"]);
+	assert.deepEqual(folder.other.map(r => r.path), [], "20. Wiki/park-summary.md (untyped, no @) stays unclaimed inside the output folder");
 	const twoOwned = [...notes, note("References/Zotero/@park2021adaptive (1).md", { type: "zotero", zoteroID: "1:AAAAAAA1" })];
 	const owned = classifyNotes(vault, twoOwned, park, {}, single);
 	assert.equal(owned.literatureNote?.path, "References/Zotero/@park2021adaptive (1).md");

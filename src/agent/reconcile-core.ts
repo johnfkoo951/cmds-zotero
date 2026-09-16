@@ -610,7 +610,8 @@ export function legacyLiteratureKeys(frontmatter: Record<string, unknown>): stri
 /**
  * A `type: zotero` literature note carrying pre-0.5 keys: listed for information only. Reconcile never classifies or
  * patches literature notes (their frontmatter is user-owned after creation), so the row is `unchecked`,
- * `skippedReason: not-paper-hub`, never proposal-eligible, and its only finding is `legacy-frontmatter-dialect`.
+ * `skippedReason: not-paper-hub`, never proposal-eligible, and its only finding is `legacy-frontmatter-dialect`
+ * (surfaced as a single aggregated diagnostic by `legacyDialectDiagnostic`, not per note).
  */
 function legacyLiteratureNote(note: NoteRecord, index: ZoteroIndex | null): ReconcileNote {
 	const keys = legacyLiteratureKeys(note.frontmatter ?? {});
@@ -720,9 +721,26 @@ export function noteDiagnostics(note: ReconcileNote): AgentDiagnostic[] {
 	}
 	for (const item of note.findings) {
 		if (item.code === "hub-attachment-missing") diagnostics.push(diagnostic("attachment-missing-for-hub", `${item.message} Hub: ${note.path}`, extra));
-		if (item.code === "legacy-frontmatter-dialect") diagnostics.push(diagnostic("legacy-frontmatter-dialect", `${item.message} Note: ${note.path}`, extra)); // 0.5 R14
 	}
 	return diagnostics;
+}
+
+// 0.5 R14
+/** Paths named in the aggregated `legacy-frontmatter-dialect` diagnostic; the rest are counted. */
+export const LEGACY_DIALECT_SAMPLE = 5;
+
+/**
+ * One informational diagnostic for all pre-0.5 literature notes (there is one per note in `notes`): every 0.3/0.4 note
+ * carries the dropped keys forever, so a per-note diagnostic would inflate `diagnostics`/`reconcile` payloads for a
+ * condition that has no remedy. `path` is the first sampled note; the message carries the count and a bounded sample.
+ */
+export function legacyDialectDiagnostic(notes: ReconcileNote[]): AgentDiagnostic | null {
+	const paths = notes.filter(note => note.type === "literature").map(note => note.path);
+	if (!paths.length) return null;
+	const sample = paths.slice(0, LEGACY_DIALECT_SAMPLE);
+	const rest = paths.length - sample.length;
+	const plural = paths.length === 1 ? "note carries" : "notes carry";
+	return diagnostic("legacy-frontmatter-dialect", `${paths.length} literature ${plural} pre-0.5 frontmatter keys; frontmatter is user-owned and is not rewritten. zoteroID remains the only identity key agents may rely on. Sample: ${sample.join(", ")}${rest ? ` (+${rest} more)` : ""}`, { path: sample[0] });
 }
 
 /**
@@ -749,6 +767,8 @@ export function reconcileNotes(notes: NoteRecord[], index: ZoteroIndex | null, v
 		results.push(result);
 		diagnostics.push(...noteDiagnostics(result));
 	}
+	const legacyDialect = legacyDialectDiagnostic(results); // 0.5 R14
+	if (legacyDialect) diagnostics.push(legacyDialect);
 	return { folders, scanned: { hubs, rawSources, parseErrors }, notes: results, summary: { hubs: summary }, diagnostics };
 }
 

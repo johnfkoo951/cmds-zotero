@@ -4,8 +4,8 @@
  * the entry citekey or its history; identifier hints (DOI, arXiv, case-insensitive citekey) match hubs and raw sources
  * even when the item is not in the index, so a not-found DOI still finds the existing hub. Citekey evidence follows the
  * `note-aliases` ladder (0.5 R14): notes carrying a foreign identity never match, and an `@`-less basename needs a Zotero
- * note `type` or the output folder. Ownership stays with `note-aliases`; the ZotLit `zotero-key` is read here only to
- * point `literatureNote` at that note.
+ * note `type`. Ownership stays with `note-aliases`; the ZotLit `zotero-key` is read here only to point `literatureNote`
+ * at that note, and the output folder only ranks literature notes.
  */
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { noteRef, type NoteRecord, type NoteRef, type VaultNotes } from "./types";
@@ -14,7 +14,7 @@ import { citekeyEvidenceAllowed, hasForeignIdentity, selectIdentity } from "../n
 
 export interface NoteHints { doi?: string; arxiv?: string; citekey?: string }
 export interface ClassifyOptions {
-	/** `settings.outputFolder`: plugin-owned literature notes live here even when their `type` differs. */
+	/** `settings.outputFolder`: ranks a matched literature note above ZotLit notes; it is not identity evidence. */
 	outputFolder?: string;
 }
 
@@ -135,8 +135,7 @@ function matches(note: NoteRecord, kind: NoteKind, m: Matcher): boolean {
 	if (m.entry && selectMatches(fm.zoteroSelectURI, m.entry)) return true;
 	// An `@<citekey>` basename is citekey evidence too (ZotLit-style notes carry no `citekey` key), as in `note-aliases`.
 	const citekey = noteCitekey(note) || (note.basename.startsWith("@") ? note.basename.slice(1) : "");
-	const citekeyAllowed = citekeyEvidenceAllowed(note.basename, fm) || underFolder(note.path, m.outputFolder);
-	if (citekeyAllowed && citekey && (m.keys.has(citekey) || m.keysCi.has(citekey.toLowerCase()))) return true;
+	if (citekeyEvidenceAllowed(note.basename, fm) && citekey && (m.keys.has(citekey) || m.keysCi.has(citekey.toLowerCase()))) return true;
 	if (kind === "hub" || kind === "raw") {
 		if (m.doi && noteDoi(note) === m.doi) return true;
 		if (kind === "hub" && m.arxiv && noteArxiv(note) === m.arxiv) return true;

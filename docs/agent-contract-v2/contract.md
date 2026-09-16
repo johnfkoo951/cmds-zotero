@@ -86,16 +86,22 @@ A literature note created by the plugin carries exactly `type: zotero` followed 
 - Pre-0.5 vintage: frontmatter is written once and is user-owned afterwards, so notes created by 0.3/0.4 keep
   `zotero-id`, `zotero-library-id`, `zoteroItemKey`, `zoteroLibraryID`, `zoteroLibraryType` (and `zoteroGroupID`).
   These keys are never rewritten, never read as identity, and `reconcile` lists such notes as `type: literature`
-  rows with the informational finding `legacy-frontmatter-dialect` (diagnostic severity `info`, never apply-eligible).
+  rows with the informational finding `legacy-frontmatter-dialect` (never apply-eligible). The rows are listed in
+  `notes` but not counted in `scanned` ({hubs, rawSources, parseErrors}). `reconcile` and `diagnostics` surface the
+  condition as one aggregated diagnostic per call (code `legacy-frontmatter-dialect`, severity `info`, `path` = the
+  first sampled note; the message carries the count and up to 5 sample paths), not one diagnostic per note.
 - Note identity ladder (note map, sidebars, "Update all", `vaultNotes`): `zoteroID`, then `zoteroSelectURI`, then
   `zotero-key` (single-library index only), then citekey/history equality — and citekey evidence counts only when the
   basename starts with `@` or `type` is one of `zotero`, `paper-hub`, `paper-analysis`, `raw-source`,
-  `literature-zotero` (or, for `vaultNotes`, the note lies in the output folder). An explicit identity that names an
-  item outside the index refuses the note rather than falling through. Notes carrying a foreign identity
-  (`bookendsID`, a `bookends://` or `x-devonthink-item://` link in frontmatter, or any other `type`) are never claimed:
-  Bookends auto-citekeys share the lastname+year shape of BBT keys.
+  `literature-zotero`; the output folder is never identity evidence. An explicit identity that names an item outside
+  the index refuses the note rather than falling through. Notes carrying a foreign identity are never claimed on
+  evidence weaker than `zoteroID`: a `bookendsID` or any other `type` is a hard marker, and a `bookends://` or
+  `x-devonthink-item://` link in frontmatter marks only notes without a Zotero note `type` (a typed hub or raw source
+  may link its PDF through DEVONthink and still resolves by citekey or DOI). Bookends auto-citekeys share the
+  lastname+year shape of BBT keys.
 - "Update all owned literature notes" treats a note as owned only when it resolves, lies inside the output folder and
-  carries the owner marker; other linked notes are counted once (`Linked but not owned: M`) and never trigger BBT.
+  carries the owner marker; other linked notes are counted once (`Linked but not owned: M (not updated)`) and never
+  trigger BBT.
 
 - The vault citekey is the requested/existing hub key, never implicitly the current index key.
   DOI-only identity responses without a vault key omit `frontmatter.citekey`.
@@ -137,7 +143,8 @@ and References lines name that cause. References output is deterministic and ret
 ## Reconcile transition contract
 
 Discovery is by frontmatter type; folders only narrow it. Raw sources are report-only.
-`type: zotero` literature notes appear only when they carry pre-0.5 keys (`legacy-frontmatter-dialect`, report-only).
+`type: zotero` literature notes appear only when they carry pre-0.5 keys (`legacy-frontmatter-dialect`, report-only;
+listed in `notes`, not counted in `scanned`).
 The Raw Sources root is never writable even if a file is mislabeled paper-hub.
 ID/URI/key/history/folder/DOI/arXiv can contribute identity evidence, but precedence never overrides a contradiction.
 Present-but-invalid fields retain their presence: null, empty strings, wrong types and duplicate keys are not absent.

@@ -1,7 +1,7 @@
 // 0.5 R14: `legacy-frontmatter-dialect` — literature notes carrying pre-0.5 keys are listed for information only.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { APPLY_ELIGIBLE_FINDINGS, DESYNC_FINDINGS, HUB_FINDINGS, legacyLiteratureKeys, noteDiagnostics, reconcileNotes, renderReport } from "../src/agent/reconcile-core";
+import { APPLY_ELIGIBLE_FINDINGS, DESYNC_FINDINGS, HUB_FINDINGS, LEGACY_DIALECT_SAMPLE, legacyDialectDiagnostic, legacyLiteratureKeys, noteDiagnostics, reconcileNotes, renderReport } from "../src/agent/reconcile-core";
 import { LEGACY_LITERATURE_KEYS, type NoteRecord } from "../src/agent/types";
 import { DIAGNOSTIC_CODES } from "../src/diagnostics";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../src/types";
@@ -49,7 +49,8 @@ test("reconcile lists a pre-0.5 literature note as an informational, never apply
 	assert.match(row.findings[0].message, /pre-0\.5 keys .* user-owned .* not rewritten/);
 	assert.deepEqual(result.summary.hubs.registeredConsistent, 1);
 	assert.deepEqual(result.diagnostics.map(d => [d.code, d.severity, d.path]), [["legacy-frontmatter-dialect", "info", "References/Zotero/@lee2019transfer.md"]]);
-	assert.deepEqual(noteDiagnostics(row).map(d => d.itemID), [lee.id]);
+	assert.match(result.diagnostics[0].message, /^1 literature note carries pre-0\.5 frontmatter keys; .* Sample: References\/Zotero\/@lee2019transfer\.md$/);
+	assert.deepEqual(noteDiagnostics(row), [], "the per-note row carries the finding; the diagnostic is aggregated per call");
 	assert.match(renderReport(result), /\| References\/Zotero\/@lee2019transfer\.md \| literature \| lee2019transfer \| unchecked \| legacy-frontmatter-dialect \| not-paper-hub \|/);
 });
 
@@ -64,4 +65,19 @@ test("folders narrow the literature rows and a missing index still reports the d
 	assert.equal(offline.notes[0].proposalEligible, false);
 	const untyped = reconcileNotes([note("x.md", { "zotero-id": lee.id })], INDEX, VAULT, OPTS);
 	assert.deepEqual(untyped.notes, [], "only type: zotero notes are inspected for the legacy dialect");
+	assert.deepEqual(untyped.diagnostics, []);
+});
+
+test("many pre-0.5 literature notes collapse into one aggregated diagnostic with a bounded sample", () => {
+	const many = Array.from({ length: LEGACY_DIALECT_SAMPLE + 3 }, (_, i) => note(`References/Zotero/@legacy-${String(i).padStart(2, "0")}.md`, { type: "zotero", zoteroID: lee.id, "zotero-id": lee.id }));
+	const result = reconcileNotes([hub, ...many], INDEX, VAULT, OPTS);
+	assert.equal(result.notes.filter(n => n.type === "literature").length, many.length, "one row per note");
+	assert.equal(result.diagnostics.filter(d => d.code === "legacy-frontmatter-dialect").length, 1, "one diagnostic per call");
+	const aggregate = result.diagnostics.find(d => d.code === "legacy-frontmatter-dialect");
+	assert.equal(aggregate?.severity, "info");
+	assert.equal(aggregate?.path, "References/Zotero/@legacy-00.md");
+	assert.match(aggregate?.message ?? "", new RegExp(`^${many.length} literature notes carry pre-0\\.5 frontmatter keys;`));
+	assert.match(aggregate?.message ?? "", /Sample: References\/Zotero\/@legacy-00\.md, References\/Zotero\/@legacy-01\.md, References\/Zotero\/@legacy-02\.md, References\/Zotero\/@legacy-03\.md, References\/Zotero\/@legacy-04\.md \(\+3 more\)$/);
+	assert.equal(legacyDialectDiagnostic([result.notes[0]]), null, "hub rows alone produce no aggregate");
+	assert.equal(legacyDialectDiagnostic(result.notes.slice(1, 2))?.message.includes("+"), false, "no remainder suffix below the sample size");
 });

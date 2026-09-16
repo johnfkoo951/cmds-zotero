@@ -79,6 +79,20 @@ test("notes carrying a foreign identity are never claimed by citekey or ZotLit k
 	assert.equal(noteIdentity("@koo2022", { zoteroID: koo.id, type: "bookends" }, single), koo.id, "an explicit zoteroID is the strongest evidence and still wins");
 });
 
+test("a Bookends or DEVONthink link marks only notes without a Zotero note type", () => {
+	const devon = "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000000";
+	for (const type of ZOTERO_NOTE_TYPES) {
+		const fm = { type, citekey: "koo2022", source: devon };
+		assert.equal(hasForeignIdentity(fm), false, type);
+		assert.equal(noteIdentity("koo-note", fm, single), koo.id, `${type} + DEVONthink link is still claimed by citekey`);
+		assert.equal(noteIdentity("zotlit", { type, "zotero-key": "KOOAAAA1", pdf: `bookends://sonnysoftware.com/1` }, single), koo.id, `${type} + Bookends link still resolves by zotero-key`);
+	}
+	assert.equal(noteIdentity("koo-note", { type: "raw-source", citekey: "koo2022", bookendsID: "1" }, single), null, "bookendsID stays a hard marker on typed notes");
+	assert.equal(hasForeignIdentity({ citekey: "koo2022", source: devon }), true, "untyped: the link marks the note");
+	assert.equal(noteIdentity("@koo2022", { source: devon }, single), null, "untyped: not claimed even with an @ basename");
+	assert.equal(noteIdentity("koo2022", { citekey: "koo2022", source: devon }, single), null);
+});
+
 test("reassigned aliases stay refused across the new ladder", () => {
 	const moved = entry({ id: "1:NEWAAAA1", itemKey: "NEWAAAA1", citekey: "new2024", citekeyHistory: ["koo2022"] });
 	const lookup = buildAliasIndex([koo, moved]);
@@ -100,12 +114,18 @@ test("classifyNotes follows the same ladder: select URI matches, foreign notes a
 		note("30. Literature/other-uri.md", { zoteroSelectURI: "zotero://select/library/items/LEEAAAA1" }),
 		note("20. Literature Notes/koo2022.md", { citekey: "koo2022", bookendsID: "77" }),
 		note("20. Literature Notes/koo2022-devon.md", { type: "zotero", citekey: "koo2022", link: "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000000" }),
+		note("20. Literature Notes/untyped-devon.md", { citekey: "koo2022", link: "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000000" }),
+		note("10. Raw Sources/koo-raw.md", { type: "raw-source", doi: "10.1000/koo.2022", pdf: "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000001" }),
 		note("20. Wiki/summary.md", { citekey: "koo2022" }),
 		note("20. Wiki/@koo2022.md", {}),
 	];
-	const result = classifyNotes("Vault", notes, koo, {}, index);
+	const result = classifyNotes("Vault", notes, koo, { doi: koo.doi }, index);
 	assert.equal(result.hub?.path, "40. Paper Analyses/koo2022/koo2022.md");
+	assert.deepEqual(result.raw.map(r => r.path), ["10. Raw Sources/koo-raw.md"], "a typed raw source linking its PDF through DEVONthink still matches by DOI");
+	assert.equal(result.literatureNote?.path, "20. Literature Notes/koo2022-devon.md", "a type: zotero note with a DEVONthink link is still the literature note");
 	assert.deepEqual(result.other.map(r => r.path), ["20. Wiki/@koo2022.md", "30. Literature/by-uri.md"]);
-	assert.equal(result.literatureNote, null);
 	assert.deepEqual(result.warnings, []);
+	const folder = classifyNotes("Vault", notes, koo, {}, index, { outputFolder: "20. Wiki" });
+	assert.equal(folder.literatureNote?.path, "20. Literature Notes/koo2022-devon.md");
+	assert.deepEqual(folder.other.map(r => r.path), ["20. Wiki/@koo2022.md", "30. Literature/by-uri.md"], "the output folder is not citekey evidence: summary.md stays unclaimed");
 });
