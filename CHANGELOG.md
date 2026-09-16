@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 — Development, unreleased
+
+Note-writer correctness (literature note rendering; managed section IDs unchanged, existing notes update in place):
+
+- **No more `<…>` data loss in plain-text fields.** Titles, creators, tags, DOIs, URLs and the bibliography go through `plainText()` (control-character filtering and Markdown escaping only); HTML tag stripping and entity decoding apply only to the abstract and Zotero child notes. SICI-style DOIs such as `10.1016/S0378-7206(98)00080-9` and titles containing `<B>` survive intact.
+- **DOI, URL and citekey values are written verbatim** when they match strict patterns, so Obsidian autolinks and Dataview values no longer carry `\_` or `\(`; `%20` stays intact and BBT's double-encoded `%25XX` DOI URLs are decoded when the result is still a valid URL. In the `[!Cite]` text, `https?://` tokens become `<url>` autolinks with minimal percent-encoding; surrounding prose is escaped as before.
+- **New annotation blocks are spliced after the last existing annotation block** (else after `## Annotations`, else at end of file), so user prose written below the annotation list stays below it.
+- **YAML `tags` mirror Obsidian-valid slugs** (whitespace to `-`, characters outside letters/numbers/`_`/`/`/`-` dropped, empty and all-numeric tags skipped, deduped); `zotero_tags` and the `**Tags**::` field keep the raw Zotero tags.
+- **Empty sticky notes** render `*(empty note)*` instead of an empty `[!Note]` callout.
+- **`**Related**::` in `[!md]` is renamed `**Zotero related**::` and is always present** (empty when the item has no relations) so the metadata hash does not change merely because relations appear; the `[!Synth]` `**Related**::` line stays user-owned.
+- **Obsidian's automatic link updates are not reported as user edits.** Section comparison accepts a body that differs from the fresh render only by Markdown/wiki link targets (moved image folder, renamed note); stored hashes stay raw.
+- Page labels: "Update all owned literature notes" re-renders the pre-0.3.0 `p. -` callouts with the PDF page fallback introduced in 0.3.0; no further change.
+
 ## 0.3.0 — Development, unreleased
 
 Feature parity pass after reviewing ZotLit 2.1.4, Zotero Integration 3.2.1, Pandoc Reference List, and Zotero-side add-ons; decisions are recorded in `docs/plugin-landscape-2026-09.md`.
