@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 — Development, unreleased
+
+Note-writer correctness (literature note rendering; managed section IDs unchanged, so the managed sections of existing notes update in place — frontmatter of existing notes stays user-owned and is never rewritten):
+
+- **No more `<…>` data loss in plain-text fields.** Titles, creators, tags, DOIs, URLs and the bibliography go through `plainText()` (control-character filtering and Markdown escaping only); HTML tag stripping and entity decoding apply only to the abstract and Zotero child notes. SICI-style DOIs such as `10.1016/S0378-7206(98)00080-9` and titles containing `<B>` survive intact. Trade-off: Zotero rich-text markup in titles and annotation comments (`<i>`, `<sup>`, `<span class="nocase">`) is now shown literally as escaped text instead of being stripped; converting that small tag set to Markdown is a possible follow-up.
+- **DOI, URL and citekey values are written verbatim** when they match strict patterns, so Obsidian autolinks and Dataview values no longer carry `\_` or `\(`; `%20` stays intact. A DOI is strict when it has no whitespace and none of `` [ ] * | ` `` and `<` does not start an HTML tag (SICI `<799::AID>` still qualifies); anything else falls back to single-line escaped text. BBT's double-encoded `%25XX` sequences are decoded only in DOI URLs (`doi.org` host or a DOI-prefixed path) and only when the result is still a valid URL; other URLs keep a literal `%25`. In the `[!Cite]` text, `https?://` tokens become `<url>` autolinks with minimal percent-encoding and trailing punctuation or an unbalanced closing `)`/`]` left outside the link; surrounding prose is escaped as before.
+- **New annotation blocks are spliced after the last existing annotation block** (else after `## Annotations`, else at end of file), so user prose written below the annotation list stays below it.
+- **YAML `tags` mirror Obsidian-valid slugs** on newly created notes only (whitespace to `-`, characters outside letters/numbers/`_`/`/`/`-` dropped, repeated `/` collapsed, leading/trailing `/` and `-` trimmed, empty and all-numeric tags skipped, deduped); `zotero_tags` and the `**Tags**::` field keep the raw Zotero tags. Existing notes keep their frontmatter as is.
+- **Empty sticky notes** render `*(empty note)*` instead of an empty `[!Note]` callout.
+- **`**Related**::` in `[!md]` is renamed `**Zotero related**::` and the key is always present** (empty when the item has no relations), so the appearance of relations changes the field value rather than the callout layout; the `[!Synth]` `**Related**::` line stays user-owned.
+- **Obsidian's automatic link updates are not reported as user edits.** Section comparison accepts a body that differs from the fresh render only by Markdown/wiki link targets (moved image folder, renamed note, including folders with parentheses such as `84. References (Zotero)/images`); stored hashes stay raw. Consequence: link targets inside managed sections are plugin-owned and are regenerated on update — retarget by moving the file rather than editing the link.
+- No change: page-label rendering (`p. -` placeholders fall back to the PDF page position since 0.3.0).
+
 ## 0.3.0 — Development, unreleased
 
 Feature parity pass after reviewing ZotLit 2.1.4, Zotero Integration 3.2.1, Pandoc Reference List, and Zotero-side add-ons; decisions are recorded in `docs/plugin-landscape-2026-09.md`.
