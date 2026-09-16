@@ -28,7 +28,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Literature index").setHeading();
 		new Setting(containerEl).setName("Index path").setDesc("Vault-relative JSON path. A validated snapshot replaces the previous file only after collection succeeds.")
 			.addText(text => text.setValue(draft.zoteroIndexPath).onChange(value => { draft.zoteroIndexPath = value.trim(); }));
-		new Setting(containerEl).setName("Maximum index age").setDesc("Minutes before a query refreshes the snapshot (1–10080). Refresh is a full scan, not a server-side incremental cursor.")
+		new Setting(containerEl).setName("Maximum index age").setDesc("Minutes before a query refreshes the snapshot (1–10080). Refresh is a full scan, not a server-side incremental cursor. The saved index is still used for reading when Zotero is unreachable; refresh is explicit.")
 			.addText(text => text.setValue(String(draft.indexMaxAgeMinutes)).onChange(value => { draft.indexMaxAgeMinutes = Number(value); }));
 		new Setting(containerEl).setName("Parallel requests").setDesc("Bounded attachment request concurrency (1–8).")
 			.addText(text => text.setValue(String(draft.concurrency)).onChange(value => { draft.concurrency = Number(value); }));

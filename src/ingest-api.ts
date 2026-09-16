@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import type { BbtService } from "./bbt";
-import { resolveInIndex, type IndexService } from "./index-service";
+import { IndexRefusalError, resolveInIndex, type IndexService, type RefreshOutcome } from "./index-service";
 import type { ZoteroIndex } from "./types";
 import type { VaultLinks } from "./vault-links";
 import { ACTION_API_VERSION, AGENT_ACTIONS, runAction, validateActionRequest, type ActionHost, type AgentAction, type ResolveRequest } from "./agent/actions";
@@ -26,6 +26,7 @@ export class IngestAPI {
 	private jobs = new Map<string, IngestJob>();
 	private sequence = 0;
 	private activeRequests = 0;
+	private activeWrites = 0;
 	private alive = true;
 
 	constructor(
@@ -37,7 +38,15 @@ export class IngestAPI {
 		private hostFactory?: ActionHostFactory,
 	) {}
 
-	get busy(): boolean { return this.activeRequests > 0; }
+	/** True only while a refresh or a writing job is active; read-only work never blocks reconfiguration. */
+	get busy(): boolean { return this.activeWrites > 0; }
+	/** Every in-flight request, reads included. */
+	get activeCount(): number { return this.activeRequests; }
+
+	private static writes(action: IngestAction, request: unknown): boolean {
+		if (action === "refresh" || action === "pdf-text") return true;
+		return action === "reconcile" && (request as { apply?: unknown }).apply === true;
+	}
 
 	private prune(now = Date.now()): void {
 		for (const [id, job] of this.jobs) {
@@ -54,14 +63,16 @@ export class IngestAPI {
 		if (this.jobs.size >= MAX_JOBS) throw new Error("Too many active ingest requests.");
 		const id = `${Date.now()}-${++this.sequence}`;
 		this.jobs.set(id, { state: "pending", createdAt: new Date().toISOString() });
+		const writes = IngestAPI.writes(action, request);
 		this.activeRequests++;
+		if (writes) this.activeWrites++;
 		void this.execute(action, request).then(result => {
 			if (!this.alive || !this.jobs.has(id)) return;
 			this.jobs.set(id, { ...this.jobs.get(id)!, state: "completed", result, finishedAt: new Date().toISOString() });
 		}, error => {
 			if (!this.alive || !this.jobs.has(id)) return;
 			this.jobs.set(id, { ...this.jobs.get(id)!, state: "failed", error: error instanceof Error ? error.message : "Ingest request failed.", finishedAt: new Date().toISOString() });
-		}).finally(() => { this.activeRequests--; });
+		}).finally(() => { this.activeRequests--; if (writes) this.activeWrites--; });
 		return id;
 	}
 
@@ -78,14 +89,22 @@ export class IngestAPI {
 		this.jobs.clear();
 	}
 
-	async ensureIndex(force = false): Promise<{ apiVersion: 1; vault: string; index: ZoteroIndex }> {
+	/**
+	 * Loads or refreshes the index and publishes it. A non-forced request returns the newest validated snapshot with
+	 * `reason: "stale-fallback"` and `error` when collection is impossible; a forced request throws instead.
+	 */
+	async ensureIndex(force = false): Promise<{ apiVersion: 1; vault: string } & Omit<RefreshOutcome, "index"> & { index: ZoteroIndex }> {
 		this.activeRequests++;
+		if (force) this.activeWrites++;
 		try {
-			const index = await this.index.get(force);
-			await this.onIndex(index);
-			return { apiVersion: 1, vault: this.app.vault.getName(), index };
-		} finally { this.activeRequests--; }
+			const outcome = await this.index.refresh({ force });
+			await this.onIndex(outcome.index);
+			return { apiVersion: 1, vault: this.app.vault.getName(), ...outcome };
+		} finally { this.activeRequests--; if (force) this.activeWrites--; }
 	}
+
+	/** The newest validated snapshot without contacting BBT, or null; never publishes or refreshes. */
+	peekIndex(): Promise<ZoteroIndex | null> { return this.index.peek(); }
 
 	async connection(): Promise<{ apiVersion: 1; vault: string; capabilities: { zotero: string; betterbibtex: string }; [key: string]: unknown }> {
 		if (this.hostFactory) return await this.execute("connection", {}) as never;
@@ -135,7 +154,8 @@ export class IngestAPI {
 		catch (error) {
 			const message = error instanceof Error ? error.message : "Agent action failed.";
 			let reason: FailureReason = action === "reconcile" ? "apply-failed" : "invalid-request";
-			if (/64 MiB|too large/i.test(message)) reason = "pdf-too-large";
+			if (error instanceof IndexRefusalError) reason = error.reason;
+			else if (/64 MiB|too large/i.test(message)) reason = "pdf-too-large";
 			else if (/PDF|pdf\.js|extraction/i.test(message)) reason = "pdf-invalid";
 			const failure = buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, now, { reason, message });
 			return { ...failure, ...(ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {}) };

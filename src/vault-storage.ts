@@ -42,6 +42,18 @@ export async function ensureDirectory(app: App, filePath: string): Promise<void>
 }
 
 export const CMDS_DIR = ".cmds-zotero";
+export const BACKUP_DIR = `${CMDS_DIR}/backups`;
+/** Backups written by this plugin: `index-<epoch ms>-<uuid>.json`. Anything else in the directory is never touched. */
+export const BACKUP_NAME = /^index-(\d{1,16})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/;
+export const BACKUPS_KEPT = 3;
+
+/** Names of the plugin's own backups that fall outside the newest `keep`; `protect` is always kept. Pure, deterministic. */
+export function staleBackups(names: string[], keep = BACKUPS_KEPT, protect?: string): string[] {
+	const own = names.filter(name => BACKUP_NAME.test(name) && name !== protect)
+		.sort((left, right) => Number(BACKUP_NAME.exec(right)![1]) - Number(BACKUP_NAME.exec(left)![1]) || right.localeCompare(left));
+	const slots = protect && names.includes(protect) ? keep - 1 : keep;
+	return own.slice(Math.max(slots, 0));
+}
 
 /** The plugin's private directory holds sensitive caches; it is always gitignored by the plugin itself (idempotent). */
 export async function ensureCmdsIgnore(app: App): Promise<void> {
@@ -85,12 +97,14 @@ export class VaultIndexStorage implements IndexStorage {
 		const token = randomUUID();
 		const temp = `${this.indexPath}.${token}.tmp`;
 		const adapter = this.app.vault.adapter;
+		let backupName: string | undefined;
 		try {
 			await adapter.write(temp, content);
 			if (await adapter.read(temp) !== content) throw new Error("Index staging verification failed.");
 			if (current !== null) {
 				await ensureCmdsIgnore(this.app);
-				const backup = `.cmds-zotero/backups/index-${Date.now()}-${token}.json`;
+				backupName = `index-${Date.now()}-${token}.json`;
+				const backup = `${BACKUP_DIR}/${backupName}`;
 				await assertVaultBoundary(this.app, backup);
 				await ensureDirectory(this.app, backup);
 				await adapter.write(backup, current);
@@ -106,5 +120,21 @@ export class VaultIndexStorage implements IndexStorage {
 		} finally {
 			if (await adapter.exists(temp)) await adapter.remove(temp);
 		}
+		if (backupName !== undefined) await this.pruneBackups(backupName);
+	}
+
+	/** Keeps the newest `BACKUPS_KEPT` plugin-owned backups after a successful replacement; foreign files are never deleted. */
+	private async pruneBackups(protect: string): Promise<void> {
+		const adapter = this.app.vault.adapter;
+		try {
+			await assertVaultBoundary(this.app, BACKUP_DIR);
+			if (!(await adapter.exists(BACKUP_DIR))) return;
+			const names = (await adapter.list(BACKUP_DIR)).files.map(file => file.split("/").pop() ?? file);
+			for (const name of staleBackups(names, BACKUPS_KEPT, protect)) {
+				const target = `${BACKUP_DIR}/${name}`;
+				await assertVaultBoundary(this.app, target);
+				await adapter.remove(target);
+			}
+		} catch { /* Pruning is best effort: a leftover backup is harmless, a failed refresh is not. */ }
 	}
 }

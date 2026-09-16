@@ -2,14 +2,16 @@ import { ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf, debounce, setIcon
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
 import { scanCitations } from "../citations/scan";
+import { formatIndexAge } from "../index-service";
 import { markdownLink } from "../uris";
 
 export const VIEW_TYPE_REFERENCES = "cmds-zotero-references";
 
+/** `unchecked`: no index snapshot is loaded, so the row makes no claim about the citekey. */
 interface ReferenceRow {
 	citekey: string;
 	line: number;
-	status: "resolved" | "ambiguous" | "not-found";
+	status: "resolved" | "ambiguous" | "not-found" | "unchecked";
 	entry?: ZoteroIndexEntry;
 	candidates?: ZoteroIndexEntry[];
 }
@@ -47,6 +49,7 @@ export class ReferencesView extends ItemView {
 
 	private resolveRows(text: string): ReferenceRow[] {
 		const entries = this.plugin.cachedEntries();
+		const loaded = entries.length > 0;
 		const byKey = new Map<string, ZoteroIndexEntry[]>();
 		for (const entry of entries) for (const alias of new Set([entry.citekey, ...entry.citekeyHistory])) (byKey.get(alias) ?? byKey.set(alias, []).get(alias))?.push(entry);
 		const rows: ReferenceRow[] = [];
@@ -57,9 +60,17 @@ export class ReferencesView extends ItemView {
 			const matches = byKey.get(occurrence.citekey) ?? [];
 			if (matches.length === 1) rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "resolved", entry: matches[0] });
 			else if (matches.length > 1) rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "ambiguous", candidates: matches });
-			else rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "not-found" });
+			else rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: loaded ? "not-found" : "unchecked" });
 		}
 		return rows;
+	}
+
+	/** Header count with the snapshot age when it is stale; "index not loaded" when no snapshot is loaded. */
+	private headerText(): string {
+		const count = `${this.rows.length} reference${this.rows.length === 1 ? "" : "s"}`;
+		if (!this.plugin.cachedEntries().length) return `${count} · index not loaded`;
+		if (this.plugin.cachedIndexStale()) return `${count} · index ${formatIndexAge(this.plugin.cachedIndexAgeMinutes())} old`;
+		return count;
 	}
 
 	async render(): Promise<void> {
@@ -75,16 +86,14 @@ export class ReferencesView extends ItemView {
 		if (generation !== this.generation) return;
 		header.createEl("div", { cls: "cmds-zotero-sidebar-title", text: file.basename });
 		const toolbar = header.createDiv({ cls: "cmds-zotero-sidebar-toolbar" });
-		const count = toolbar.createSpan({ text: `${this.rows.length} reference${this.rows.length === 1 ? "" : "s"}` });
+		toolbar.createSpan({ text: this.headerText() });
 		const copy = toolbar.createEl("button", { text: "Copy bibliography", attr: { "aria-label": "Copy the resolved bibliography as text" } });
 		copy.addEventListener("click", () => { void this.copyBibliography(); });
 		const refresh = toolbar.createEl("button", { attr: { "aria-label": "Refresh references" } });
 		setIcon(refresh, "refresh-cw");
-		refresh.addEventListener("click", () => { void this.plugin.warmIndex(true); this.refresh(); });
-		if (!this.plugin.cachedEntries().length) {
-			count.setText("Index not loaded");
-			void this.plugin.warmIndex();
-		}
+		refresh.addEventListener("click", () => { void this.plugin.warmIndex(true).then(() => { this.refresh(); }); });
+		// At most one warm-up per render generation; the plugin backs off after a failure, so this never re-hits BBT per render.
+		if ((!this.plugin.cachedEntries().length || this.plugin.cachedIndexStale()) && !this.plugin.warmBackoffActive()) void this.plugin.warmIndex();
 		const list = container.createEl("ol", { cls: "cmds-zotero-reference-list" });
 		if (!this.rows.length) container.createEl("p", { cls: "setting-item-description", text: "No [@citekey], @citekey, or [[@citekey]] citations found." });
 		for (const row of this.rows) this.renderRow(list.createEl("li", { cls: `cmds-zotero-reference cmds-zotero-reference-${row.status}` }), row, generation);
@@ -105,6 +114,10 @@ export class ReferencesView extends ItemView {
 			this.action(actions, "link", "Copy Zotero link", () => this.plugin.copyLink(entry.title, entry.zoteroSelectURI));
 		} else if (row.status === "ambiguous") {
 			text.setText(`@${row.citekey} matches ${row.candidates?.length ?? 0} items across libraries. Change the citekey in Zotero or narrow the library.`);
+		} else if (row.status === "unchecked") {
+			text.setText(`@${row.citekey} — index not loaded; refresh to check`);
+		} else if (this.plugin.cachedIndexStale()) {
+			text.setText(`@${row.citekey} is not in the saved index (${formatIndexAge(this.plugin.cachedIndexAgeMinutes())} old); refresh to confirm.`);
 		} else {
 			text.setText(`@${row.citekey} is not in the literature index. Refresh the index or check the key.`);
 		}

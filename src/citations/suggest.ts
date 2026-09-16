@@ -28,7 +28,8 @@ export class CitekeySuggest extends EditorSuggest<ZoteroIndexEntry> {
 
 	getSuggestions(context: EditorSuggestContext): ZoteroIndexEntry[] {
 		const entries = this.plugin.cachedEntries();
-		if (!entries.length) { void this.plugin.warmIndex(); return []; }
+		// Empty means "not loaded", never "no matches": warm up (peek-first, no BBT call while backing off) and offer nothing yet.
+		if (!entries.length) { if (!this.plugin.warmBackoffActive()) void this.plugin.warmIndex(); return []; }
 		return entries.map(entry => ({ entry, score: matchScore(entry, context.query) })).filter(item => item.score > 0)
 			.sort((a, b) => b.score - a.score || a.entry.citekey.localeCompare(b.entry.citekey)).slice(0, 30).map(item => item.entry);
 	}

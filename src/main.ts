@@ -1,6 +1,6 @@
 import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TFile, parseYaml, stringifyYaml } from "obsidian";
 import { BbtService } from "./bbt";
-import { IndexService } from "./index-service";
+import { IndexRefusalError, IndexService, describeRefreshFailure, formatIndexAge, type CollectPrecondition } from "./index-service";
 import { ImportService } from "./importer";
 import { IngestAPI } from "./ingest-api";
 import type { ActionHost, AgentAction, PdfTextRequest, RefreshRequest } from "./agent/actions";
@@ -28,6 +28,11 @@ import { ReferencesView, VIEW_TYPE_REFERENCES } from "./views/references-view";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "./views/annotations-view";
 import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 
+const LEGACY_PLUGIN_ID = "cmds-link-zotero";
+const LEGACY_PLUGIN_MESSAGE = "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing.";
+/** After a failed background refresh, UI warm-ups return immediately for this long instead of re-hitting BBT. */
+const WARM_BACKOFF_MS = 60_000;
+
 export default class CMDSZoteroPlugin extends Plugin {
 	settings!: CmdsZoteroSettings;
 	bbt!: BbtService;
@@ -40,7 +45,11 @@ export default class CMDSZoteroPlugin extends Plugin {
 	private mapTimer: number | undefined;
 	private bibliographyCache = new Map<string, string>();
 	private bibliographyFlights = new Map<string, Promise<string>>();
-	private warming: Promise<void> | null = null;
+	private warming: { promise: Promise<void>; force: boolean } | null = null;
+	private warmFailedUntil = 0;
+	/** Index generation (generatedAt, or "none") for which the offline Notice was already shown. */
+	private noticedGeneration: string | null = null;
+	private publish!: (index: ZoteroIndex) => Promise<void>;
 	private lastView: MarkdownView | null = null;
 	private pdfText!: PdfTextService;
 
@@ -98,11 +107,19 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.scheduleMap(); }));
 		this.registerEvent(this.app.vault.on("rename", () => this.scheduleMap()));
 		this.registerEvent(this.app.vault.on("delete", () => this.scheduleMap()));
+		void this.warmIndex();
+	}
+
+	/** True when the legacy plugin that shares the index path is enabled; null when the plugin registry is unavailable. */
+	private legacyPluginEnabled(): boolean | null {
+		const enabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
+		return enabled ? enabled.has(LEGACY_PLUGIN_ID) : null;
 	}
 
 	private configure(): void {
 		this.bbt = new BbtService(this.settings);
-		const indexService: IndexService = new IndexService(this.bbt, new VaultIndexStorage(this.app, this.settings.zoteroIndexPath, () => this.active && this.index === indexService), () => this.settings.indexMaxAgeMinutes);
+		const canCollect: CollectPrecondition = () => this.legacyPluginEnabled() === true ? { ok: false, reason: "legacy-plugin-enabled", message: LEGACY_PLUGIN_MESSAGE } : { ok: true };
+		const indexService: IndexService = new IndexService(this.bbt, new VaultIndexStorage(this.app, this.settings.zoteroIndexPath, () => this.active && this.index === indexService), () => this.settings.indexMaxAgeMinutes, canCollect);
 		this.index = indexService;
 		const links: VaultLinks = new VaultLinks(this.app, () => this.settings, () => this.active && this.links === links);
 		this.links = links;
@@ -115,6 +132,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			this.lastIndex = index;
 			if (changed) { this.bibliographyCache.clear(); await this.links.publish(index); this.refreshViews(); }
 		};
+		this.publish = onIndex;
 		this.service = new IngestAPI(this.app, this.bbt, this.index, this.links, onIndex, (action, request, now) => this.agentHost(action, request, now, onIndex, indexService, pdfText));
 	}
 
@@ -126,11 +144,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 		const indexExists = await adapter.exists(this.settings.zoteroIndexPath);
 		const root = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
 		const bbtInfo = action === "connection" ? await this.bbt.capabilities().then(value => ({ reachable: true, zotero: value.zotero, betterbibtex: value.betterbibtex }), error => ({ reachable: false, error: error instanceof Error ? error.message : "BBT unreachable" })) : { reachable: null };
-		const enabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
 		const connection = buildConnection({
 			mode: "live", obsidian: "ok", pluginVersion: this.manifest.version, pluginApiVersions: [1, 2], pluginEnabled: true, bbt: bbtInfo,
 			index: { source: index ? "plugin" : "none", path: this.settings.zoteroIndexPath, generatedAt: index?.generatedAt ?? null, count: index?.count ?? null, complete: index?.complete ?? null, schemaVersion: index?.schemaVersion ?? null },
-			maxAgeMinutes: this.settings.indexMaxAgeMinutes, legacyPluginEnabled: enabled ? enabled.has("cmds-link-zotero") : null,
+			maxAgeMinutes: this.settings.indexMaxAgeMinutes, legacyPluginEnabled: this.legacyPluginEnabled(),
 			git: root ? await probeGit(root, this.settings.zoteroIndexPath) : null, now,
 		});
 		const host: ActionHost = {
@@ -159,8 +176,14 @@ export default class CMDSZoteroPlugin extends Plugin {
 		};
 		host.refresh = async (refresh: RefreshRequest) => {
 			const outcome = await indexToken.refresh({ force: refresh.ifOlderThanMinutes === undefined, ...(refresh.ifOlderThanMinutes ? { ifOlderThanMs: refresh.ifOlderThanMinutes * 60000 } : {}) });
+			const { reason } = outcome;
+			// The agent refresh action is an explicit publication: a snapshot that could not be revalidated is a failure, not a result.
+			if (reason === "stale-fallback") {
+				const message = outcome.error ?? "The index could not be refreshed.";
+				throw outcome.failure ? new IndexRefusalError(outcome.failure, message) : new Error(message);
+			}
 			await onIndex(outcome.index);
-			return { host: await this.agentHost("info", {}, new Date(), onIndex, indexToken, pdfToken), refreshed: outcome.refreshed, reason: outcome.reason, ageMinutesBefore: outcome.ageMinutesBefore };
+			return { host: await this.agentHost("info", {}, new Date(), onIndex, indexToken, pdfToken), refreshed: outcome.refreshed, reason, ageMinutesBefore: outcome.ageMinutesBefore };
 		};
 		host.extractPdf = async (target, pdfRequest: PdfTextRequest) => {
 			if (!target.localPath) throw new Error("The PDF file is unavailable.");
@@ -179,8 +202,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 				const current = this.app.vault.getAbstractFileByPath(file.path);
 				if (!(current instanceof TFile)) return Promise.reject(new Error(`Hub not found: ${file.path}`));
 				return this.app.fileManager.processFrontMatter(current, (fm: Record<string, unknown>) => {
-					const currentEnabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
-					if (!currentEnabled || currentEnabled.has("cmds-link-zotero")) throw new Error("Legacy plugin state changed before apply.");
+					if (this.legacyPluginEnabled() !== false) throw new Error("Legacy plugin state changed before apply.");
 					change(fm);
 				});
 			},
@@ -190,14 +212,14 @@ export default class CMDSZoteroPlugin extends Plugin {
 				const bbtReachable = await this.bbt.isReachable();
 				const pdfPaths = await host.vaultPdfPaths();
 				const checked = new Date();
-				const currentEnabled = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins?.enabledPlugins;
-				return { index: current, indexValid: current !== null && validateIndex(current), indexComplete: current?.complete === true, indexFresh: indexToken.isStale(current, checked.getTime()) === false, live: this.active && this.index === indexToken && this.pdfText === pdfToken, bbtReachable, legacyPluginEnabled: currentEnabled ? currentEnabled.has("cmds-link-zotero") : null, vault: this.app.vault.getName(), pdfPaths, now: checked, expiresAt: current ? Date.parse(current.generatedAt) + (this.settings.indexMaxAgeMinutes + 1) * 60000 : 0 };
+				return { index: current, indexValid: current !== null && validateIndex(current), indexComplete: current?.complete === true, indexFresh: indexToken.isStale(current, checked.getTime()) === false, live: this.active && this.index === indexToken && this.pdfText === pdfToken, bbtReachable, legacyPluginEnabled: this.legacyPluginEnabled(), vault: this.app.vault.getName(), pdfPaths, now: checked, expiresAt: current ? Date.parse(current.generatedAt) + (this.settings.indexMaxAgeMinutes + 1) * 60000 : 0 };
 			},
 			yaml: { parse: parseYaml, stringify: stringifyYaml },
 		}, result);
 		return host;
 	}
 
+	/** Reconfigures services. Only a refresh or writing job blocks this; an in-flight read collection is aborted by `bbt.dispose()`. */
 	async saveSettings(next: CmdsZoteroSettings): Promise<void> {
 		if (this.service.busy) throw new Error("Wait for index refresh to finish before changing configuration.");
 		const settings = normalizeSettings(next);
@@ -211,8 +233,13 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.settings = settings;
 		this.lastIndex = null;
 		this.bibliographyCache.clear();
+		this.warmFailedUntil = 0;
+		this.noticedGeneration = null;
+		this.warming = null;
 		this.configure();
+		await this.peekPublished().catch(() => null);
 		this.refreshViews();
+		void this.warmIndex();
 	}
 
 	onunload(): void {
@@ -225,11 +252,80 @@ export default class CMDSZoteroPlugin extends Plugin {
 	/** Entries from the most recently loaded index; empty until the index has been read once. */
 	cachedEntries(): ZoteroIndexEntry[] { return this.lastIndex?.entries ?? []; }
 
-	/** Loads (or refreshes) the index in the background without surfacing a modal; errors become a single notice. */
+	/** Age of the loaded snapshot in minutes, or null when none is loaded or its timestamp is unusable. */
+	cachedIndexAgeMinutes(): number | null { return this.index.ageMinutes(this.lastIndex); }
+
+	/** True when the loaded snapshot is older than the configured maximum age; false when fresh or not loaded. */
+	cachedIndexStale(): boolean { return this.index.isStale(this.lastIndex) === true; }
+
+	/** True while background warm-ups are backing off after a failed refresh; UI callers may skip `warmIndex()` then. */
+	warmBackoffActive(): boolean { return Date.now() < this.warmFailedUntil; }
+
+	/** Publishes the newest validated snapshot from disk (fresh or stale) without contacting BBT; null when none exists. */
+	private async peekPublished(): Promise<ZoteroIndex | null> {
+		const service = this.service;
+		const snapshot = await service.peekIndex();
+		if (snapshot && this.service === service) await this.publish(snapshot);
+		return snapshot;
+	}
+
+	/**
+	 * Background warm-up: peek first so `cachedEntries()` fills from disk, then refresh only a stale or missing snapshot.
+	 * After a failure, non-forced warm-ups return immediately for `WARM_BACKOFF_MS`; the failure is announced once per
+	 * index generation with a mapped message. A forced warm-up (explicit refresh button) never joins a non-forced flight.
+	 */
 	warmIndex(force = false): Promise<void> {
-		if (this.warming) return this.warming;
-		this.warming = this.run(async () => { await this.service.ensureIndex(force); }).finally(() => { this.warming = null; });
-		return this.warming;
+		const current = this.warming;
+		if (current && (current.force || !force)) return current.promise;
+		if (!force && this.warmBackoffActive()) return Promise.resolve();
+		const flight = { force, promise: Promise.resolve() };
+		flight.promise = (current ? current.promise.catch(() => undefined) : Promise.resolve())
+			.then(() => this.warm(force))
+			.finally(() => { if (this.warming === flight) this.warming = null; });
+		this.warming = flight;
+		return flight.promise;
+	}
+
+	private async warm(force: boolean): Promise<void> {
+		const service = this.service;
+		try {
+			const snapshot = force ? null : await this.peekPublished();
+			if (snapshot && this.index.isStale(snapshot) === false) return;
+			if (!force && this.warmBackoffActive()) return;
+			const outcome = await service.ensureIndex(force);
+			if (outcome.reason !== "stale-fallback") return;
+			const message = outcome.error ?? "The index could not be refreshed.";
+			this.reportWarmFailure(outcome.failure ? new IndexRefusalError(outcome.failure, message) : new Error(message), outcome.index, force);
+		} catch (error) {
+			if (this.service !== service) return;
+			this.reportWarmFailure(error, this.lastIndex, force);
+		}
+	}
+
+	/** Starts the retry backoff and shows the mapped failure once per index generation; a forced warm-up always reports. */
+	private reportWarmFailure(error: unknown, snapshot: ZoteroIndex | null, force: boolean): void {
+		this.warmFailedUntil = Date.now() + WARM_BACKOFF_MS;
+		const generation = snapshot?.generatedAt ?? "none";
+		if (!force && this.noticedGeneration === generation) return;
+		this.noticedGeneration = generation;
+		new Notice(describeRefreshFailure(error, this.settings.bbtEndpoint, this.index.ageMinutes(snapshot)));
+	}
+
+	/**
+	 * The index for a human read: the newest validated snapshot regardless of age (BBT is not contacted; a stale snapshot
+	 * is labelled once per generation and revalidated in the background), else a load that falls back on failure.
+	 */
+	private async loadIndexForRead(): Promise<ZoteroIndex> {
+		const snapshot = await this.peekPublished();
+		if (!snapshot) return (await this.service.ensureIndex()).index;
+		if (this.index.isStale(snapshot) === true) {
+			if (this.noticedGeneration !== snapshot.generatedAt) {
+				this.noticedGeneration = snapshot.generatedAt;
+				new Notice(`Using the saved index from ${formatIndexAge(this.index.ageMinutes(snapshot))} ago; Zotero was not contacted. Refresh the index to update it.`);
+			}
+			void this.warmIndex();
+		}
+		return snapshot;
 	}
 
 	lastMarkdownView(): MarkdownView | null {
@@ -287,7 +383,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 	async refreshIndex(): Promise<void> {
 		const notice = new Notice("Refreshing literature index…", 0);
 		await this.run(async () => {
-			const result = await this.service.ensureIndex(true);
+			let result: Awaited<ReturnType<IngestAPI["ensureIndex"]>>;
+			try { result = await this.service.ensureIndex(true); }
+			catch (error) { throw new Error(describeRefreshFailure(error, this.settings.bbtEndpoint, this.cachedIndexAgeMinutes())); }
 			new Notice(`Index refreshed: ${result.index.count} entries. ${result.index.complete ? "Complete." : "Review diagnostics for unresolved records."}`);
 		});
 		notice.hide();
@@ -295,7 +393,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	async pick(choose: (entry: ZoteroIndexEntry) => void): Promise<void> {
 		await this.run(async () => {
-			const { index } = await this.service.ensureIndex();
+			const index = await this.loadIndexForRead();
 			if (!index.entries.length) throw new Error("No literature entries. Check Zotero and refresh the index.");
 			new PickerModal(this.app, index.entries, entry => `${entry.title} — @${entry.citekey} · ${entry.year} · library ${entry.libraryID}`, choose).open();
 		});
@@ -339,7 +437,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	/** Re-renders managed sections of every note this plugin owns; conflicts are reported and skipped, never forced. */
 	async updateAllLiteratureNotes(): Promise<void> {
 		await this.run(async () => {
-			const { index } = await this.service.ensureIndex();
+			const index = await this.loadIndexForRead();
 			const owned = index.entries.filter(entry => this.links.localFiles(entry, index).length > 0);
 			if (!owned.length) throw new Error("No owned literature notes were found. Import a note first.");
 			const notice = new Notice(`Updating ${owned.length} literature notes…`, 0);
@@ -394,7 +492,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	}
 
 	async openNote(entry: ZoteroIndexEntry): Promise<void> {
-		const { index } = await this.service.ensureIndex();
+		const index = await this.loadIndexForRead();
 		const files = this.links.localFiles(entry, index);
 		if (!files.length) throw new Error("No literature note exists in this vault. Preview an import first.");
 		const open = (file: TFile): void => { void this.app.workspace.getLeaf(false).openFile(file); };
@@ -403,7 +501,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	}
 
 	async copyNoteLink(entry: ZoteroIndexEntry): Promise<void> {
-		const { index } = await this.service.ensureIndex();
+		const index = await this.loadIndexForRead();
 		if (!this.links.localFiles(entry, index).length) throw new Error("Import a literature note before copying its note link.");
 		await this.copyLink(entry.title, noteDeepLink(this.app.vault.getName(), entry));
 	}
@@ -414,7 +512,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	}
 
 	async showVaultLinks(entry: ZoteroIndexEntry): Promise<void> {
-		const { index } = await this.service.ensureIndex();
+		const index = await this.loadIndexForRead();
 		const report = await this.links.find(entry, index);
 		new ActionsModal(this.app, "Linked literature notes", [
 			...report.links.map(link => ({ name: `${link.vault}: ${link.path}`, action: () => { window.open(link.uri); } })),

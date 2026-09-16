@@ -20,6 +20,7 @@ export class FileSystemAdapter {
  async write(path,content) { await fs.writeFile(join(this.root,path),content); if(this.afterWrite) await this.afterWrite(path,content); }
  async remove(path) { this.removed.push(path); await fs.unlink(join(this.root,path)); }
  async rename(from,to) { this.renameCalls++; if(await this.exists(to)) throw Error('Destination file already exists'); await fs.rename(join(this.root,from),join(this.root,to)); }
+ async list(path) { const entries = await fs.readdir(join(this.root,path),{withFileTypes:true}); return { files: entries.filter(e=>e.isFile()).map(e=>path+'/'+e.name), folders: entries.filter(e=>e.isDirectory()).map(e=>path+'/'+e.name) }; }
 }
 `;
 
@@ -36,7 +37,10 @@ interface Storage {
 interface StorageModule {
 	FileSystemAdapter: new (root: string) => Adapter;
 	VaultIndexStorage: new (app: { vault: { adapter: Adapter; configDir: string } }, path: string, canWrite?: () => boolean) => Storage;
+	staleBackups: (names: string[], keep?: number, protect?: string) => string[];
+	BACKUPS_KEPT: number;
 }
+const backupName = (epoch: number, suffix = "0") => `index-${epoch}-0000000${suffix}-0000-4000-8000-000000000000.json`;
 const indexPath = "References/zotero-index.json";
 const original = JSON.stringify({ schemaVersion: 2, entries: [{ id: "user:1:SYNTH001" }] });
 const updated = JSON.stringify({ schemaVersion: 2, entries: [{ id: "user:1:SYNTH002" }] });
@@ -58,7 +62,7 @@ test("VaultIndexStorage uses guarded filesystem replacement with a real temporar
 	try {
 		const output = join(directory, "storage.cjs");
 		await build({
-			stdin: { contents: 'export { VaultIndexStorage } from "./src/vault-storage"; export { FileSystemAdapter } from "obsidian";', resolveDir: process.cwd() },
+			stdin: { contents: 'export { VaultIndexStorage, staleBackups, BACKUPS_KEPT } from "./src/vault-storage"; export { FileSystemAdapter } from "obsidian";', resolveDir: process.cwd() },
 			bundle: true, platform: "node", format: "cjs", outfile: output,
 			plugins: [{ name: "synthetic-obsidian", setup(b) {
 				b.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "mock" }));
@@ -114,6 +118,30 @@ test("VaultIndexStorage uses guarded filesystem replacement with a real temporar
 			assert.equal(adapter.removed.length, 1);
 			assert.ok(adapter.removed.every(path => path.startsWith(`${indexPath}.`) && path.endsWith(".tmp")));
 			assert.equal(adapter.renameCalls, 0);
+		});
+
+		await t.test("backups are pruned to the newest three plugin-owned files; foreign files are never deleted", async () => {
+			assert.equal(module.BACKUPS_KEPT, 3);
+			const { root, adapter, storage } = await fixture("prune");
+			const backups = ".cmds-zotero/backups";
+			await fs.mkdir(join(root, backups), { recursive: true });
+			const own = [backupName(1000), backupName(2000), backupName(3000)];
+			const foreign = ["notes.txt", "index-manual.json", "index-4000-not-a-uuid.json", "zotero-index.json"];
+			for (const name of [...own, ...foreign]) await fs.writeFile(join(root, backups, name), name);
+			await storage.writeValidated(updated);
+			let names = (await fs.readdir(join(root, backups))).sort();
+			const fresh = names.filter(name => !own.includes(name) && !foreign.includes(name));
+			assert.equal(fresh.length, 1, "the new backup exists");
+			assert.deepEqual(names, [...foreign, own[1], own[2], ...fresh].sort(), "only the oldest plugin-owned backup was pruned");
+			assert.deepEqual(adapter.removed.filter(path => path.startsWith(backups)), [`${backups}/${own[0]}`]);
+			assert.equal(await fs.readFile(join(root, backups, fresh[0]!), "utf8"), original);
+			await storage.writeValidated(original);
+			names = (await fs.readdir(join(root, backups))).sort();
+			assert.equal(names.filter(name => !foreign.includes(name)).length, 3, "three plugin-owned backups remain after the second write");
+			assert.ok(!names.includes(own[1]) && names.includes(own[2]) && names.includes(fresh[0]!), "the next oldest was pruned, newer ones kept");
+			for (const name of foreign) assert.equal(await fs.readFile(join(root, backups, name), "utf8"), name, `${name} untouched`);
+			assert.deepEqual(module.staleBackups([backupName(5), backupName(9), "x.json", backupName(7), backupName(1)], 3, backupName(1)), [backupName(5)], "protect keeps the current backup even when older");
+			assert.deepEqual(module.staleBackups(["a.json", "b.json"]), []);
 		});
 
 		await t.test("canWrite=false preserves the existing index and cleans staging", async () => {
