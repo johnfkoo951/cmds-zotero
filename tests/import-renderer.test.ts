@@ -134,6 +134,19 @@ test("DOI, URL and citekey values are emitted verbatim when strict, escaped othe
 	assert.equal(decodeDoubleEncodedURL("https://doi.org/10.1002/%2528SICI%2529"), "https://doi.org/10.1002/%28SICI%29");
 	assert.equal(safeURL("https://doi.org/10.1002/%2528SICI%2529"), "https://doi.org/10.1002/%28SICI%29");
 	assert.equal(decodeDoubleEncodedURL("https://x.y/%25zz"), "https://x.y/%25zz");
+	// %25 decoding is limited to DOI URLs (doi.org host or DOI-prefixed path); a literal percent sign elsewhere is kept.
+	assert.equal(decodeDoubleEncodedURL("https://onlinelibrary.wiley.com/doi/10.1002/%2528SICI%2529"), "https://onlinelibrary.wiley.com/doi/10.1002/%28SICI%29");
+	assert.equal(safeURL("https://example.org/100%25ab-off"), "https://example.org/100%25ab-off");
+	assert.equal(bibliographyText("https://example.org/100%25ab"), "<https://example.org/100%25ab>");
+	// A real SICI DOI with `<…>` stays verbatim, but `<` may not start an HTML tag and Markdown link/emphasis characters fall back to escaped prose.
+	assert.equal(safeDOI("10.1002/(SICI)1097-4571(1999)50:9<799::AID-ASI7>3.0.CO;2-C"), "10.1002/(SICI)1097-4571(1999)50:9<799::AID-ASI7>3.0.CO;2-C");
+	assert.equal(safeDOI("10.1234/[[x]]"), "10.1234/\\[\\[x\\]\\]");
+	assert.equal(safeDOI("10.1000/a*b*c"), "10.1000/a\\*b\\*c");
+	assert.equal(safeDOI("10.1000/a|b`c"), "10.1000/a\\|b\\`c");
+	assert.equal(safeDOI("10.1000/<script>alert(1)</script>"), "10.1000/\\<script\\>alert\\(1\\)\\</script\\>");
+	// The fallback stays on one line: an embedded newline never breaks the [!md] callout.
+	assert.equal(safeDOI("10.1234/ab\ncd"), "10.1234/ab cd");
+	assert.equal(safeURL("https://x.y/a\nb"), "https://x.y/a b");
 	const item = { ...entry, citekey: "smith_title_2020", url: "https://example.org/a%20b/c_d", metadata: { ...entry.metadata, DOI: "10.1162/tacl_a_00099" } };
 	const result = render(null, item);
 	assert.match(result.content, /\*\*DOI\*\*:: 10\.1162\/tacl_a_00099$/m);
@@ -146,6 +159,10 @@ test("bibliography prose stays escaped while URLs become autolinks (T03)", () =>
 	assert.equal(bibliographyText("Author (2026). Example. https://doi.org/10.1162/tacl_a_00099."), "Author \\(2026\\). Example. <https://doi.org/10.1162/tacl_a_00099>.");
 	assert.equal(bibliographyText("Plain_prose (no URL)"), "Plain\\_prose \\(no URL\\)");
 	assert.equal(bibliographyText("See https://x.y/a<b>c and https://doi.org/10.1002/%2528SICI%2529"), "See <https://x.y/a%3Cb%3Ec> and <https://doi.org/10.1002/%28SICI%29>");
+	// Unbalanced closing brackets after a URL belong to the prose; balanced ones stay inside the autolink.
+	assert.equal(bibliographyText("Retrieved from (https://x.y/z)."), "Retrieved from \\(<https://x.y/z>\\).");
+	assert.equal(bibliographyText("See [https://x.y/z]; also https://x.y/w)."), "See \\[<https://x.y/z>\\]; also <https://x.y/w>\\).");
+	assert.equal(bibliographyText("See https://en.wikipedia.org/wiki/Foo_(bar) now"), "See <https://en.wikipedia.org/wiki/Foo_(bar)> now");
 	const result = renderLiterature(entry, "Author (2026). Example. https://doi.org/10.1162/tacl_a_00099", DEFAULT_SETTINGS, null);
 	assert.match(result.content, /> \[!Cite\]\n> Author \\\(2026\\\)\. Example\. <https:\/\/doi\.org\/10\.1162\/tacl_a_00099>$/m);
 });
@@ -180,6 +197,14 @@ test("YAML tags mirror normalized slugs while zotero_tags and the Tags field sta
 	assert.equal(normalizeTag("  Artificial Intelligence (cs.AI) "), "Artificial-Intelligence-csAI");
 	assert.equal(normalizeTag("2024"), null);
 	assert.equal(normalizeTag("()"), null);
+	// Nested-tag hygiene: no empty path segments, no leading/trailing separators.
+	assert.equal(normalizeTag("/a"), "a");
+	assert.equal(normalizeTag("a/"), "a");
+	assert.equal(normalizeTag("a//b"), "a/b");
+	assert.equal(normalizeTag("a/b"), "a/b");
+	assert.equal(normalizeTag("-x-"), "x");
+	assert.equal(normalizeTag("/"), null);
+	assert.equal(normalizeTag("-/-"), null);
 	assert.deepEqual(normalizedTags(["theme", "Theme", "theme", "42"]), ["theme"]);
 	const item = { ...entry, tags: ["H.5.2; I.2.7; H.3.3", "지식 공유", "조직행동", "2024", "obscite"] };
 	const result = render(null, item);
@@ -230,4 +255,28 @@ test("automatic link-target rewrites inside hashed sections are not reported as 
 	// A real edit of the image line is still preserved and reported.
 	const edited = initial.replace("![Annotation image]", "![My caption]");
 	assert.match(renderLiterature(imageEntry, "APA", settings, edited, hashes).conflicts.join(" "), /Edited generated section/);
+});
+
+test("link-target normalization handles image folders containing parentheses (T14, live vault path)", () => {
+	assert.equal(normalizeLinkTargets("![Annotation image](80.%20References/84.%20References%20(Zotero)/images/a.png) [p. 1](zotero://open-pdf/library/items/K?page=1)"), "![Annotation image](a.png) [p. 1](K?page=1)");
+	assert.equal(normalizeLinkTargets("![i](84.%20References%20%28Zotero%29/img/a.png) tail"), "![i](a.png) tail");
+	const imageEntry = { ...entry, attachments: [{ ...entry.attachments[0]!, annotations: [{ ...annotation, imagePath: "/synthetic/figure.png" }] }] };
+	const hashes = new Map([["/synthetic/figure.png", "c".repeat(64)]]);
+	const settings = { ...DEFAULT_SETTINGS, imageFolder: "80. References/84. References (Zotero)/images" };
+	const initial = renderLiterature(imageEntry, "APA", settings, null, hashes).content;
+	assert.match(initial, /!\[Annotation image\]\(80\.%20References\/84\.%20References%20\(Zotero\)\/images\/user-1-ATTACH01-ANNOT001-c{64}\.png\)/);
+	const rewrites = [
+		initial.replace("(Zotero)/images/", "(Zotero)/img/"),
+		initial.replace("84.%20References%20(Zotero)/images/", "84.%20References%20%28Zotero%29/img/"),
+		initial.replace("80.%20References/84.%20References%20(Zotero)/images/", "Reference%20images/"),
+	];
+	for (const moved of rewrites) {
+		assert.notEqual(moved, initial);
+		const result = renderLiterature(imageEntry, "APA", settings, moved, hashes);
+		assert.deepEqual(result.conflicts, []);
+		assert.equal(result.content, initial);
+	}
+	// Still a real edit when the image basename itself changes.
+	const renamed = initial.replace("-ANNOT001-", "-ANNOT999-");
+	assert.match(renderLiterature(imageEntry, "APA", settings, renamed, hashes).conflicts.join(" "), /Edited generated section/);
 });

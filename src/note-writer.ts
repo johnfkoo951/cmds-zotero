@@ -47,26 +47,35 @@ export function textFromHTML(value: unknown): string {
 /** Single-line text for callout titles and inline fields. */
 function inline(value: unknown): string { return plainText(value).replace(/\s*\n\s*/g, " "); }
 
-const DOI_PATTERN = /^10\.\d{4,9}\/\S+$/;
+/**
+ * Strict DOI: no whitespace and none of the characters that would form Markdown links, emphasis, code or table cells
+ * (`[ ] * | \``); `<`/`>` stay allowed for SICI DOIs (`<273::AID>`) but `<` may not start an HTML tag (`<a`, `</`, `<!`).
+ */
+const DOI_PATTERN = /^10\.\d{4,9}\/(?!.*<[A-Za-z/!])[^\s`*|[\]]+$/;
 /** Absolute http(s) URL without whitespace or angle brackets: safe as a bare Obsidian autolink and Dataview value. */
 const URL_PATTERN = /^https?:\/\/[^\s<>]+$/;
 const CITEKEY_PATTERN = /^[A-Za-z0-9_:.+/-]+$/;
+/** DOI resolver hosts, or a path carrying a DOI prefix: the only URLs BBT is known to double-encode. */
+const DOI_URL_PATTERN = /^https?:\/\/(?:dx\.)?doi\.org\/|\/10\.\d{4,9}\//i;
 
-/** BBT returns some DOI URLs double-encoded (`%2528` for `(`); decode `%25XX` only when the result is still a valid URL. */
+/**
+ * BBT returns some DOI URLs double-encoded (`%2528` for `(`). Decodes `%25XX` only for DOI URLs (doi.org host or a
+ * DOI-prefixed path) and only when the result is still a valid URL; other URLs keep a literal `%25` untouched.
+ */
 export function decodeDoubleEncodedURL(url: string): string {
-	if (!/%25[0-9A-Fa-f]{2}/.test(url)) return url;
+	if (!DOI_URL_PATTERN.test(url) || !/%25[0-9A-Fa-f]{2}/.test(url)) return url;
 	const decoded = url.replace(/%25([0-9A-Fa-f]{2})/g, "%$1");
 	return URL_PATTERN.test(decoded) ? decoded : url;
 }
-/** Emits a DOI verbatim when it is a strict DOI (no whitespace) so `_`, `(`, `<` and `>` are not escaped; otherwise escaped text. */
+/** Emits a DOI verbatim when it is a strict DOI so `_`, `(`, `<` and `>` are not escaped; otherwise single-line escaped text. */
 export function safeDOI(value: unknown): string {
 	const raw = typeof value === "string" ? stripControl(value).trim() : "";
-	return DOI_PATTERN.test(raw) ? raw : plainText(raw);
+	return DOI_PATTERN.test(raw) ? raw : inline(raw);
 }
-/** Emits an absolute http(s) URL verbatim (percent-encoding such as `%20` intact); otherwise escaped text. */
+/** Emits an absolute http(s) URL verbatim (percent-encoding such as `%20` intact); otherwise single-line escaped text. */
 export function safeURL(value: unknown): string {
 	const raw = typeof value === "string" ? decodeDoubleEncodedURL(stripControl(value).trim()) : "";
-	return URL_PATTERN.test(raw) ? raw : plainText(raw);
+	return URL_PATTERN.test(raw) ? raw : inline(raw);
 }
 function safeCitekey(value: string): string { return CITEKEY_PATTERN.test(value) ? value : plainText(value); }
 
@@ -76,15 +85,31 @@ export function bibliographyText(value: unknown): string {
 	const parts = stripControl(value).split(/(https?:\/\/\S+)/);
 	return parts.map((part, index) => {
 		if (index % 2 === 0) return escapeMarkdown(part);
-		const trailing = /[.,;:]+$/.exec(part)?.[0] ?? "";
-		const url = decodeDoubleEncodedURL(part.slice(0, part.length - trailing.length)).replace(/[<> ]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-		return `<${url}>${escapeMarkdown(trailing)}`;
+		const [url, trailing] = splitTrailingPunctuation(part);
+		const encoded = decodeDoubleEncodedURL(url).replace(/[<> ]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+		return `<${encoded}>${escapeMarkdown(trailing)}`;
 	}).join("").replace(/\n{3,}/g, "\n\n").trim();
 }
+/** Peels sentence punctuation and unbalanced closing brackets (`(https://x.y/z).`) off the end of a URL token. */
+function splitTrailingPunctuation(token: string): [string, string] {
+	const count = (text: string, char: string): number => text.split(char).length - 1;
+	let url = token;
+	for (;;) {
+		const next = url.replace(/[.,;:]+$/, "");
+		const last = next.slice(-1);
+		const unbalanced = (last === ")" && count(next, ")") > count(next, "(")) || (last === "]" && count(next, "]") > count(next, "["));
+		const trimmed = unbalanced ? next.slice(0, -1) : next;
+		if (trimmed === url) return [url, token.slice(url.length)];
+		url = trimmed;
+	}
+}
 
-/** Obsidian tag slug: trim, whitespace to `-`, drop characters outside letters/numbers/`_`/`/`/`-`; empty and all-numeric slugs are invalid. */
+/**
+ * Obsidian tag slug: trim, whitespace to `-`, drop characters outside letters/numbers/`_`/`/`/`-`, collapse repeated `/`
+ * and trim leading/trailing `/` and `-` (no empty nested-tag segments); empty and all-numeric slugs are invalid.
+ */
 export function normalizeTag(tag: string): string | null {
-	const slug = tag.trim().replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_/-]/gu, "");
+	const slug = tag.trim().replace(/\s+/g, "-").replace(/[^\p{L}\p{N}_/-]/gu, "").replace(/\/+/g, "/").replace(/^[/-]+|[/-]+$/g, "");
 	return !slug || /^\p{N}+$/u.test(slug) ? null : slug;
 }
 export function normalizedTags(tags: string[]): string[] {
@@ -110,8 +135,10 @@ export function normalizeLinkTargets(body: string): string {
 		try { decoded = decodeURIComponent(bare); } catch { /* keep the raw target */ }
 		return decoded.split("/").pop() ?? "";
 	};
+	// Markdown targets may carry one level of balanced parentheses (`84. References (Zotero)/images/…`): encodeURIComponent
+	// leaves `(`/`)` unencoded, so the matcher must not stop at the first `)`.
 	return body
-		.replace(/(!?\[[^\]\n]*\]\()([^)\n]*)(\))/g, (_, open: string, target: string, close: string) => `${open}${basename(target)}${close}`)
+		.replace(/(!?\[[^\]\n]*\]\()((?:[^()\n]|\([^()\n]*\))*)(\))/g, (_, open: string, target: string, close: string) => `${open}${basename(target)}${close}`)
 		.replace(/(!?\[\[)([^\]|#\n]*)([^\]\n]*\]\])/g, (_, open: string, target: string, rest: string) => `${open}${basename(target)}${rest}`);
 }
 /**
