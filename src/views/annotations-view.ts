@@ -13,6 +13,7 @@ export class AnnotationsView extends ItemView {
 	private pinned: ZoteroIndexEntry | null = null;
 	private entry: ZoteroIndexEntry | null = null;
 	private filter = "";
+	private status: HTMLElement | null = null; // 0.5 R4
 	private readonly refresh = debounce(() => this.render(), 300, true);
 
 	constructor(leaf: WorkspaceLeaf, private plugin: CMDSZoteroPlugin) { super(leaf); }
@@ -45,6 +46,7 @@ export class AnnotationsView extends ItemView {
 		container.addClass("cmds-zotero-sidebar");
 		this.entry = this.followedEntry();
 		const header = container.createDiv({ cls: "cmds-zotero-sidebar-header" });
+		this.status = header.createDiv({ cls: "cmds-zotero-sidebar-status", text: this.plugin.statusLine() }); // 0.5 R4
 		const toolbar = header.createDiv({ cls: "cmds-zotero-sidebar-toolbar" });
 		const choose = toolbar.createEl("button", { text: this.pinned ? "Unpin" : "Choose item…", attr: { "aria-label": this.pinned ? "Follow the active note again" : "Pin the sidebar to a Zotero item" } });
 		choose.addEventListener("click", () => { if (this.pinned) this.pin(null); else void this.plugin.pick(entry => this.pin(entry)); });
@@ -108,5 +110,8 @@ export class AnnotationsView extends ItemView {
 		void this.app.workspace.revealLeaf(view.leaf);
 	}
 
-	onClose(): Promise<void> { this.contentEl.empty(); return Promise.resolve(); }
+	onClose(): Promise<void> { this.contentEl.empty(); this.status = null; return Promise.resolve(); }
+
+	// 0.5 R4: the shared status line in the header, updated by the plugin without a full re-render.
+	renderStatus(line: string): void { this.status?.setText(line); }
 }

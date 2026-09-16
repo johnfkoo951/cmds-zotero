@@ -35,6 +35,17 @@ Legacy fields preserve their values/types; new envelope fields are additive, not
 index source/path/schema/generation/age/completeness/staleness/threshold, legacy-plugin state, and Git coverage.
 Unknown is represented as unknown/null, never fabricated success. Ignored and already-tracked files are separate concerns.
 
+BBT transport faults are classified once (0.5): `connection-refused` (any socket-level fault), `timeout`, `http-404`,
+`http-other`, `aborted` (the plugin's own cancellation, never an observation about Zotero), `rpc` (a JSON-RPC error
+envelope) and `invalid-response`. When the `connection` probe fails, `connection.bbt` carries `error` (human wording that
+names the endpoint) and, when classified, `reason` from that vocabulary. `identity` and `cites` add
+`bbtError {reason, endpoint}` beside `bibliographyReason`/`referencesReason: bbt-unreachable`, and a refused `refresh`
+adds it beside its `reason`, only when the fault was a typed transport error; the legacy `bbt-unreachable` values are
+unchanged. A reconcile apply refused because the evidence snapshot threw reports `refusedReason: index-invalid` with
+`refusedMessage` (`bbt-unreachable` only for a typed transport error); a storage fault is never reported as a BBT outage.
+The human status line (`Zotero index: <count> · <age> old · stale · legacy plugin on · BBT ok <ago> | failed <time> (<reason>) | untested`)
+is derived from the same `ageMinutes`/`stale` math and the last real BBT call, so the UI and the CLI agree on freshness.
+
 Existing implicit refresh in read-only legacy operations is intentionally removed.
 The read-only wrapper must not call an old host that might refresh on a read.
 New CLI clients may use the offline core for old-host read-only capabilities; unsupported live writes fail explicitly.

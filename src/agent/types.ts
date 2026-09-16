@@ -99,7 +99,7 @@ export interface VaultReader {
 }
 
 export interface PluginInfo { status: "ok" | "off" | "too-old" | "unknown"; version: string | null; apiVersions: number[] | null }
-export interface BbtInfo { reachable: boolean | null; zotero?: string; betterbibtex?: string; error?: string }
+export interface BbtInfo { reachable: boolean | null; zotero?: string; betterbibtex?: string; error?: string; /** 0.5 R4: typed transport reason beside `error`. */ reason?: string }
 export interface IndexInfo {
 	source: "plugin" | "offline-file" | "none";
 	path: string;

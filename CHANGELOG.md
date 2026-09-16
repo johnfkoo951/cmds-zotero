@@ -13,6 +13,13 @@ Note-writer correctness (literature note rendering; managed section IDs unchange
 - **Obsidian's automatic link updates are not reported as user edits.** Section comparison accepts a body that differs from the fresh render only by Markdown/wiki link targets (moved image folder, renamed note, including folders with parentheses such as `84. References (Zotero)/images`); stored hashes stay raw. Consequence: link targets inside managed sections are plugin-owned and are regenerated on update — retarget by moving the file rather than editing the link.
 - No change: page-label rendering (`p. -` placeholders fall back to the PDF page position since 0.3.0).
 
+One truth for humans and agents (0.5 R4):
+
+- **Typed BBT transport errors.** Every Better BibTeX request failure is classified once (`connection-refused`, `timeout`, `http-404`, `http-other`, `aborted`, `rpc`, `invalid-response`) and carries observation wording that names the endpoint (`Zotero/Better BibTeX did not answer at http://127.0.0.1:23119/better-bibtex/json-rpc (connection refused). Start Zotero, then retry.`) instead of raw Node strings. Refresh-failure classification delegates to the same mapping; an endpoint answering HTTP 404 now counts as `bbt-unreachable`. Agent payloads add `bbtError {reason, endpoint}` beside `bibliographyReason`/`referencesReason` and refused refreshes, and `connection.bbt.reason` beside `error`.
+- **Shared status line.** A clickable status-bar item, both sidebar headers and the diagnostics report show one line: index count, age, staleness, legacy-plugin state and the last real BBT observation (`BBT ok 3 min ago` / `BBT failed 14:05 (connection refused)` / `BBT untested`). The age text ticks every minute without network; clicking runs the connection test (a capabilities probe), never a refresh.
+- **Update all owned literature notes** probes BBT once before the loop and stops with one mapped message instead of N identical skip lines.
+- **Reconcile apply** reports a throwing evidence snapshot as `index-invalid` with the message; `bbt-unreachable` is reserved for typed transport errors (F16).
+
 ## 0.3.0 — Development, unreleased
 
 Feature parity pass after reviewing ZotLit 2.1.4, Zotero Integration 3.2.1, Pandoc Reference List, and Zotero-side add-ons; decisions are recorded in `docs/plugin-landscape-2026-09.md`.

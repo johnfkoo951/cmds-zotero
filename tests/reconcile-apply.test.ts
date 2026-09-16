@@ -168,3 +168,37 @@ test("same-path concurrent applies serialize and reject the superseded source", 
 	assert.equal(results.reduce((count, result) => count + result.applied, 0), 1);
 	assert.ok(results.some(result => result.notes[0].reason === "changed-since-plan"));
 });
+
+// 0.5 R4 (F16): a throwing snapshot is unusable evidence, not a BBT outage.
+import { BbtTransportError } from "../src/api/transport";
+
+test("snapshot exceptions refuse as index-invalid with the message; only a typed transport error is bbt-unreachable", async () => {
+	const storage = fakeHost();
+	storage.snapshot = async () => { throw new Error("Index file could not be read: EACCES"); };
+	const refused = await applyReconcile(storage, plan());
+	assert.equal(refused.mode, "refused");
+	assert.equal(refused.refusedReason, "index-invalid");
+	assert.notEqual(refused.refusedReason, "bbt-unreachable");
+	assert.equal(refused.refusedMessage, "Index file could not be read: EACCES");
+	assert.equal(refused.attempted, 0);
+	assert.match(storage.text, /owner: human/);
+
+	const transport = fakeHost();
+	transport.snapshot = async () => { throw new BbtTransportError("connection-refused", "http://127.0.0.1:23119/better-bibtex/json-rpc", "connect ECONNREFUSED 127.0.0.1:23119", { code: "ECONNREFUSED" }); };
+	const unreachable = await applyReconcile(transport, plan());
+	assert.equal(unreachable.refusedReason, "bbt-unreachable");
+	assert.match(unreachable.refusedMessage ?? "", /did not answer at http:\/\/127\.0\.0\.1:23119\/better-bibtex\/json-rpc \(connection refused\)/);
+
+	const opaque = fakeHost();
+	opaque.snapshot = async () => { throw "not an Error object"; };
+	const stringy = await applyReconcile(opaque, plan());
+	assert.equal(stringy.refusedReason, "index-invalid");
+	assert.equal(stringy.refusedMessage, "not an Error object");
+	// A snapshot that resolves with BBT unreachable still refuses with the gate reason and no message.
+	const gated = fakeHost();
+	const base = await gated.snapshot();
+	gated.snapshot = async () => ({ ...base, bbtReachable: false });
+	const gateRefusal = await applyReconcile(gated, plan());
+	assert.equal(gateRefusal.refusedReason, "bbt-unreachable");
+	assert.equal("refusedMessage" in gateRefusal, false);
+});

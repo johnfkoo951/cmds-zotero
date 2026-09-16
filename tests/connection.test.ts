@@ -164,3 +164,35 @@ test("incomplete and unknown-freshness indexes never prove absence, even with al
  assert.equal(c.git?.indexTracked,true);
  assert.equal(infoWarnings(c)[0].code,"index-in-git");
 });
+
+// 0.5 R4: shared status line and typed BBT reason in the connection envelope.
+import { formatStatus, type StatusView } from "../src/agent/connection";
+
+function statusView(overrides: Partial<StatusView> = {}): StatusView {
+	return { count: 450, ageMinutes: 27 * 60 + 12, stale: true, legacyPluginEnabled: true, bbt: { state: "ok", at: "2026-09-14T09:57:00.000Z" }, ...overrides };
+}
+
+test("formatStatus renders count, age, staleness, legacy plugin and the last BBT observation in one line", () => {
+	assert.equal(formatStatus(statusView(), NOW), "Zotero index: 450 · 27 h old · stale · legacy plugin on · BBT ok 3 min ago");
+	assert.equal(formatStatus(statusView({ stale: false, legacyPluginEnabled: false, bbt: { state: "ok", at: "2026-09-14T09:59:30.000Z" } }), NOW), "Zotero index: 450 · 27 h old · BBT ok just now");
+	assert.equal(formatStatus(statusView({ ageMinutes: 12, stale: false, legacyPluginEnabled: null, bbt: { state: "untested" } }), NOW), "Zotero index: 450 · 12 min old · BBT untested");
+	assert.equal(formatStatus(statusView({ count: null, ageMinutes: null, stale: null, legacyPluginEnabled: false, bbt: { state: "untested" } }), NOW), "Zotero index: none · BBT untested");
+	assert.equal(formatStatus(statusView({ count: 0, ageMinutes: null, stale: null, legacyPluginEnabled: false, bbt: { state: "untested" } }), NOW), "Zotero index: 0 · unknown age old · BBT untested");
+	const failedAt = new Date("2026-09-14T09:05:00.000Z");
+	const clock = `${String(failedAt.getHours()).padStart(2, "0")}:${String(failedAt.getMinutes()).padStart(2, "0")}`;
+	assert.equal(formatStatus(statusView({ stale: false, legacyPluginEnabled: false, bbt: { state: "failed", at: failedAt.toISOString(), reason: "connection-refused" } }), NOW), `Zotero index: 450 · 27 h old · BBT failed ${clock} (connection refused)`);
+	assert.equal(formatStatus(statusView({ stale: false, legacyPluginEnabled: false, bbt: { state: "failed", at: failedAt.toISOString(), reason: "http-other", status: 500 } }), NOW), `Zotero index: 450 · 27 h old · BBT failed ${clock} (HTTP 500)`);
+	assert.equal(formatStatus(statusView({ stale: false, legacyPluginEnabled: false, bbt: { state: "failed", reason: "timeout" } }), NOW), "Zotero index: 450 · 27 h old · BBT failed (timeout)");
+	assert.equal(formatStatus(statusView({ stale: false, legacyPluginEnabled: false, bbt: { state: "failed" } }), NOW), "Zotero index: 450 · 27 h old · BBT failed");
+	// A future or unparsable observation time falls back to the clock label instead of a negative age.
+	assert.equal(formatStatus(statusView({ stale: false, legacyPluginEnabled: false, bbt: { state: "ok", at: "not a date" } }), NOW), "Zotero index: 450 · 27 h old · BBT ok at unknown time");
+});
+
+test("connection.bbt carries the typed transport reason beside error only when the host reported one", () => {
+	const failed = buildConnection(snapshot({ bbt: { reachable: false, error: "Zotero/Better BibTeX did not answer at http://127.0.0.1:23119/better-bibtex/json-rpc (connection refused). Start Zotero, then retry.", reason: "connection-refused" } }));
+	assert.deepEqual(Object.keys(failed.bbt), ["reachable", "error", "reason"]);
+	assert.equal(failed.bbt.reason, "connection-refused");
+	const untyped = buildConnection(snapshot({ bbt: { reachable: false, error: "connect ECONNREFUSED" } }));
+	assert.equal("reason" in untyped.bbt, false);
+	assert.equal("reason" in buildConnection(snapshot()).bbt, false);
+});

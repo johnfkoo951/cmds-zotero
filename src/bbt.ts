@@ -1,22 +1,53 @@
 import type { Capabilities, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { httpRequest, mapBounded, rpc } from "./api/transport";
+import { BbtTransportError, httpRequest, isBbtTransportError, mapBounded, rpc, type BbtTransportReason } from "./api/transport";
 import { normalizeAttachments, normalizeEntry, parseItemURI, text } from "./api/normalize";
 import { entryHash, record, validateEntry, validateIndex } from "./identity";
 import { indexDiagnostics } from "./diagnostics";
 import { positiveInteger } from "./uris";
 
+// 0.5 R4: the last real BBT observation (no polling); `aborted` requests are the plugin's own cancellation and are not recorded.
+export interface BbtOutcome { ok: boolean; at: Date; reason?: BbtTransportReason; status?: number; message?: string }
+
 export class BbtService {
 	private controller = new AbortController();
+	private outcome: BbtOutcome | null = null;
+	private readonly outcomeListeners = new Set<(outcome: BbtOutcome) => void>();
 	constructor(private settings: CmdsZoteroSettings) {}
 	updateSettings(settings: CmdsZoteroSettings): void {
 		this.controller.abort();
 		this.controller = new AbortController();
 		this.settings = settings;
 	}
-	dispose(): void { this.controller.abort(); }
+	dispose(): void { this.controller.abort(); this.outcomeListeners.clear(); }
+
+	/** The most recent real BBT call outcome, or null before any call completed. */
+	get lastOutcome(): BbtOutcome | null { return this.outcome; }
+
+	/** Subscribes to every recorded outcome; returns the unsubscribe function. */
+	onOutcome(listener: (outcome: BbtOutcome) => void): () => void {
+		this.outcomeListeners.add(listener);
+		return () => { this.outcomeListeners.delete(listener); };
+	}
+
+	private recordOutcome(outcome: BbtOutcome): void {
+		this.outcome = outcome;
+		for (const listener of this.outcomeListeners) listener(outcome);
+	}
+
+	/** Records the outcome of one transport call: success, or a typed failure other than the plugin's own abort. */
+	private async observed<T>(request: Promise<T>): Promise<T> {
+		try {
+			const result = await request;
+			this.recordOutcome({ ok: true, at: new Date() });
+			return result;
+		} catch (error) {
+			if (isBbtTransportError(error) && error.reason !== "aborted") this.recordOutcome({ ok: false, at: new Date(), reason: error.reason, ...(error.status !== undefined ? { status: error.status } : {}), message: error.message });
+			throw error;
+		}
+	}
 
 	private call(method: string, params: unknown[] = [], timeout = this.settings.requestTimeoutMs): Promise<unknown> {
-		return rpc(this.settings.bbtEndpoint, method, params, timeout, this.controller.signal);
+		return this.observed(rpc(this.settings.bbtEndpoint, method, params, timeout, this.controller.signal));
 	}
 
 	async capabilities(): Promise<Capabilities> {
@@ -24,8 +55,8 @@ export class BbtService {
 	}
 
 	private async readCapabilities(settings: CmdsZoteroSettings, signal = this.controller.signal): Promise<Capabilities> {
-		const ready = await rpc(settings.bbtEndpoint, "api.ready", [], settings.requestTimeoutMs, signal);
-		if (!record(ready) || !text(ready.zotero) || !text(ready.betterbibtex)) throw new Error("Invalid BBT readiness response");
+		const ready = await this.observed(rpc(settings.bbtEndpoint, "api.ready", [], settings.requestTimeoutMs, signal));
+		if (!record(ready) || !text(ready.zotero) || !text(ready.betterbibtex)) throw new BbtTransportError("invalid-response", settings.bbtEndpoint, "Invalid BBT readiness response");
 		return { zotero: text(ready.zotero), betterbibtex: text(ready.betterbibtex), metadata: true, attachments: true, annotations: true, bibliography: true };
 	}
 
@@ -35,15 +66,15 @@ export class BbtService {
 
 	async cayw(): Promise<string> {
 		const params = new URLSearchParams({ format: this.settings.caywFormat, brackets: "true" });
-		const response = await httpRequest(`${this.settings.bbtEndpoint.replace(/\/$/, "")}/cayw?${params.toString()}`, this.settings.requestTimeoutMs, undefined, this.controller.signal);
-		if (response.status !== 200) throw new Error(`BBT picker HTTP ${response.status}`);
+		const response = await this.observed(httpRequest(`${this.settings.bbtEndpoint.replace(/\/$/, "")}/cayw?${params.toString()}`, this.settings.requestTimeoutMs, undefined, this.controller.signal));
+		if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", `${this.settings.bbtEndpoint.replace(/\/$/, "")}/cayw`, `BBT picker HTTP ${response.status}`, { status: response.status });
 		return response.text.trim();
 	}
 
 	async collect(previous?: ZoteroIndex): Promise<ZoteroIndex> {
 		const settings = { ...this.settings };
 		const signal = this.controller.signal;
-		const call = (method: string, params: unknown[], timeout = settings.requestTimeoutMs): Promise<unknown> => rpc(settings.bbtEndpoint, method, params, timeout, signal);
+		const call = (method: string, params: unknown[], timeout = settings.requestTimeoutMs): Promise<unknown> => this.observed(rpc(settings.bbtEndpoint, method, params, timeout, signal));
 		const capabilities = await this.readCapabilities(settings, signal);
 		const result = await call("item.search", [[["itemType", "isNot", "attachment"], ["itemType", "isNot", "annotation"], ["itemType", "isNot", "note"]], "*"]);
 		if (!Array.isArray(result)) throw new Error("Invalid BBT parent search response");

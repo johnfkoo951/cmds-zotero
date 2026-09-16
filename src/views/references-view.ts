@@ -11,6 +11,7 @@ export class ReferencesView extends ItemView {
 	private file: TFile | null = null;
 	private rows: ReferenceRow[] = [];
 	private generation = 0;
+	private status: HTMLElement | null = null; // 0.5 R4
 	private readonly refresh = debounce(() => { void this.render(); }, 600, true);
 
 	constructor(leaf: WorkspaceLeaf, private plugin: CMDSZoteroPlugin) { super(leaf); }
@@ -50,6 +51,7 @@ export class ReferencesView extends ItemView {
 		container.empty();
 		container.addClass("cmds-zotero-sidebar");
 		const header = container.createDiv({ cls: "cmds-zotero-sidebar-header" });
+		this.status = header.createDiv({ cls: "cmds-zotero-sidebar-status", text: this.plugin.statusLine() }); // 0.5 R4
 		if (!file) { header.createEl("p", { text: "Open a Markdown note to list its references." }); return; }
 		const text = await this.noteText(file);
 		if (generation !== this.generation) return;
@@ -123,5 +125,8 @@ export class ReferencesView extends ItemView {
 		new Notice(`Copied ${lines.length} bibliography entr${lines.length === 1 ? "y" : "ies"}.`);
 	}
 
-	onClose(): Promise<void> { this.contentEl.empty(); return Promise.resolve(); }
+	onClose(): Promise<void> { this.contentEl.empty(); this.status = null; return Promise.resolve(); }
+
+	// 0.5 R4: the shared status line in the header, updated by the plugin without a full re-render.
+	renderStatus(line: string): void { this.status?.setText(line); }
 }

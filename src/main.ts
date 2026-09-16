@@ -4,7 +4,7 @@ import { IndexRefusalError, IndexService, describeRefreshFailure, formatIndexAge
 import { ImportService } from "./importer";
 import { IngestAPI } from "./ingest-api";
 import type { ActionHost, AgentAction, PdfTextRequest, RefreshRequest } from "./agent/actions";
-import { buildConnection } from "./agent/connection";
+import { buildConnection, formatStatus } from "./agent/connection";
 import { ObsidianVaultReader } from "./obsidian-vault";
 import { PdfTextService } from "./pdf/extract";
 import { applyReconcile } from "./reconcile-apply";
@@ -14,7 +14,7 @@ import { promises as fs } from "node:fs";
 import * as nodePath from "node:path";
 import { readLocalFile } from "./local-file";
 import { validateIndex } from "./identity";
-import { rpc } from "./api/transport";
+import { describeBbtError, rpc, transportReasonOf } from "./api/transport";
 import { VaultLinks } from "./vault-links";
 import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
@@ -52,6 +52,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	private publish!: (index: ZoteroIndex) => Promise<void>;
 	private lastView: MarkdownView | null = null;
 	private pdfText!: PdfTextService;
+	// 0.5 R4: shared status line (index age/staleness, legacy plugin, last BBT observation).
+	private statusBar: HTMLElement | null = null;
 
 	async onload(): Promise<void> {
 		const stored: unknown = await this.loadData();
@@ -107,6 +109,13 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.scheduleMap(); }));
 		this.registerEvent(this.app.vault.on("rename", () => this.scheduleMap()));
 		this.registerEvent(this.app.vault.on("delete", () => this.scheduleMap()));
+		// 0.5 R4: status-bar item; click probes BBT once (no refresh); the minute tick only re-renders the age text.
+		this.statusBar = this.addStatusBarItem();
+		this.statusBar.addClass("cmds-zotero-status-bar", "mod-clickable");
+		this.statusBar.setAttr("aria-label", "Zotero index and Better BibTeX status; click to test the connection");
+		this.registerDomEvent(this.statusBar, "click", () => { void this.testConnection(); });
+		this.registerInterval(window.setInterval(() => this.renderStatus(), 60_000));
+		this.renderStatus();
 		void this.warmIndex();
 	}
 
@@ -131,7 +140,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 			const changed = this.lastIndex?.generatedAt !== index.generatedAt;
 			this.lastIndex = index;
 			if (changed) { this.bibliographyCache.clear(); await this.links.publish(index); this.refreshViews(); }
+			this.renderStatus(); // 0.5 R4
 		};
+		const bbt = this.bbt; // 0.5 R4: every real BBT outcome re-renders the status line
+		bbt.onOutcome(() => { if (this.active && this.bbt === bbt) this.renderStatus(); });
 		this.publish = onIndex;
 		this.service = new IngestAPI(this.app, this.bbt, this.index, this.links, onIndex, (action, request, now) => this.agentHost(action, request, now, onIndex, indexService, pdfText));
 	}
@@ -143,7 +155,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		const adapter = this.app.vault.adapter;
 		const indexExists = await adapter.exists(this.settings.zoteroIndexPath);
 		const root = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
-		const bbtInfo = action === "connection" ? await this.bbt.capabilities().then(value => ({ reachable: true, zotero: value.zotero, betterbibtex: value.betterbibtex }), error => ({ reachable: false, error: error instanceof Error ? error.message : "BBT unreachable" })) : { reachable: null };
+		const bbtInfo = action === "connection" ? await this.bbt.capabilities().then(value => ({ reachable: true, zotero: value.zotero, betterbibtex: value.betterbibtex }), (error: unknown) => { const reason = transportReasonOf(error); return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable", ...(reason ? { reason } : {}) }; }) : { reachable: null };
 		const connection = buildConnection({
 			mode: "live", obsidian: "ok", pluginVersion: this.manifest.version, pluginApiVersions: [1, 2], pluginEnabled: true, bbt: bbtInfo,
 			index: { source: index ? "plugin" : "none", path: this.settings.zoteroIndexPath, generatedAt: index?.generatedAt ?? null, count: index?.count ?? null, complete: index?.complete ?? null, schemaVersion: index?.schemaVersion ?? null },
@@ -456,6 +468,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 			const index = await this.loadIndexForRead();
 			const owned = index.entries.filter(entry => this.links.localFiles(entry, index).length > 0);
 			if (!owned.length) throw new Error("No owned literature notes were found. Import a note first.");
+			// 0.5 R4: every update renders bibliography text through BBT; probe once and stop with one mapped line instead of N identical skips.
+			try { await this.bbt.capabilities(); }
+			catch (error) { throw new Error(`${describeBbtError(error)} Updating literature notes needs Better BibTeX for bibliography text; no note was changed.`); }
 			const notice = new Notice(`Updating ${owned.length} literature notes…`, 0);
 			const updated: string[] = [];
 			const unchanged: string[] = [];
@@ -540,7 +555,40 @@ export default class CMDSZoteroPlugin extends Plugin {
 	async showDiagnostics(): Promise<void> {
 		await this.run(async () => {
 			const result = await this.service.diagnose();
-			new ReportModal(this.app, "Index and link diagnostics", `Generated: ${result.generatedAt}\nEntries: ${result.count}\nComplete: ${result.complete}\n\n` + (result.diagnostics.map(d => `[${d.severity}] ${d.code}: ${d.message}`).join("\n") || "No issues reported.")).open();
+			new ReportModal(this.app, "Index and link diagnostics", `${this.statusLine()}\nGenerated: ${result.generatedAt}\nEntries: ${result.count}\nComplete: ${result.complete}\n\n` + (result.diagnostics.map(d => `[${d.severity}] ${d.code}: ${d.message}`).join("\n") || "No issues reported.")).open();
 		});
+	}
+
+	// 0.5 R4: one status line for the status bar, both sidebar headers and the diagnostics report.
+	statusLine(now = new Date()): string {
+		const outcome = this.bbt.lastOutcome;
+		return formatStatus({
+			count: this.lastIndex?.count ?? null,
+			ageMinutes: this.index.ageMinutes(this.lastIndex, now.getTime()),
+			stale: this.index.isStale(this.lastIndex, now.getTime()),
+			legacyPluginEnabled: this.legacyPluginEnabled(),
+			bbt: outcome ? { state: outcome.ok ? "ok" : "failed", at: outcome.at.toISOString(), ...(outcome.reason ? { reason: outcome.reason } : {}), ...(outcome.status !== undefined ? { status: outcome.status } : {}) } : { state: "untested" },
+		}, now);
+	}
+
+	/** Re-renders the status line everywhere it is shown; clock-only, never contacts BBT. */
+	renderStatus(): void {
+		if (!this.active) return;
+		const line = this.statusLine();
+		if (this.statusBar) {
+			this.statusBar.setText(line);
+			this.statusBar.toggleClass("is-stale", this.cachedIndexStale());
+			this.statusBar.toggleClass("is-failed", this.bbt.lastOutcome?.ok === false);
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REFERENCES)) if (leaf.view instanceof ReferencesView) leaf.view.renderStatus(line);
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS)) if (leaf.view instanceof AnnotationsView) leaf.view.renderStatus(line);
+	}
+
+	/** One capabilities probe (the settings "Test connection" logic) with a mapped Notice; never a refresh. */
+	async testConnection(): Promise<void> {
+		try {
+			const capabilities = await this.bbt.capabilities();
+			new Notice(`Connected: Zotero ${capabilities.zotero}; Better BibTeX ${capabilities.betterbibtex}.`);
+		} catch (error) { new Notice(describeBbtError(error)); }
 	}
 }
