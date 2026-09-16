@@ -13,6 +13,13 @@ Note-writer correctness (literature note rendering; managed section IDs unchange
 - **Obsidian's automatic link updates are not reported as user edits.** Section comparison accepts a body that differs from the fresh render only by Markdown/wiki link targets (moved image folder, renamed note, including folders with parentheses such as `84. References (Zotero)/images`); stored hashes stay raw. Consequence: link targets inside managed sections are plugin-owned and are regenerated on update — retarget by moving the file rather than editing the link.
 - No change: page-label rendering (`p. -` placeholders fall back to the PDF page position since 0.3.0).
 
+Identity keys and ownership (R14):
+
+- **One literature-note key set for new notes.** Initial frontmatter is exactly `type: zotero` plus `LITERATURE_IDENTITY_KEYS`: `zoteroID`, `zoteroSelectURI` (new; carries library/group scope), `zotero-key` (ZotLit-compatible), `citekey`, `doi`, `title`, `authors`, `year`, `tags`, and the `zotero_*` display-parity group. `zotero-id`, `zotero-library-id`, `zoteroItemKey`, `zoteroLibraryID`, `zoteroLibraryType` and `zoteroGroupID` are no longer written (all derivable from `zoteroID`/`zoteroSelectURI`). Existing notes are never rewritten; the dead `zotero_citekey` read is gone.
+- **Foreign-identity guard.** Note identity resolves `zoteroID`, then `zoteroSelectURI`, then `zotero-key` (only while the index holds one library), then citekey/history — and citekey evidence counts only for `@`-prefixed basenames or `type` in {`zotero`, `paper-hub`, `paper-analysis`, `raw-source`, `literature-zotero`}. Notes carrying `bookendsID`, a `bookends://` or `x-devonthink-item://` link, or any other `type` are never claimed, so Bookends `lastname+year` notes no longer become "linked literature notes"; wiki summaries without a type or `@` prefix drop out of the note map and `vaultNotes.other`.
+- **Owned-only batch update.** "Update all owned literature notes" owns a note only when it resolves, lies in the output folder and carries the `cmds-zotero-owner` marker; other linked notes are reported once as `Linked but not owned: M (use Adopt in 0.5)` and never reach BBT. Pure helper `partitionOwnedNotes()` in `src/note-ownership.ts`.
+- **`reconcile` reports pre-0.5 literature notes.** `type: zotero` notes still carrying the dropped keys appear as `type: literature` rows with the informational finding `legacy-frontmatter-dialect` (diagnostic severity `info`, `skippedReason: not-paper-hub`, never apply-eligible).
+
 ## 0.3.0 — Development, unreleased
 
 Feature parity pass after reviewing ZotLit 2.1.4, Zotero Integration 3.2.1, Pandoc Reference List, and Zotero-side add-ons; decisions are recorded in `docs/plugin-landscape-2026-09.md`.

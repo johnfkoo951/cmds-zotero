@@ -277,7 +277,7 @@ test("transition table is exhaustive and guarded", () => {
 	assert.deepEqual(STATUS_TRANSITIONS.citekeyProvisional, { absent: ["true", "false"], true: ["false"], false: [] });
 	assert.deepEqual(STATUS_TRANSITIONS.zoteroID, { absent: ["value"], present: [] });
 	assert.deepEqual(STATUS_TRANSITIONS.zoteroSelectURI, { absent: ["value"], present: [] });
-	assert.equal(HUB_FINDINGS.length, 18);
+	assert.equal(HUB_FINDINGS.length, 19); // 0.5 R14: + legacy-frontmatter-dialect
 	assert.equal(APPLY_ELIGIBLE_FINDINGS.length, 5);
 });
 

@@ -1,8 +1,11 @@
 import { createHash } from "crypto";
 import type { Annotation, CmdsZoteroSettings, ZoteroIndexEntry } from "./types";
+import { LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
 import { colorName } from "./annotations/colors";
 
 export const hashText = (text: string): string => createHash("sha256").update(text).digest("hex");
+// 0.5 R14: the marker that proves a literature note was created by this plugin for exactly this item.
+export const ownerMarker = (id: string): string => `<!-- cmds-zotero-owner:${hashText(id)} -->`;
 export interface ImagePlan { source: string; path: string }
 export interface RenderedNote { content: string; conflicts: string[]; images: ImagePlan[] }
 export interface RenderContext {
@@ -239,7 +242,7 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 
 /** Frontmatter is initialized once; existing YAML remains entirely user-owned. */
 export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, settings: CmdsZoteroSettings, previous: string | null, imageHashes: ReadonlyMap<string, string> = new Map(), context: RenderContext = {}): RenderedNote {
-	const owner = `<!-- cmds-zotero-owner:${hashText(entry.id)} -->`;
+	const owner = ownerMarker(entry.id);
 	const conflicts: string[] = [];
 	const images: ImagePlan[] = [];
 	if (previous !== null && !previous.includes(owner)) return { content: previous, conflicts: ["Existing note is not owned by this Zotero item"], images };
@@ -300,16 +303,16 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	}
 
 	if (previous === null) {
-		const yaml: Record<string, unknown> = {
-			// `tags` mirrors Obsidian-valid slugs; `zotero_tags` and the `**Tags**::` field keep the raw Zotero tags.
-			type: "zotero", citekey: entry.citekey, title: entry.title, authors: authorList, year: entry.year, doi: entry.doi, tags: normalizedTags(["zotero", ...tags]),
+		// 0.5 R14: exactly `type` plus LITERATURE_IDENTITY_KEYS, in that order; library scope lives in `zoteroSelectURI`.
+		// `tags` mirrors Obsidian-valid slugs; `zotero_tags` and the `**Tags**::` field keep the raw Zotero tags.
+		const values: Record<LiteratureIdentityKey, unknown> = {
+			zoteroID: entry.id, zoteroSelectURI: entry.zoteroSelectURI, "zotero-key": entry.itemKey,
+			citekey: entry.citekey, doi: entry.doi, title: entry.title, authors: authorList, year: entry.year, tags: normalizedTags(["zotero", ...tags]),
 			zotero_title: entry.title, zotero_author: authorList, zotero_year: entry.year, zotero_journal: journal, zotero_doi: entry.doi, zotero_url: entry.url, zotero_tags: tags,
-			"zotero-id": entry.id, "zotero-key": entry.itemKey, "zotero-library-id": entry.libraryID,
-			zoteroID: entry.id, zoteroItemKey: entry.itemKey, zoteroLibraryID: entry.libraryID, zoteroLibraryType: entry.libraryType,
-			...(entry.groupID === undefined ? {} : { zoteroGroupID: entry.groupID }),
 		};
+		const yaml: [string, unknown][] = [["type", "zotero"], ...LITERATURE_IDENTITY_KEYS.map((k): [string, unknown] => [k, values[k]])];
 		// JSON scalars and flow sequences are valid YAML and keep quoting unambiguous.
-		const frontmatter = Object.entries(yaml).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n");
+		const frontmatter = yaml.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n");
 		const intro = ["overview", "citation"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
 		const synthesis = "## Synthesis\n\n> [!Synth]\n> **Contribution**::\n> **Related**::";
 		const details = ["metadata", "notes"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");

@@ -1,13 +1,16 @@
 /**
  * Classifies vault notes that belong to one Zotero item (vocabulary §4 `vaultNotes`). Pure: never imports `obsidian`.
- * Notes are matched to a resolved entry by frontmatter `zoteroID`, then `citekey` equality with the entry citekey or
- * its history; identifier hints (DOI, arXiv, case-insensitive citekey) match hubs and raw sources even when the item
- * is not in the index, so a not-found DOI still finds the existing hub. Ownership stays with `note-aliases`; the
- * ZotLit `zotero-key` is read here only to point `literatureNote` at that note.
+ * Notes are matched to a resolved entry by frontmatter `zoteroID`, then `zoteroSelectURI`, then `citekey` equality with
+ * the entry citekey or its history; identifier hints (DOI, arXiv, case-insensitive citekey) match hubs and raw sources
+ * even when the item is not in the index, so a not-found DOI still finds the existing hub. Citekey evidence follows the
+ * `note-aliases` ladder (0.5 R14): notes carrying a foreign identity never match, and an `@`-less basename needs a Zotero
+ * note `type` or the output folder. Ownership stays with `note-aliases`; the ZotLit `zotero-key` is read here only to
+ * point `literatureNote` at that note.
  */
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { noteRef, type NoteRecord, type NoteRef, type VaultNotes } from "./types";
 import { normalizeArxiv, normalizeDoi } from "./search";
+import { citekeyEvidenceAllowed, hasForeignIdentity, selectIdentity } from "../note-aliases";
 
 export interface NoteHints { doi?: string; arxiv?: string; citekey?: string }
 export interface ClassifyOptions {
@@ -115,14 +118,25 @@ function buildMatcher(entry: ZoteroIndexEntry | null, hints: NoteHints, index: Z
 	return { entry, keys, keysCi, doi, arxiv, zotLitKey, outputFolder: folder };
 }
 
-/** Whether the note is about the item: `zoteroID`, citekey equality (entry or hints), DOI/arXiv hints for hubs and raw sources. */
+/** 0.5 R14: a `zotero://select` URI naming the entry's library scope and item key. */
+function selectMatches(uri: unknown, entry: ZoteroIndexEntry): boolean {
+	const select = selectIdentity(uri);
+	return select !== null && select.itemKey === entry.itemKey && select.libraryType === entry.libraryType && select.groupID === entry.groupID;
+}
+
+/** Whether the note is about the item: `zoteroID`, `zoteroSelectURI`, citekey equality (entry or hints), DOI/arXiv hints for hubs and raw sources. */
 function matches(note: NoteRecord, kind: NoteKind, m: Matcher): boolean {
 	const fm = note.frontmatter;
 	if (!fm) return false;
 	const zoteroID = text(fm.zoteroID);
 	if (m.entry && zoteroID && zoteroID === m.entry.id) return true;
-	const citekey = noteCitekey(note);
-	if (citekey && (m.keys.has(citekey) || m.keysCi.has(citekey.toLowerCase()))) return true;
+	// 0.5 R14: foreign conventions (Bookends, DEVONthink, other `type`s) never match on weaker evidence.
+	if (hasForeignIdentity(fm)) return false;
+	if (m.entry && selectMatches(fm.zoteroSelectURI, m.entry)) return true;
+	// An `@<citekey>` basename is citekey evidence too (ZotLit-style notes carry no `citekey` key), as in `note-aliases`.
+	const citekey = noteCitekey(note) || (note.basename.startsWith("@") ? note.basename.slice(1) : "");
+	const citekeyAllowed = citekeyEvidenceAllowed(note.basename, fm) || underFolder(note.path, m.outputFolder);
+	if (citekeyAllowed && citekey && (m.keys.has(citekey) || m.keysCi.has(citekey.toLowerCase()))) return true;
 	if (kind === "hub" || kind === "raw") {
 		if (m.doi && noteDoi(note) === m.doi) return true;
 		if (kind === "hub" && m.arxiv && noteArxiv(note) === m.arxiv) return true;

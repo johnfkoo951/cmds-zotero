@@ -16,6 +16,7 @@ import { readLocalFile } from "./local-file";
 import { validateIndex } from "./identity";
 import { rpc } from "./api/transport";
 import { VaultLinks } from "./vault-links";
+import { ownershipSummary, partitionOwnedNotes } from "./note-ownership"; // 0.5 R14
 import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
 import { citekeyAtCursor, parseProtocolRequest } from "./protocol";
@@ -450,12 +451,20 @@ export default class CMDSZoteroPlugin extends Plugin {
 		});
 	}
 
-	/** Re-renders managed sections of every note this plugin owns; conflicts are reported and skipped, never forced. */
+	/**
+	 * Re-renders managed sections of every note this plugin owns; conflicts are reported and skipped, never forced.
+	 * 0.5 R14: owned = resolves to an entry, lies in the output folder and carries the owner marker; other linked notes are
+	 * counted once and never reach the BBT-backed preview.
+	 */
 	async updateAllLiteratureNotes(): Promise<void> {
 		await this.run(async () => {
 			const index = await this.loadIndexForRead();
-			const owned = index.entries.filter(entry => this.links.localFiles(entry, index).length > 0);
-			if (!owned.length) throw new Error("No owned literature notes were found. Import a note first.");
+			const partition = await partitionOwnedNotes(index, this.app.vault.getMarkdownFiles().map(file => ({ path: file.path, basename: file.basename, frontmatter: this.app.metadataCache.getFileCache(file)?.frontmatter })), this.settings.outputFolder, path => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				return file instanceof TFile ? this.app.vault.cachedRead(file) : Promise.resolve("");
+			});
+			const owned = partition.owned;
+			if (!owned.length && !partition.linkedNotOwned.length) throw new Error("No owned literature notes were found. Import a note first.");
 			const notice = new Notice(`Updating ${owned.length} literature notes…`, 0);
 			const updated: string[] = [];
 			const unchanged: string[] = [];
@@ -473,7 +482,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 				}
 			} finally { notice.hide(); }
 			this.scheduleMap();
-			new ReportModal(this.app, "Literature note batch update", [`Updated: ${updated.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`, "", ...updated.map(path => `updated  ${path}`), ...skipped.map(line => `skipped  ${line}`)].join("\n")).open();
+			new ReportModal(this.app, "Literature note batch update", [`Updated: ${updated.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`, ownershipSummary(partition), "", ...updated.map(path => `updated  ${path}`), ...skipped.map(line => `skipped  ${line}`)].join("\n")).open();
 		});
 	}
 

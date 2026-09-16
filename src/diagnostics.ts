@@ -24,6 +24,7 @@ export const DIAGNOSTIC_CODES = {
 	"legacy-plugin-enabled": "error",
 	"index-stale": "info",
 	"index-in-git": "warning",
+	"legacy-frontmatter-dialect": "info", // 0.5 R14
 } as const satisfies Record<string, DiagnosticSeverity>;
 
 export type DiagnosticCode = keyof typeof DIAGNOSTIC_CODES;
