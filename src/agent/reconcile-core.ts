@@ -10,7 +10,7 @@ import { parseZoteroURI } from "../uris";
 import type { AgentDiagnostic } from "../diagnostics";
 import { diagnostic } from "../diagnostics";
 import type { CitekeyShape, HubClassification, NoteRecord, ResolutionStatus } from "./types";
-import { HUB_WRITABLE_KEYS } from "./types";
+import { HUB_WRITABLE_KEYS, LEGACY_LITERATURE_KEYS } from "./types";
 import { arxivFromDoi, citekeyShape, entryArxiv, normalizeArxiv, normalizeDoi } from "./search";
 
 export const HUB_FINDINGS = [
@@ -18,6 +18,7 @@ export const HUB_FINDINGS = [
 	"citekeyProvisional-absent", "malformed-identity", "identity-conflict", "citekeyProvisional-stale", "zoteroID-mismatch", "zoteroStatus-stale",
 	"s01-says-unregistered", "citekey-not-pinned", "doi-nonconforming", "hub-attachment-missing", "index-stale", "index-incomplete",
 	"raw-source-path", "frontmatter-parse-error",
+	"legacy-frontmatter-dialect", // 0.5 R14: report-only, literature notes carrying pre-0.5 keys
 ] as const;
 export type HubFinding = typeof HUB_FINDINGS[number];
 
@@ -35,7 +36,7 @@ export type ProposedFrontmatter = Partial<Record<HubWritableKey, unknown>>;
 export type ResolvedVia = "zoteroID" | "zoteroSelectURI" | "citekey" | "citekeyHistory" | "folder" | "doi" | "arxiv" | null;
 export type S01Marker = "registered" | "not-registered" | "provisional" | "confirmed" | null;
 export type SkippedReason = "not-paper-hub" | "raw-source" | "raw-source-path" | "ambiguous" | "unchecked" | "malformed-identity" | "identity-conflict" | "index-stale" | "index-incomplete" | "frontmatter-parse-error" | "yaml-roundtrip-unsafe" | "write-error" | "post-write-mismatch";
-export type ReconcileNoteType = "paper-hub" | "raw-source" | "parse-error";
+export type ReconcileNoteType = "paper-hub" | "raw-source" | "parse-error" | "literature";
 
 /**
  * Transition table for `reconcile --apply` (vocabulary §2). Keys are the observed value (`absent` when the key is
@@ -596,7 +597,33 @@ function noteType(note: NoteRecord): ReconcileNoteType | null {
 	if (isRawSourcePath(note.path) && frontmatter.type === "raw-source" && stringValue(frontmatter.citekey)) return "raw-source";
 	if (frontmatter.type === "paper-hub") return "paper-hub";
 	if (frontmatter.type === "raw-source" && stringValue(frontmatter.citekey)) return "raw-source";
+	if (frontmatter.type === "zotero" && legacyLiteratureKeys(frontmatter).length) return "literature";
 	return null;
+}
+
+// 0.5 R14
+/** The pre-0.5 literature-note keys present on a note (`zotero-id`, `zoteroItemKey`, …), in vocabulary order. */
+export function legacyLiteratureKeys(frontmatter: Record<string, unknown>): string[] {
+	return LEGACY_LITERATURE_KEYS.filter(key => key in frontmatter);
+}
+
+/**
+ * A `type: zotero` literature note carrying pre-0.5 keys: listed for information only. Reconcile never classifies or
+ * patches literature notes (their frontmatter is user-owned after creation), so the row is `unchecked`,
+ * `skippedReason: not-paper-hub`, never proposal-eligible, and its only finding is `legacy-frontmatter-dialect`
+ * (surfaced as a single aggregated diagnostic by `legacyDialectDiagnostic`, not per note).
+ */
+function legacyLiteratureNote(note: NoteRecord, index: ZoteroIndex | null): ReconcileNote {
+	const keys = legacyLiteratureKeys(note.frontmatter ?? {});
+	const resolution = resolveHub(note, index);
+	const entry = resolution.entry;
+	return {
+		path: note.path, type: "literature", citekey: resolution.citekey, resolvedVia: resolution.resolvedVia, classification: "unchecked",
+		findings: [finding("legacy-frontmatter-dialect", `Literature note carries pre-0.5 keys (${keys.join(", ")}); frontmatter is user-owned and is not rewritten. zoteroID remains the only identity key agents may rely on.`, keys.join(", "))],
+		index: entry ? { id: entry.id, citekey: entry.citekey, citekeyShape: citekeyShape(entry.citekey), hasPdf: hasPdf(entry) } : null,
+		observed: observeIdentity(note), identityEvidence: resolution.evidence, candidateIDs: resolution.candidates.map(candidate => candidate.id),
+		proposalEligible: false, proposed: null, proposedS01: null, applied: false, skippedReason: "not-paper-hub",
+	};
 }
 
 function emptySummary(): HubSummary {
@@ -633,6 +660,7 @@ function parseErrorNote(note: NoteRecord): ReconcileNote {
 
 function reconcileNote(note: NoteRecord, type: ReconcileNoteType, index: ZoteroIndex | null, vault: ReconcileVault, opts: ReconcileOptions): ReconcileNote {
 	if (type === "parse-error") return parseErrorNote(note);
+	if (type === "literature") return legacyLiteratureNote(note, index);
 	const resolution = resolveHub(note, index);
 	const verdict = classifyHub(note, resolution, opts.stale, opts.allowStale);
 	const hub = type === "paper-hub";
@@ -697,9 +725,28 @@ export function noteDiagnostics(note: ReconcileNote): AgentDiagnostic[] {
 	return diagnostics;
 }
 
+// 0.5 R14
+/** Paths named in the aggregated `legacy-frontmatter-dialect` diagnostic; the rest are counted. */
+export const LEGACY_DIALECT_SAMPLE = 5;
+
+/**
+ * One informational diagnostic for all pre-0.5 literature notes (there is one per note in `notes`): every 0.3/0.4 note
+ * carries the dropped keys forever, so a per-note diagnostic would inflate `diagnostics`/`reconcile` payloads for a
+ * condition that has no remedy. `path` is the first sampled note; the message carries the count and a bounded sample.
+ */
+export function legacyDialectDiagnostic(notes: ReconcileNote[]): AgentDiagnostic | null {
+	const paths = notes.filter(note => note.type === "literature").map(note => note.path);
+	if (!paths.length) return null;
+	const sample = paths.slice(0, LEGACY_DIALECT_SAMPLE);
+	const rest = paths.length - sample.length;
+	const plural = paths.length === 1 ? "note carries" : "notes carry";
+	return diagnostic("legacy-frontmatter-dialect", `${paths.length} literature ${plural} pre-0.5 frontmatter keys; frontmatter is user-owned and is not rewritten. zoteroID remains the only identity key agents may rely on. Sample: ${sample.join(", ")}${rest ? ` (+${rest} more)` : ""}`, { path: sample[0] });
+}
+
 /**
  * Walks `type: paper-hub` notes and `type: raw-source` notes that carry a citekey (report-only), narrowed by `folders`,
  * and returns per-note verdicts, the hub summary and the reconcile-derived diagnostics. Nothing is written.
+ * `type: zotero` literature notes appear only when they carry pre-0.5 keys (`legacy-frontmatter-dialect`, informational).
  */
 export function reconcileNotes(notes: NoteRecord[], index: ZoteroIndex | null, vault: ReconcileVault, opts: ReconcileOptions): ReconcileResult {
 	const folders = normalizeFolders(opts.folders);
@@ -714,12 +761,14 @@ export function reconcileNotes(notes: NoteRecord[], index: ZoteroIndex | null, v
 		if (!type || !inFolders(note.path, folders)) continue;
 		if (type === "paper-hub") hubs += 1;
 		else if (type === "raw-source") rawSources += 1;
-		else parseErrors += 1;
+		else if (type === "parse-error") parseErrors += 1;
 		const result = reconcileNote(note, type, index, vault, opts);
 		if (type === "paper-hub") summary[SUMMARY_KEY[result.classification]] += 1;
 		results.push(result);
 		diagnostics.push(...noteDiagnostics(result));
 	}
+	const legacyDialect = legacyDialectDiagnostic(results); // 0.5 R14
+	if (legacyDialect) diagnostics.push(legacyDialect);
 	return { folders, scanned: { hubs, rawSources, parseErrors }, notes: results, summary: { hubs: summary }, diagnostics };
 }
 

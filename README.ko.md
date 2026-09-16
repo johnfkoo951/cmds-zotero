@@ -72,9 +72,9 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 - **citekey 자동완성.** `[@` 뒤에 citekey·제목·저자·연도 일부를 입력합니다(공백은 `_`). Enter는 `[@citekey]`, Shift+Enter는 `@citekey`를 넣고, `[[` 안에서는 위키링크 형태로 완성합니다. 서제스터는 로컬 인덱스만 읽으며 캐시가 없으면 백그라운드 로드를 시작합니다. 트리거를 "At sign"으로 바꾸면 단어 시작의 `@` 뒤에서도 동작하고, "Off"로 끌 수 있습니다.
 - **참고문헌 사이드바**(`Open references sidebar`). 활성 노트의 `[@key]`, `@key`, `[[@key]]`를 프론트매터와 코드펜스를 제외하고 스캔해 문헌마다 한 번씩 BBT의 설정 스타일 참고문헌을 표시합니다. 미해결·중복 키는 이유와 함께 붉게 표시됩니다. 문헌노트·Zotero 항목·PDF 열기, 첫 인용 위치로 이동, "Copy bibliography"로 목록 복사가 가능합니다.
-- **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID` 또는 citekey로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
+- **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID`, select URI, ZotLit 키 또는 `@citekey` 파일명으로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
 - **Find notes citing a source**는 항목의 현재·이전 citekey를 볼트 전체에서 찾아 첫 인용 위치로 엽니다.
-- **Update all owned literature notes**는 이 플러그인이 소유한 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀을 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
+- **Update all owned literature notes**는 출력 폴더 안에서 소유권 마커를 가진 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀·연결됐지만 비소유를 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
 - **Open link under cursor**는 `zotero://select` 링크를 Zotero에서 열고, `zotero://open-pdf` 링크는 인덱스에서 항목을 찾아 PDF를 엽니다(첨부 키 우선, 없으면 Zotero 자체가 허용하는 부모 항목 키. 페이지·주석 유지, 라이브러리를 넘어 추측하지 않음). `[@citekey]`, `@citekey`, `[[@citekey]]`(별칭·헤딩 접미사 무시)에서는 항목 액션 창을 엽니다. 문장 부호가 뒤따르는 링크도 인식합니다. 그 밖에는 알림만 표시하며, 형식이 잘못된 Zotero URI는 선택 여부와 관계없이 가장 비슷한 항목이 아니라 "없음"으로 처리합니다.
 - **Find literature across vaults**는 이 볼트와 등록한 각 피어 볼트에서 항목에 해당하는 모든 노트를 일반 `obsidian://open?vault=…&file=…` 행으로 나열합니다(피어 볼트의 커뮤니티 플러그인 목록에 Advanced URI가 있으면 `obsidian://advanced-uri?…&filepath=…`. 목록은 `<피어>/<이 볼트의 설정 폴더>/community-plugins.json`에서 읽으므로, 설정 폴더 이름이 다른 피어는 `obsidian://open`으로 돌아갑니다). 논문 허브와 `@citekey` 노트가 먼저 옵니다. 플러그인 자체의 `obsidian://cmds-zotero` 프로토콜은 이름 변경에 안전한 identity 링크와 에이전트 전송 용도로만 남깁니다.
 

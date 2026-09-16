@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS, ZoteroIndexEntry, Annotation } from "../src/types";
+import { LEGACY_LITERATURE_KEYS, LITERATURE_IDENTITY_KEYS } from "../src/agent/types";
 import { bibliographyText, decodeDoubleEncodedURL, hashText, normalizeLinkTargets, normalizeTag, normalizedTags, plainText, renderLiterature, safeDOI, safeURL, safeVaultPath, textFromHTML } from "../src/note-writer";
 
 const annotation: Annotation = { key: "ANNOT001", attachmentKey: "ATTACH01", type: "highlight", text: "Evidence", comment: "Comment", color: "#ffee00", page: 3, pageLabel: "ii", version: 1, uri: "javascript:bad", tags: ["theme"], dateModified: "" };
-const entry: ZoteroIndexEntry = { id: "user:1:ITEM0001", libraryID: 1, libraryType: "user", itemKey: "ITEM0001", citekey: "Example2026", citekeyHistory: [], title: 'A "quoted" title\n---\ninjected: true', authors: ["Test Author"], year: "2026", doi: "", url: "", collections: [], tags: ["a: b", "true"], attachmentPath: "", zoteroSelectURI: "", attachments: [{ key: "ATTACH01", openURI: "", path: null, title: "", annotations: [annotation] }], attachmentStatus: "complete", contentHash: "", metadata: { abstractNote: "<p>Abstract</p>", notes: [{ note: '<p>Note<script>alert(1)</script><img src=x onerror=bad></p>' }] } };
+const entry: ZoteroIndexEntry = { id: "user:1:ITEM0001", libraryID: 1, libraryType: "user", itemKey: "ITEM0001", citekey: "Example2026", citekeyHistory: [], title: 'A "quoted" title\n---\ninjected: true', authors: ["Test Author"], year: "2026", doi: "", url: "", collections: [], tags: ["a: b", "true"], attachmentPath: "", zoteroSelectURI: "zotero://select/library/items/ITEM0001", attachments: [{ key: "ATTACH01", openURI: "", path: null, title: "", annotations: [annotation] }], attachmentStatus: "complete", contentHash: "", metadata: { abstractNote: "<p>Abstract</p>", notes: [{ note: '<p>Note<script>alert(1)</script><img src=x onerror=bad></p>' }] } };
 const render = (previous: string | null, item = entry) => renderLiterature(item, "Author (2026). Example.", DEFAULT_SETTINGS, previous);
 
 test("initial import has quoted typed YAML, native layout and safe notes", () => {
@@ -13,10 +14,13 @@ test("initial import has quoted typed YAML, native layout and safe notes", () =>
 	const titleLine = first.content.split("\n").find(l => l.startsWith("title: ")) ?? "";
 	assert.equal(JSON.parse(titleLine.slice(7)), entry.title);
 	assert.match(first.content, /zoteroID: "user:1:ITEM0001"/);
-	assert.match(first.content, /zoteroItemKey: "ITEM0001"/);
-	assert.match(first.content, /zoteroLibraryID: 1/);
-	assert.match(first.content, /zoteroLibraryType: "user"/);
 	assert.match(first.content, /^type: "zotero"$/m);
+	// 0.5 R14: the initial frontmatter is exactly `type` plus LITERATURE_IDENTITY_KEYS, in order; the pre-0.5 keys are gone.
+	const yaml = first.content.split("\n---\n")[0].replace(/^---\n/, "").split("\n").map(line => line.slice(0, line.indexOf(":")));
+	assert.deepEqual(yaml, ["type", ...LITERATURE_IDENTITY_KEYS]);
+	assert.match(first.content, /^zotero-key: "ITEM0001"$/m);
+	assert.match(first.content, /^zoteroSelectURI: "zotero:\/\/select\/library\/items\/ITEM0001"$/m);
+	for (const key of LEGACY_LITERATURE_KEYS) assert.doesNotMatch(first.content, new RegExp(`^${key}:`, "m"), key);
 	assert.match(first.content, /zotero_year: "2026"/);
 	assert.match(first.content, /> \[!Cite\]\n> Author \\\(2026\\\)\. Example\./);
 	assert.match(first.content, /> \[!Abstract\]\n> abstract:: Abstract/);

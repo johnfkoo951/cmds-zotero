@@ -193,7 +193,9 @@ const notes: NoteRecord[] = [
 	note("40. Paper Analyses/park2021adaptive/park2021adaptive-claim-2.md", { type: "paper-analysis", citekey: "park2021adaptive" }),
 	note("10. Raw Sources/2021-03-09-Adaptive-Memory-Routing.md", { type: "raw-source", citekey: "park2021adaptive", doi: "https://doi.org/10.48550/arXiv.2103.04567" }),
 	note("References/Zotero/@park2021adaptive.md", { type: "zotero", citekey: "park2021adaptive", zoteroID: "1:AAAAAAA1", "zotero-key": "AAAAAAA1" }),
-	note("20. Wiki/park-summary.md", { citekey: "park2021adaptive", tags: ["summary"] }),
+	note("20. Wiki/park-summary.md", { citekey: "park2021adaptive", tags: ["summary"] }), // 0.5 R14: untyped, no `@` — citekey alone no longer claims it
+	note("20. Wiki/@park2021adaptive.md", { tags: ["summary"] }), // 0.5 R14: `@` basename still counts as citekey evidence
+	note("20. Literature Notes/park2021.md", { type: "bookends", citekey: "park2021adaptive", bookendsID: "1234" }), // 0.5 R14: foreign identity, never claimed
 	note("40. Paper Analyses/lim2024rituals/lim2024rituals.md", { type: "paper-hub", citekey: "lim2024", doi: "" }),
 	note("40. Paper Analyses/unregistered/unregistered.md", { type: "paper-hub", citekey: "Ahn2025Provisional", doi: "10.1000/synthetic.9999", citekeyProvisional: true }),
 	note("10. Raw Sources/2025-01-01-Unregistered.md", { type: "raw-source", citekey: "ahn2025provisional", doi: "10.1000/SYNTHETIC.9999." }),
@@ -220,7 +222,7 @@ test("classifyNotes buckets a resolved item by zoteroID and citekey", () => {
 	assert.deepEqual(result.raw.map(r => r.path), ["10. Raw Sources/2021-03-09-Adaptive-Memory-Routing.md"]);
 	assert.deepEqual(result.atoms.map(r => r.path), ["40. Paper Analyses/park2021adaptive/park2021adaptive-claim-1.md", "40. Paper Analyses/park2021adaptive/park2021adaptive-claim-2.md"]);
 	assert.equal(result.literatureNote?.path, "References/Zotero/@park2021adaptive.md");
-	assert.deepEqual(result.other.map(r => r.path), ["20. Wiki/park-summary.md", "30. Literature/zotlit-park.md"]);
+	assert.deepEqual(result.other.map(r => r.path), ["20. Wiki/@park2021adaptive.md", "30. Literature/zotlit-park.md"]);
 	assert.deepEqual(result.warnings, ["Frontmatter could not be parsed for 30. Literature/zotlit-broken.md; it was not classified."]);
 });
 
@@ -231,17 +233,18 @@ test("classifyNotes matches hubs through citekey history and ZotLit notes throug
 	const zotlitOnly = notes.filter(n => !n.path.startsWith("References/Zotero/"));
 	const zotlit = classifyNotes(vault, zotlitOnly, park, {}, single);
 	assert.equal(zotlit.literatureNote?.path, "30. Literature/zotlit-park.md");
-	assert.deepEqual(zotlit.other.map(r => r.path), ["20. Wiki/park-summary.md"]);
+	assert.deepEqual(zotlit.other.map(r => r.path), ["20. Wiki/@park2021adaptive.md"]);
 	const ambiguousKey = classifyNotes(vault, zotlitOnly, park, {}, twoLibraries);
 	assert.equal(ambiguousKey.literatureNote, null);
-	assert.deepEqual(ambiguousKey.other.map(r => r.path), ["20. Wiki/park-summary.md"]);
+	assert.deepEqual(ambiguousKey.other.map(r => r.path), ["20. Wiki/@park2021adaptive.md"]);
+	// 0.5 R14: the output folder ranks a matched note as the literature note but is never citekey evidence.
 	const folder = classifyNotes(vault, zotlitOnly, park, {}, twoLibraries, { outputFolder: "/20. Wiki/" });
-	assert.equal(folder.literatureNote?.path, "20. Wiki/park-summary.md");
-	assert.deepEqual(folder.other, []);
+	assert.equal(folder.literatureNote?.path, "20. Wiki/@park2021adaptive.md");
+	assert.deepEqual(folder.other.map(r => r.path), [], "20. Wiki/park-summary.md (untyped, no @) stays unclaimed inside the output folder");
 	const twoOwned = [...notes, note("References/Zotero/@park2021adaptive (1).md", { type: "zotero", zoteroID: "1:AAAAAAA1" })];
 	const owned = classifyNotes(vault, twoOwned, park, {}, single);
 	assert.equal(owned.literatureNote?.path, "References/Zotero/@park2021adaptive (1).md");
-	assert.deepEqual(owned.other.map(r => r.path), ["20. Wiki/park-summary.md", "30. Literature/zotlit-park.md", "References/Zotero/@park2021adaptive.md"]);
+	assert.deepEqual(owned.other.map(r => r.path), ["20. Wiki/@park2021adaptive.md", "30. Literature/zotlit-park.md", "References/Zotero/@park2021adaptive.md"]);
 	assert.equal(owned.warnings.length, 2);
 	assert.ok(owned.warnings.some(warning => /More than one literature note matches \(2\)/.test(warning)));
 	assert.ok(owned.warnings.some(warning => /zotlit-broken/.test(warning)));

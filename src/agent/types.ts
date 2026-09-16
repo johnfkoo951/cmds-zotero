@@ -181,3 +181,22 @@ export interface IndexView {
 	stale: boolean;
 	ageMinutes: number;
 }
+
+// 0.5 R14
+/**
+ * Frontmatter keys of a literature note created by this plugin, in YAML order after `type: zotero`. Frontmatter is
+ * written once and stays user-owned afterwards, so notes created before 0.5 keep their extra keys
+ * (`LEGACY_LITERATURE_KEYS`, a "pre-0.5 vintage"). `zoteroID` is the only key agents may rely on; `zoteroSelectURI`
+ * carries library scope (group items included); `zotero-key` is the ZotLit-compatible item key; `citekey`, `doi`,
+ * `title`, `authors`, `year` and `tags` are plain metadata; `zotero_*` mirror the earlier CMDS template for display
+ * parity and carry no identity.
+ */
+export const LITERATURE_IDENTITY_KEYS = [
+	"zoteroID", "zoteroSelectURI", "zotero-key", "citekey", "doi", "title", "authors", "year", "tags",
+	"zotero_title", "zotero_author", "zotero_year", "zotero_journal", "zotero_doi", "zotero_url", "zotero_tags",
+] as const;
+export type LiteratureIdentityKey = typeof LITERATURE_IDENTITY_KEYS[number];
+/** Keys 0.3/0.4 wrote and 0.5 no longer emits (all derivable from `zoteroID`/`zoteroSelectURI`); reconcile reports them as `legacy-frontmatter-dialect`. */
+export const LEGACY_LITERATURE_KEYS = ["zotero-id", "zotero-library-id", "zoteroItemKey", "zoteroLibraryID", "zoteroLibraryType", "zoteroGroupID"] as const;
+/** Frontmatter `type` values under which citekey equality may identify a Zotero item; any other `type` is a foreign convention. */
+export const ZOTERO_NOTE_TYPES = ["zotero", "paper-hub", "paper-analysis", "raw-source", "literature-zotero"] as const;
