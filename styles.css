@@ -28,6 +28,18 @@
   overflow-wrap: anywhere;
 }
 
+/* 0.5 R4: shared status line (status bar + sidebar headers) */
+.cmds-zotero-status-bar.is-stale,
+.cmds-zotero-status-bar.is-failed {
+  color: var(--text-warning);
+}
+.cmds-zotero-sidebar-status {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-2);
+  overflow-wrap: anywhere;
+}
+
 /* Sidebars */
 .cmds-zotero-sidebar {
   padding: var(--size-4-2);

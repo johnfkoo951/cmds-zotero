@@ -3,6 +3,7 @@ import { validateIndex } from "./identity";
 import { resolveIndex } from "./agent/resolve";
 import type { FailureReason } from "./agent/types";
 import type { IndexStorage, Resolution, ZoteroIndex } from "./types";
+import { bbtObservation, isBbtTransportError, transportReasonOf, type BbtTransportError } from "./api/transport";
 
 export interface GetOptions {
 	force?: boolean;
@@ -20,33 +21,54 @@ export type RefreshReason = "forced" | "stale" | "fresh" | "stale-fallback";
  * `failure` classifies a `stale-fallback` cause when it maps to a contract reason (`legacy-plugin-enabled`,
  * `bbt-unreachable`, `timeout`). A collection cancelled by the plugin's own abort carries no `failure`.
  */
-export interface RefreshOutcome { index: ZoteroIndex; refreshed: boolean; reason: RefreshReason; ageMinutesBefore: number | null; error?: string; failure?: FailureReason }
-
-const UNREACHABLE = /ECONNREFUSED|ECONNRESET|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN|socket hang up|fetch failed/i;
-const TIMED_OUT = /timed out/i;
-/** The plugin's own abort (`bbt.dispose()`), Node's AbortError text, or the collector's cancellation check. */
-const CANCELLED = /\baborted\b|cancelled/i;
+export interface RefreshOutcome {
+	index: ZoteroIndex; refreshed: boolean; reason: RefreshReason; ageMinutesBefore: number | null; error?: string; failure?: FailureReason;
+	/** 0.5 R4: the raw collection error behind a `stale-fallback` (a typed `BbtTransportError` for transport faults), so hosts rebuild the same refusal a forced request throws. */
+	cause?: unknown;
+}
 
 /** Host-injected precondition consulted before every BBT collection; a refusal is structured so callers can map it. */
 export type CollectPrecondition = () => { ok: true } | { ok: false; reason: "legacy-plugin-enabled"; message: string };
 
 /** A collection that was refused before contacting BBT or failed for a contract-classifiable reason (`reason`). */
 export class IndexRefusalError extends Error {
-	constructor(readonly reason: FailureReason, message: string) { super(message); this.name = "IndexRefusalError"; }
+	/** 0.5 R4: the typed transport error behind a `bbt-unreachable`/`timeout` refusal, when one was observed. */
+	readonly cause?: unknown;
+	constructor(readonly reason: FailureReason, message: string, cause?: unknown) { super(message); this.name = "IndexRefusalError"; if (cause !== undefined) this.cause = cause; }
 }
 
 export type RefreshFailureKind = FailureReason | "cancelled";
 
 /**
- * Classifies a collection error: the contract reason it already carries, `bbt-unreachable` for connectivity faults,
- * `timeout` for a reachable but unresponsive BBT, `cancelled` for the plugin's own abort, else null.
+ * Classifies a collection error: the contract reason it already carries, `bbt-unreachable` for connectivity faults
+ * (refused connection, or an endpoint that answered HTTP 404), `timeout` for a reachable but unresponsive BBT,
+ * `cancelled` for the plugin's own abort, else null. Delegates to the transport classification (`transportReasonOf`),
+ * so the plugin has one mapping from raw faults to reasons.
  */
 export function classifyRefreshError(error: unknown): RefreshFailureKind | null {
 	if (error instanceof IndexRefusalError) return error.reason;
-	const message = error instanceof Error ? error.message : String(error);
-	if ((error instanceof Error && error.name === "AbortError") || CANCELLED.test(message)) return "cancelled";
-	if (UNREACHABLE.test(message)) return "bbt-unreachable";
-	if (TIMED_OUT.test(message)) return "timeout";
+	switch (transportReasonOf(error)) {
+		case "aborted": return "cancelled";
+		case "timeout": return "timeout";
+		case "connection-refused": case "http-404": return "bbt-unreachable";
+		default: return null;
+	}
+}
+
+/**
+ * 0.5 R4: the error a host raises for a `stale-fallback` outcome — the same `IndexRefusalError` (reason, message and
+ * typed cause) a forced request throws, so the forced and non-forced refresh paths report one payload for one fault.
+ */
+export function refreshRefusal(outcome: RefreshOutcome): Error {
+	const message = outcome.error ?? "The index could not be refreshed.";
+	if (outcome.cause instanceof IndexRefusalError) return outcome.cause;
+	return outcome.failure ? new IndexRefusalError(outcome.failure, message, outcome.cause) : new Error(message);
+}
+
+/** The typed transport error an error is or wraps (as an `IndexRefusalError` cause), or null. */
+export function transportErrorOf(error: unknown): BbtTransportError | null {
+	if (isBbtTransportError(error)) return error;
+	if (error instanceof IndexRefusalError && isBbtTransportError(error.cause)) return error.cause;
 	return null;
 }
 
@@ -134,8 +156,8 @@ export class IndexService {
 				const kind = classifyRefreshError(error);
 				const failure = kind !== null && kind !== "cancelled" ? kind : undefined;
 				// A forced request reports transport faults with the same structured reason a non-forced fallback carries.
-				if (!fallback) throw failure !== undefined && !(error instanceof IndexRefusalError) ? new IndexRefusalError(failure, message) : error;
-				return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: message, ...(failure !== undefined ? { failure } : {}) };
+				if (!fallback) throw failure !== undefined && !(error instanceof IndexRefusalError) ? new IndexRefusalError(failure, message, error) : error;
+				return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: message, ...(failure !== undefined ? { failure } : {}), cause: error };
 			}
 			if (!validateIndex(candidate)) throw new Error("Refusing to save invalid Zotero index");
 			await this.storage.writeValidated(JSON.stringify(candidate, null, 2));
@@ -182,7 +204,9 @@ export function formatIndexAge(minutes: number | null): string {
 export function describeRefreshFailure(error: unknown, endpoint: string, ageMinutes: number | null): string {
 	const message = error instanceof Error ? error.message : String(error);
 	const kind = classifyRefreshError(error);
-	const cause = kind === "bbt-unreachable" ? `Zotero/Better BibTeX is not reachable at ${endpoint}`
+	const transport = transportErrorOf(error);
+	const cause = transport && (kind === "bbt-unreachable" || kind === "timeout") ? bbtObservation(transport)
+		: kind === "bbt-unreachable" ? `Zotero/Better BibTeX is not reachable at ${endpoint}`
 		: kind === "timeout" ? `Zotero/Better BibTeX at ${endpoint} did not respond in time`
 		: kind === "cancelled" ? "The index refresh was cancelled"
 		: error instanceof IndexRefusalError ? message

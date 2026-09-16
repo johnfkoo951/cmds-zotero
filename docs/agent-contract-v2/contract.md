@@ -35,6 +35,20 @@ Legacy fields preserve their values/types; new envelope fields are additive, not
 index source/path/schema/generation/age/completeness/staleness/threshold, legacy-plugin state, and Git coverage.
 Unknown is represented as unknown/null, never fabricated success. Ignored and already-tracked files are separate concerns.
 
+BBT transport faults are classified once (0.5): `connection-refused` (any socket-level fault), `timeout`, `http-404`,
+`http-other`, `aborted` (the plugin's own cancellation, never an observation about Zotero), `rpc` (a JSON-RPC error
+envelope) and `invalid-response`. When the `connection` probe fails, `connection.bbt` carries `error` (human wording that
+names the endpoint) and, when classified, `reason` from that vocabulary. `identity` and `cites` add
+`bbtError {reason, endpoint}` beside `bibliographyReason`/`referencesReason: bbt-unreachable`, and a refused `refresh`
+(forced or `ifOlderThanMinutes`) adds it beside its `reason`, only when the fault was a typed transport error.
+`bibliographyReason`/`referencesReason: bbt-unreachable` remain the legacy coarse value for any failed BBT bibliography
+call; when `bbtError` is present its `reason` is authoritative (`rpc`, `http-other` and `invalid-response` mean BBT
+answered but the request failed). After a `connection-refused`, `timeout` or `http-404` fault, `cites` stops asking BBT
+for the remaining keys. A reconcile apply refused because the evidence snapshot threw reports `refusedReason: index-invalid`
+with `refusedMessage` (`bbt-unreachable` only for a typed transport error); a storage fault is never reported as a BBT outage.
+The plugin's human status line derives freshness from the same `ageMinutes`/`stale` math and reports the last real BBT
+call, so the UI and the CLI agree on freshness; its wording is UI copy, not part of this contract.
+
 Existing implicit refresh in read-only legacy operations is intentionally removed.
 The read-only wrapper must not call an old host that might refresh on a read.
 New CLI clients may use the offline core for old-host read-only capabilities; unsupported live writes fail explicitly.

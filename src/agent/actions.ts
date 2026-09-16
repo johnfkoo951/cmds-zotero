@@ -24,6 +24,8 @@ import type { ExtractResult } from "../pdf/extract";
 import { extractQuoteCallouts, locateBatch } from "../pdf/locate";
 import type { LocateRequest } from "../pdf/locate";
 import { createHash } from "node:crypto";
+import { bbtErrorPayload } from "../api/transport";
+import { IndexRefusalError } from "../index-service";
 
 export const MAX_CITES_FILES = 2000;
 
@@ -201,11 +203,12 @@ export async function identityAction(host: ActionHost, request: IdentityRequest)
 	const style = request.style ?? host.settings.bibliographyStyle;
 	let bibliography: { style: string; text: string } | null = null;
 	let bibliographyReason: string | undefined = request.noBibliography ? "disabled" : host.bibliographyReason ?? undefined;
+	let bbtError: ReturnType<typeof bbtErrorPayload> = null; // 0.5 R4
 	if (!request.noBibliography && entry && host.bibliography) {
 		try {
 			const text = await host.bibliography(entry, style);
 			if (text) bibliography = { style, text }; else bibliographyReason = "style-error";
-		} catch { bibliographyReason = "bbt-unreachable"; }
+		} catch (error) { bibliographyReason = "bbt-unreachable"; bbtError = bbtErrorPayload(error); }
 	}
 	const unavailableReason = withheld ? "stale-index" : outcome.status === "unavailable" ? outcome.message : undefined;
 	const s01 = s01Lines({ frontmatter, citekeyCurrent, bibliography: bibliography?.text ?? null, pdf, rawSource: request.rawSource ?? null, rawNotes: vaultNotes.raw, candidateCount: outcome.status === "ambiguous" ? outcome.candidates.length : undefined, unavailableReason });
@@ -231,6 +234,7 @@ export async function identityAction(host: ActionHost, request: IdentityRequest)
 		callout: callout(status, frontmatter.citekey ?? "", frontmatter.zoteroCheckedAt, citekeyCheck?.pinInstruction ?? null, { citekeyCurrent, candidateCount: outcome.status === "ambiguous" ? outcome.candidates.length : undefined, unavailableReason }),
 		bibliography,
 		...(bibliographyReason && !bibliography ? { bibliographyReason } : {}),
+		...(bibliographyReason && !bibliography && bbtError ? { bbtError } : {}),
 		pdf,
 		citekeyCheck,
 		identityKeys: [...HUB_IDENTITY_KEYS],
@@ -280,24 +284,34 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	const keys = keysForFiles(files);
 	let references: unknown = null;
 	let referencesReason: string | undefined;
+	let bbtError: ReturnType<typeof bbtErrorPayload> = null; // 0.5 R4
 	if (request.bibliography) {
 		const bibliography = new Map<string, string>();
 		const hubFull = new Map<string, string>();
 		const style = request.style ?? host.settings.bibliographyStyle;
 		const byId = new Map(view.index.entries.map(entry => [entry.id, entry]));
+		// 0.5 R4: after a typed unreachable/timeout/404 fault, BBT is not asked again for the remaining keys (one mapped failure, not N timeouts).
+		let bbtDown = false;
 		for (const key of allKeys) {
 			const verdict = verdicts.get(key);
 			if (!verdict) continue;
-			if (verdict.citeStatus === "resolved" && verdict.entryId && host.bibliography) {
+			if (verdict.citeStatus === "resolved" && verdict.entryId && host.bibliography && !bbtDown) {
 				const entry = byId.get(verdict.entryId);
-				if (entry) { try { const text = await host.bibliography(entry, style); if (text) bibliography.set(key, text); } catch { referencesReason = "bbt-unreachable"; } }
+				if (entry) {
+					try { const text = await host.bibliography(entry, style); if (text) bibliography.set(key, text); }
+					catch (error) {
+						referencesReason = "bbt-unreachable";
+						bbtError = bbtErrorPayload(error) ?? bbtError;
+						if (bbtError && ["connection-refused", "timeout", "http-404"].includes(bbtError.reason)) bbtDown = true;
+					}
+				}
 			} else if (verdict.citeStatus === "resolved" && !host.bibliography) referencesReason = host.bibliographyReason ?? "offline";
 			if (verdict.hub) { const line = hubFullCitationLine(await host.reader.readNote(verdict.hub.path)); if (line) hubFull.set(key, line); }
 		}
 		references = referencesPayload(allKeys, verdicts, bibliography, hubFull);
 	}
 	const diagnostics = citesDiagnostics(files);
-	return { ...envelope(host, "cites", 2), files, keys, references, ...(referencesReason ? { referencesReason } : {}), summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
+	return { ...envelope(host, "cites", 2), files, keys, references, ...(referencesReason ? { referencesReason } : {}), ...(referencesReason && bbtError ? { bbtError } : {}), summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
 }
 
 export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean }> {
@@ -542,7 +556,14 @@ export async function connectionAction(host: ActionHost): Promise<Payload> { ret
 
 export async function refreshAction(host: ActionHost, request: RefreshRequest): Promise<Payload> {
 	if (!host.refresh) return { ...envelope(host, "refresh", 1, { reason: "requires-obsidian", message: "refresh requires the live Obsidian host." }), status: "unavailable" };
-	const outcome = await host.refresh(request);
+	let outcome: Awaited<ReturnType<NonNullable<ActionHost["refresh"]>>>;
+	try { outcome = await host.refresh(request); }
+	catch (error) {
+		// 0.5 R4: a classified refusal keeps its reason and adds the typed transport fault beside it; anything else propagates to the host.
+		if (!(error instanceof IndexRefusalError)) throw error;
+		const bbtError = bbtErrorPayload(error.cause);
+		return { ...envelope(host, "refresh", 1, { reason: error.reason, message: error.message }), ...(bbtError ? { bbtError } : {}), status: "unavailable" };
+	}
 	const view = outcome.host.indexView;
 	if (!view) {
 		const checked = requireIndex(outcome.host, "refresh", 1);

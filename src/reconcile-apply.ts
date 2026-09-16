@@ -3,6 +3,7 @@ import type { ZoteroIndex } from "./types";
 import { parseNoteText } from "./frontmatter-read";
 import { HUB_WRITABLE_KEYS } from "./agent/types";
 import { RAW_SOURCES_ROOT, reconcileNotes, type ReconcileNote, type ReconcileResult } from "./agent/reconcile-core";
+import { isBbtTransportError } from "./api/transport";
 
 export interface YamlCodec { parse(text: string): unknown; stringify(value: unknown): string }
 export interface WritableFile { path: string; basename: string }
@@ -16,7 +17,7 @@ export interface ReconcileWriteHost {
 }
 
 export interface ApplyNoteResult { path: string; status: "applied" | "unchanged" | "skipped" | "failed" | "integrity-failure"; wrote: boolean | null; changedKeys: string[]; reason?: string; message?: string }
-export interface ApplyResult { mode: "applied" | "partial" | "refused"; attempted: number; applied: number; unchanged: number; failed: number; integrityFailure: boolean; notes: ApplyNoteResult[]; refusedReason?: string; limitation: string }
+export interface ApplyResult { mode: "applied" | "partial" | "refused"; attempted: number; applied: number; unchanged: number; failed: number; integrityFailure: boolean; notes: ApplyNoteResult[]; refusedReason?: string; /** 0.5 R4: the snapshot error text behind an `index-invalid`/`bbt-unreachable` refusal. */ refusedMessage?: string; limitation: string }
 
 type Snapshot = Awaited<ReturnType<ReconcileWriteHost["snapshot"]>>;
 const LIMITATION = "Obsidian processFrontMatter does not provide whole-file compare-and-swap; post-write verification detects but cannot atomically prevent every external body edit. wrote:null means verification could not establish the outcome.";
@@ -46,7 +47,7 @@ function gateReason(gate: Snapshot): string | null {
 }
 function rawRoot(path: string): boolean { return path === RAW_SOURCES_ROOT || path.startsWith(`${RAW_SOURCES_ROOT}/`); }
 function skip(path: string, reason: string, message?: string): ApplyNoteResult { return { path, status: "skipped", wrote: false, changedKeys: [], reason, ...(message ? { message } : {}) }; }
-function refusal(reason: string): ApplyResult { return { mode: "refused", attempted: 0, applied: 0, unchanged: 0, failed: 0, integrityFailure: false, notes: [], refusedReason: reason, limitation: LIMITATION }; }
+function refusal(reason: string, message?: string): ApplyResult { return { mode: "refused", attempted: 0, applied: 0, unchanged: 0, failed: 0, integrityFailure: false, notes: [], refusedReason: reason, ...(message ? { refusedMessage: message } : {}), limitation: LIMITATION }; }
 
 async function serialized<T>(key: string, operation: () => Promise<T>): Promise<T> {
 	const prior = queues.get(key) ?? Promise.resolve();
@@ -124,7 +125,9 @@ async function applyNote(host: ReconcileWriteHost, planned: ReconcileNote, vault
 
 export async function applyReconcile(host: ReconcileWriteHost, plan: ReconcileResult): Promise<ApplyResult> {
 	let gate: Snapshot;
-	try { gate = await host.snapshot(); } catch { return refusal("bbt-unreachable"); }
+	// 0.5 R4 (F16): a snapshot that throws is unusable evidence, not a BBT outage, unless the error is a typed transport fault.
+	try { gate = await host.snapshot(); }
+	catch (error) { return refusal(isBbtTransportError(error) ? "bbt-unreachable" : "index-invalid", error instanceof Error ? error.message : String(error)); }
 	const reason = gateReason(gate);
 	if (reason) return refusal(reason);
 	const candidates = plan.notes.filter(note => note.type === "paper-hub" && note.proposalEligible && note.proposed && !rawRoot(note.path));
