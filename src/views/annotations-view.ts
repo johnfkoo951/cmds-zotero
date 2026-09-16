@@ -51,7 +51,8 @@ export class AnnotationsView extends ItemView {
 		const search = toolbar.createEl("input", { type: "search", placeholder: "Filter text, comment, tag, page", attr: { "aria-label": "Filter annotations" } });
 		search.value = this.filter;
 		search.addEventListener("input", () => { this.filter = search.value; this.renderList(list); });
-		if (!this.plugin.cachedEntries().length) void this.plugin.warmIndex();
+		// One warm-up per render; skipped while the plugin backs off after a failed refresh.
+		if (!this.plugin.indexLoaded() && !this.plugin.warmBackoffActive()) void this.plugin.warmIndex();
 		const list = container.createDiv({ cls: "cmds-zotero-annotation-list" });
 		if (!this.entry) { list.createEl("p", { cls: "setting-item-description", text: "Open a literature note, or pin a Zotero item, to see its annotations." }); return; }
 		header.createEl("div", { cls: "cmds-zotero-sidebar-title", text: this.entry.title });
