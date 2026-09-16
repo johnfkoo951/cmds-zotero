@@ -216,7 +216,7 @@ test("classifyNotes buckets a resolved item by zoteroID and citekey", () => {
 	const result = classifyNotes(vault, notes, park, {}, single);
 	assert.equal(result.hub?.path, "40. Paper Analyses/park2021adaptive/park2021adaptive.md");
 	assert.equal(result.hub?.basename, "park2021adaptive");
-	assert.equal(result.hub?.uri, `obsidian://open?${new URLSearchParams({ vault, file: "40. Paper Analyses/park2021adaptive/park2021adaptive.md" }).toString()}`);
+	assert.equal(result.hub?.uri, `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent("40. Paper Analyses/park2021adaptive/park2021adaptive")}`); // 0.5 R15: canonical obsidian://open form
 	assert.deepEqual(result.raw.map(r => r.path), ["10. Raw Sources/2021-03-09-Adaptive-Memory-Routing.md"]);
 	assert.deepEqual(result.atoms.map(r => r.path), ["40. Paper Analyses/park2021adaptive/park2021adaptive-claim-1.md", "40. Paper Analyses/park2021adaptive/park2021adaptive-claim-2.md"]);
 	assert.equal(result.literatureNote?.path, "References/Zotero/@park2021adaptive.md");

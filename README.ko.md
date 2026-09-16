@@ -4,7 +4,7 @@
 
 검증된 Zotero 원문·인용·주석·문헌노트를 로컬 중심 연구 볼트에 연결합니다. By CMDSPACE.
 
-**0.4.0은 개발·릴리스 준비 단계이며 공개·커뮤니티 승인 릴리스가 아닙니다.** UI 추가 없이 10개 액션의 에이전트 계약으로 identity·인용 검사·보호된 허브 정합성 갱신·PDF 텍스트·인용 페이지 탐색을 제공합니다. [계약 정본](docs/agent-contract-v2/contract.md)과 [구현 상태](docs/0.4-agent-contract-plan.md)를 참고하세요. 아래 0.3.0 설명과 실측은 과거 기록이며 0.4.0 인수 검증을 의미하지 않습니다. 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, Hookmark에서의 링크 수신·왕복은 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
+**0.4.0은 개발·릴리스 준비 단계이며 공개·커뮤니티 승인 릴리스가 아닙니다.** UI 추가 없이 10개 액션의 에이전트 계약으로 identity·인용 검사·보호된 허브 정합성 갱신·PDF 텍스트·인용 페이지 탐색을 제공합니다. [계약 정본](docs/agent-contract-v2/contract.md)과 [구현 상태](docs/0.4-agent-contract-plan.md)를 참고하세요. 아래 0.3.0 설명과 실측은 과거 기록이며 0.4.0 인수 검증을 의미하지 않습니다. 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, 복사한 각 링크 형식으로 만든 Hookmark hook은 본인 환경에서의 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
 
 ## 범위
 
@@ -12,7 +12,7 @@
 - citekey와 실제 Zotero 문헌·첨부·주석 식별자를 분리한 버전형 JSON 인덱스.
 - 미리보기와 보존 경계를 갖춘 독립적인 CMDS 내장 템플릿 기반 문헌·주석 가져오기.
 - Zotero/PDF/근거 링크, 진단, paper-ingest 연동, 선택적으로 등록하는 다른 볼트 탐색.
-- Hookmark에 전달할 수 있는 Markdown 링크 복사. Hookmark 북마크 생성이나 스크립팅은 하지 않습니다.
+- Hookmark용 Markdown 링크 복사(Zotero 항목·Obsidian 파일·이름 변경에 안전한 identity 링크)와 "커서 아래 링크 열기" 명령. Hookmark 북마크 생성, 스크립팅, frontmatter hook 기록은 하지 않습니다.
 - 로컬 인덱스만으로 동작하는 인라인 `[@` citekey 자동완성, 활성 노트의 CSL 참고문헌 사이드바, 주석 사이드바, 인용 노트 역조회, 소유 노트 일괄 갱신.
 
 **Zotero Integration 또는 ZotLit 전체 호환 구현이 아닙니다.** 기존 템플릿을 그대로 사용할 수 있다고 가정하지 마세요. `persist`, `filterby`, `format`, `lastImportDate` 등 Nunjucks 확장의 드롭인 호환은 약속하지 않습니다. 원래 템플릿과 문헌노트는 보존하세요. 인용·참고문헌·텍스트/이미지 주석·재가져오기를 검증한 다음에만 다른 플러그인을 수동으로 끄세요.
@@ -75,8 +75,24 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 - **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID` 또는 citekey로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
 - **Find notes citing a source**는 항목의 현재·이전 citekey를 볼트 전체에서 찾아 첫 인용 위치로 엽니다.
 - **Update all owned literature notes**는 이 플러그인이 소유한 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀을 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
+- **Open link under cursor**는 `zotero://select` 링크를 Zotero에서 열고, `zotero://open-pdf` 링크는 인덱스의 첨부 키로 부모 항목을 찾아 PDF를 엽니다(페이지·주석 유지, 추측 없음). `[@citekey]`, `@citekey`, `[[@citekey]]`에서는 항목 액션 창을 엽니다. 그 밖에는 알림만 표시하며, 형식이 잘못된 Zotero URI는 가장 비슷한 항목이 아니라 "없음"으로 처리합니다.
+- **Find literature across vaults**는 이 볼트와 등록한 각 피어 볼트에서 항목에 해당하는 모든 노트를 일반 `obsidian://open?vault=…&file=…` 행으로 나열합니다(피어 볼트의 커뮤니티 플러그인 목록에 Advanced URI가 있으면 `obsidian://advanced-uri?…&filepath=…`). 논문 허브와 `@citekey` 노트가 먼저 옵니다. 플러그인 자체의 `obsidian://cmds-zotero` 프로토콜은 이름 변경에 안전한 identity 링크와 에이전트 전송 용도로만 남깁니다.
 
 가져온 노트는 CMDS 콜아웃 레이아웃을 사용합니다: `[!Cite]`, `[!Abstract]`, 인라인 Dataview 필드를 담은 `[!md]`(역할별 저자, 저널, 권·호, 출판사, 쪽, DOI, ISBN, 컬렉션, 관련 문헌 `[[@citekey]]`), Zotero select URI와 `file://` 첨부 링크를 담은 `[!LINK]`, 그리고 `[!Highlight]`·`[!Image]`·`[!Note]` 주석 콜아웃. 하이라이트 본문은 `<mark class="cmds-zotero-hl-<color>">`로 감싸며 색상은 Zotero 팔레트에서 가장 가까운 색조입니다. 설정한 제목용 색상(기본 gray)의 하이라이트는 `#####` 제목이 됩니다. "Excluded tags"(기본 `obscite`)의 태그는 제외합니다. 프론트매터에는 identity 키와 함께 `zotero_title`, `zotero_author`, `zotero_year`, `zotero_journal`, `zotero_doi`, `zotero_url`, `zotero_tags`가 들어가며 생성 후에는 사용자 소유입니다.
+
+## Hookmark
+
+Hookmark 지원은 **복사 전용**입니다. 플러그인은 Markdown 링크를 클립보드에 넣고, 나머지는 Hookmark의 **Hook to Copied Link**가 처리합니다. 북마크 생성, AppleScript/`osascript`, frontmatter의 `hook://` 기록은 없으며 일반 Zotero 링크에 Hookmark가 필요하지도 않습니다. hook/unhook 자동화가 필요해지면 이 플러그인이 아니라 별도의 형제 플러그인에서 다룹니다.
+
+세 명령(항목 액션 창에도 있음)은 URL을 꺾쇠 없이 `[제목](url)` 형태로 복사합니다. Hookmark와 `](`로 분리하는 클립보드 스크립트가 깨끗한 절대 URL을 받도록 하기 위한 것이며, URL 안의 공백·괄호는 퍼센트 인코딩합니다. 노트와 사이드바는 기존의 `[제목](<url>)` 형태를 유지합니다.
+
+| 명령 | 복사 내용 | 용도 |
+| --- | --- | --- |
+| Copy Zotero item link (Hookmark-compatible) | `zotero://select/library/items/KEY` | 무엇이든 Zotero 항목에 hook할 때. 개인 라이브러리에서는 Hookmark가 Zotero 항목에 쓰는 주소와 동일하므로 양쪽에서 만든 hook이 한 북마크에 모입니다. |
+| Copy Obsidian file link (Hookmark-native) | `obsidian://open?vault=…&file=…` | 문헌노트에 hook하고 노트를 연 상태에서 Hookmark 창에 그 hook이 보여야 할 때. Obsidian이 복사하고 Hookmark가 `hook-get-address`로 기록하는 주소와 같으며, 노트 이름을 바꾸거나 옮기면 끊어집니다. |
+| Copy literature note identity link (rename-safe) | `obsidian://cmds-zotero?vault=…&libraryID=…&itemKey=…&target=note` | 이름 변경 후에도 살아남아야 하는 링크(`zoteroID`로 해석). Hookmark에서 노트를 열 수는 있지만 Hookmark는 Obsidian 연동이 돌려주는 주소를 기준으로 hook을 묶으므로, 이 링크로 만든 hook은 노트 안의 Hookmark 창에 **표시되지 않습니다**. |
+
+Hookmark 문서와 기록된 주소 형식으로 확인한 것: select URI를 통한 Hookmark → Zotero, `obsidian://open`(네이티브) 또는 `obsidian://cmds-zotero`(플러그인 프로토콜 핸들러, Obsidian의 URI 콜백 허용 필요)를 통한 Hookmark → Obsidian, Hook to Copied Link의 복사한 Markdown 링크 수용. 확인하지 않은 것: 그룹 라이브러리 항목, 볼트 이름 변경 후 동작. Hookmark의 클립보드·AppleScript 명령이 시간 초과(Apple 이벤트 오류 `-1712`)되기 시작하면 Hookmark를 종료 후 다시 실행하세요.
 
 ## 인덱스·연동 계약
 
@@ -150,7 +166,7 @@ Git 진단은 ignore와 이미 추적 중인 상태를 구분합니다. untrack�
 | 텍스트/이미지 주석·재가져오기 | CMDS 내장 템플릿과 플러그인 관리 영역 | 이미지 접근·사람 메모·충돌·재가져오기 실측 필요 |
 | 그룹 라이브러리 | 로컬 library ID와 group ID 구분 | 합성/source 검증은 실제 그룹 검증이 아님 |
 | 다른 볼트 | 명시적 등록·읽기 전용 조회와 이동 | 양쪽 인덱스와 노트 이름 변경 확인 |
-| Hookmark | Zotero Markdown 링크 및 안정적인 노트 deep link 복사 | 링크 생성 지원만 의미하며 수신·왕복은 보장하지 않음 |
+| Hookmark | Zotero 항목·Obsidian 파일·이름 변경에 안전한 identity 링크를 괄호 없는 Markdown 링크로 복사 | 복사 전용. Hookmark → Zotero, Hookmark → Obsidian은 문서화된 주소 형식이며 노트 안에서의 hook 표시 여부는 링크 형식에 따름(Hookmark 절 참고) |
 | 기존 플러그인/템플릿 | 이전 중 공존 | 전체 parity나 자동 비활성화 없음 |
 
 실사용 전 오프라인/부분 실패 시 인덱스 보존, 첨부 없음, 중복 citekey, 최초 가져오기 → 사람 메모 → 재가져오기, 이미지 누락, PDF 페이지/주석 링크, 노트 이름 변경, 다른 볼트 이동, rollback을 검사하세요. 작은 사례를 확인하기 위해 대량 가져오기를 실행하지 마세요.

@@ -3,6 +3,7 @@
  * Vocabulary source of truth: skills/cmds-zotero/references/cli-contract-v2.md (generated from these types and the docs).
  */
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
+import { obsidianOpenURI } from "../uris";
 
 /** v1 resolution enum; the JSON name `status` is reserved for this enum only. */
 export type ResolutionStatus = "resolved" | "ambiguous" | "not-found" | "unavailable";
@@ -81,9 +82,10 @@ export interface VaultNotes {
 	warnings: string[];
 }
 
+/** `uri` is the canonical `obsidian://open` address (percent-encoded, `.md` stripped) that Obsidian and Hookmark use. 0.5 R15 */
 export function noteRef(vault: string, path: string): NoteRef {
 	const basename = path.split("/").pop()?.replace(/\.md$/, "") ?? path;
-	return { path, basename, uri: `obsidian://open?${new URLSearchParams({ vault, file: path }).toString()}` };
+	return { path, basename, uri: obsidianOpenURI(vault, path) };
 }
 
 /** Read-only vault access shared by live (Obsidian) and offline (fs) hosts. Paths are vault-relative with `/`. */

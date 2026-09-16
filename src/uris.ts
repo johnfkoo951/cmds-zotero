@@ -80,6 +80,71 @@ export function noteDeepLink(vault: string, entry: ItemIdentity, target: "note" 
 	return `obsidian://cmds-zotero?${params.toString()}`;
 }
 
-export function markdownLink(title: string, url: string): string {
-	return `[${title.replace(/[\\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ")}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E").replace(/[\r\n]/g, "")}>)`;
+export interface MarkdownLinkOptions {
+	/**
+	 * `[title](url)` without angle brackets, for Hookmark's "Hook to Copied Link" and other clients that split on `](`.
+	 * Whitespace, `(`, `)`, `<` and `>` in the URL are percent-encoded instead. Notes and sidebars keep the default bracketed form.
+	 */
+	bare?: boolean;
+}
+
+export function markdownLink(title: string, url: string, options: MarkdownLinkOptions = {}): string {
+	const text = title.replace(/[\\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ");
+	const stripped = url.replace(/[\r\n]/g, "");
+	if (options.bare) return `[${text}](${stripped.replace(/[\s()<>]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`)})`;
+	return `[${text}](<${stripped.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
+}
+
+// 0.5 R15 — canonical Obsidian addresses and link classification.
+
+/**
+ * The address Obsidian itself copies for a note and Hookmark records through `hook-get-address`:
+ * `obsidian://open?vault=<vault>&file=<path without .md>`. Both values are percent-encoded with
+ * `encodeURIComponent` (spaces become `%20`, never `+`; `/` becomes `%2F`), so the string equals Obsidian's own form.
+ */
+export function obsidianOpenURI(vault: string, path: string): string {
+	if (!vault.trim()) throw new Error("Vault name is required");
+	const file = path.replace(/^\/+/, "").replace(/\.md$/i, "");
+	if (!file.trim()) throw new Error("Note path is required");
+	return `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(file)}`;
+}
+
+/** `obsidian://advanced-uri?vault=<vault>&filepath=<relative .md>` for vaults that list the Advanced URI plugin. */
+export function advancedURI(vault: string, path: string): string {
+	if (!vault.trim()) throw new Error("Vault name is required");
+	const file = path.replace(/^\/+/, "");
+	if (!file.trim()) throw new Error("Note path is required");
+	return `obsidian://advanced-uri?vault=${encodeURIComponent(vault)}&filepath=${encodeURIComponent(file)}`;
+}
+
+/** Link for a note in a peer vault: the Advanced URI form when that vault has the plugin, else the native open form. */
+export function peerNoteURI(vault: string, path: string, options: { advancedUri: boolean }): string {
+	return options.advancedUri ? advancedURI(vault, path) : obsidianOpenURI(vault, path);
+}
+
+export const ADVANCED_URI_PLUGIN_ID = "obsidian-advanced-uri";
+
+/** True when a parsed `.obsidian/community-plugins.json` lists the Advanced URI plugin. */
+export function listsAdvancedUri(communityPlugins: unknown): boolean {
+	return Array.isArray(communityPlugins) && communityPlugins.includes(ADVANCED_URI_PLUGIN_ID);
+}
+
+/**
+ * Sort rank for note rows shown to a person: paper hubs and `@citekey` literature notes first, everything else after.
+ * A hub is a note named like its own folder (`…/park2021adaptive/park2021adaptive.md`) or carrying a "hub" marker in its name.
+ */
+export function noteRowRank(path: string, citekeys: readonly string[] = []): 0 | 1 {
+	const parts = path.replace(/\.md$/i, "").split("/");
+	const basename = parts[parts.length - 1] ?? "";
+	const folder = parts.length > 1 ? parts[parts.length - 2] : "";
+	if (basename.startsWith("@")) return 0;
+	if (folder && basename.localeCompare(folder, undefined, { sensitivity: "accent" }) === 0) return 0;
+	if (/(^|[\s_-])(hub|s00)([\s_-]|$)/i.test(basename)) return 0;
+	if (citekeys.some(key => key && basename.localeCompare(key, undefined, { sensitivity: "accent" }) === 0)) return 0;
+	return 1;
+}
+
+/** Stable comparator: rank first, then path, so the first row of a paper is its hub or literature note. */
+export function compareNoteRows(a: { path: string }, b: { path: string }, citekeys: readonly string[] = []): number {
+	return noteRowRank(a.path, citekeys) - noteRowRank(b.path, citekeys) || a.path.localeCompare(b.path);
 }

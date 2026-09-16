@@ -18,8 +18,8 @@ import { rpc } from "./api/transport";
 import { VaultLinks } from "./vault-links";
 import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
-import { citekeyAtCursor, parseProtocolRequest } from "./protocol";
-import { pdfURI, noteDeepLink, markdownLink } from "./uris";
+import { citekeyAtCursor, classifyLink, parseProtocolRequest } from "./protocol";
+import { pdfURI, noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "./uris";
 import { CmdsZoteroSettingsTab } from "./settings";
 import { ActionsModal, ImportPreviewModal, PageJumpModal, PickerModal, ReportModal } from "./modals";
 import { CitekeySuggest } from "./citations/suggest";
@@ -83,10 +83,13 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.addCommand({ id: "open-references", name: "Open references sidebar", callback: () => { void this.activateView(VIEW_TYPE_REFERENCES); } });
 		this.addCommand({ id: "open-annotations", name: "Open annotations sidebar", callback: () => { void this.activateView(VIEW_TYPE_ANNOTATIONS); } });
 		this.addCommand({ id: "find-citing-notes", name: "Find notes citing a source", callback: () => { void this.pick(entry => { void this.showCitingNotes(entry); }); } });
-		this.addCommand({ id: "copy-hookmark-link", name: "Copy Hookmark-compatible link", callback: () => { void this.pick(entry => { void this.copyLink(entry.title, entry.zoteroSelectURI); }); } });
-		this.addCommand({ id: "copy-note-link", name: "Copy stable literature note link", callback: () => { void this.pick(entry => { void this.run(() => this.copyNoteLink(entry)); }); } });
+		this.addCommand({ id: "copy-hookmark-link", name: "Copy Zotero item link (Hookmark-compatible)", callback: () => { void this.pick(entry => { void this.copyLink(entry.title, entry.zoteroSelectURI, true); }); } });
+		this.addCommand({ id: "copy-note-link", name: "Copy literature note identity link (rename-safe)", callback: () => { void this.pick(entry => { void this.run(() => this.copyNoteLink(entry)); }); } });
 		this.addCommand({ id: "diagnose-links", name: "Diagnose index and links", callback: () => { void this.showDiagnostics(); } });
 		this.addCommand({ id: "find-vault-links", name: "Find literature across vaults", callback: () => { void this.pick(entry => { void this.showVaultLinks(entry); }); } });
+		// 0.5 R15
+		this.addCommand({ id: "copy-file-link", name: "Copy Obsidian file link (Hookmark-native)", callback: () => { void this.pick(entry => { void this.run(() => this.copyFileLink(entry)); }); } });
+		this.addCommand({ id: "open-link-under-cursor", name: "Open link under cursor", editorCallback: (editor: Editor) => { void this.openLinkUnderCursor(editor); } });
 		this.addRibbonIcon("library", "Search literature", () => { void this.pick(entry => this.showActions(entry)); });
 		this.addRibbonIcon("highlighter", "Zotero annotations", () => { void this.activateView(VIEW_TYPE_ANNOTATIONS); });
 
@@ -429,8 +432,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 			{ name: "Open PDF page", action: () => this.openPdf(entry, 1) },
 			{ name: "Show annotations in sidebar", action: async () => { await this.activateView(VIEW_TYPE_ANNOTATIONS); for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS)) if (leaf.view instanceof AnnotationsView) leaf.view.pin(entry); } },
 			{ name: "Find notes citing this source", action: () => this.showCitingNotes(entry) },
-			{ name: "Copy Hookmark-compatible link", action: () => this.copyLink(entry.title, entry.zoteroSelectURI) },
-			{ name: "Copy stable note link", action: () => this.copyNoteLink(entry) },
+			{ name: "Copy Zotero item link (Hookmark-compatible)", action: () => this.copyLink(entry.title, entry.zoteroSelectURI, true) },
+			{ name: "Copy literature note identity link (rename-safe)", action: () => this.copyNoteLink(entry) },
+			{ name: "Copy Obsidian file link (Hookmark-native)", action: () => this.copyFileLink(entry) },
 			{ name: "Copy PDF page link", action: () => { new PageJumpModal(this.app, entry.citekey, (_key, page) => { void this.run(() => this.openPdf(entry, page, undefined, true)); }).open(); } },
 			{ name: "Find notes across vaults", action: () => this.showVaultLinks(entry) },
 		]).open();
@@ -494,8 +498,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 		})) : [{ name: "No citing notes", description: "No [@citekey], @citekey, or [[@citekey]] occurrences were found in this vault.", action: () => {} }]).open();
 	}
 
-	async openPdf(entry: ZoteroIndexEntry, page: number, annotationKey?: string, copy = false): Promise<void> {
+	async openPdf(entry: ZoteroIndexEntry, page: number, annotationKey?: string, copy = false, attachmentKey?: string): Promise<void> {
 		let attachments = entry.attachments.filter(a => a.path?.toLowerCase().endsWith(".pdf") || a.annotations.length > 0);
+		if (attachmentKey) attachments = attachments.filter(a => a.key === attachmentKey); // 0.5 R15
 		if (annotationKey) attachments = attachments.filter(a => a.annotations.some(annotation => annotation.key === annotationKey));
 		if (!attachments.length) throw new Error(entry.attachmentStatus === "unavailable" ? "Attachment lookup failed. Refresh the index before opening this PDF." : "No matching PDF attachment is indexed.");
 		const open = (attachment: typeof attachments[number]): void => {
@@ -519,11 +524,12 @@ export default class CMDSZoteroPlugin extends Plugin {
 	async copyNoteLink(entry: ZoteroIndexEntry): Promise<void> {
 		const index = await this.loadIndexForRead();
 		if (!this.links.localFiles(entry, index).length) throw new Error("Import a literature note before copying its note link.");
-		await this.copyLink(entry.title, noteDeepLink(this.app.vault.getName(), entry));
+		await this.copyLink(entry.title, noteDeepLink(this.app.vault.getName(), entry), true);
 	}
 
-	async copyLink(title: string, uri: string): Promise<void> {
-		await navigator.clipboard.writeText(markdownLink(title, uri));
+	/** `bare` drops the `<…>` around the URL; only the Hookmark copy commands use it (notes and sidebars keep the bracketed form). */
+	async copyLink(title: string, uri: string, bare = false): Promise<void> {
+		await navigator.clipboard.writeText(markdownLink(title, uri, { bare }));
 		new Notice("Markdown link copied. Paste it into Hookmark or a note.");
 	}
 
@@ -542,5 +548,39 @@ export default class CMDSZoteroPlugin extends Plugin {
 			const result = await this.service.diagnose();
 			new ReportModal(this.app, "Index and link diagnostics", `Generated: ${result.generatedAt}\nEntries: ${result.count}\nComplete: ${result.complete}\n\n` + (result.diagnostics.map(d => `[${d.severity}] ${d.code}: ${d.message}`).join("\n") || "No issues reported.")).open();
 		});
+	}
+
+	// 0.5 R15 — Hookmark-native file link and "Open link under cursor".
+
+	/** Copies `obsidian://open?vault=&file=` for the entry's literature note: the address Hookmark shows inside the note; breaks on rename. */
+	async copyFileLink(entry: ZoteroIndexEntry): Promise<void> {
+		const index = await this.loadIndexForRead();
+		const files = this.links.localFiles(entry, index);
+		if (!files.length) throw new Error("Import a literature note before copying its file link.");
+		const copy = (file: TFile): void => { void this.copyLink(entry.title, obsidianOpenURI(this.app.vault.getName(), file.path), true); };
+		if (files.length === 1) copy(files[0]);
+		else new PickerModal(this.app, files, file => file.path, copy, "Choose a literature note…").open();
+	}
+
+	/** zotero://select opens Zotero; zotero://open-pdf routes through openPdf via the attachment key; @citekey opens the actions modal. */
+	async openLinkUnderCursor(editor: Editor): Promise<void> {
+		const cursor = editor.getCursor();
+		const link = classifyLink(editor.getLine(cursor.line), cursor.ch, editor.getSelection());
+		await this.run(async () => {
+			if (link.kind === "select") { window.open(link.uri); return; }
+			if (link.kind === "open-pdf") { await this.openPdfLink(link.parsed); return; }
+			if (link.kind === "citekey") { this.showActions(await this.requireEntry(link.citekey)); return; }
+			throw new Error("No Zotero link or @citekey under the cursor.");
+		});
+	}
+
+	/** Resolves an open-pdf URI's attachment key against the index to its parent entry and honours page/annotation. */
+	private async openPdfLink(parsed: ParsedZoteroURI): Promise<void> {
+		const index = await this.loadIndexForRead();
+		const sameLibrary = (entry: ZoteroIndexEntry): boolean => parsed.libraryType === "group" ? entry.libraryType === "group" && entry.groupID === parsed.groupID : entry.libraryType === "user";
+		const parents = index.entries.filter(entry => sameLibrary(entry) && entry.attachments.some(attachment => attachment.key === parsed.itemKey));
+		if (!parents.length) throw new Error("This PDF attachment is not in the index. Refresh the index; the link may also belong to another library.");
+		if (parents.length > 1) throw new Error("More than one entry owns this attachment key. Use Search literature to select a library.");
+		await this.openPdf(parents[0], parsed.page ?? 1, parsed.annotationKey, false, parsed.itemKey);
 	}
 }

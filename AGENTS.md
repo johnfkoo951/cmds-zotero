@@ -9,6 +9,7 @@ A desktop-only, local-first Zotero integration: verified identities and index, c
 - Preserve user-written notes and annotations. Import only into new files or plugin-owned sections. Detect manual edits before replacing generated sections.
 - Group IDs and local library IDs differ; citekeys and CSL IDs are not stable item keys. Never open a parent item as a PDF or silently resolve to the first search match.
 - No self-updater, telemetry, own HTTP server, automatic Hookmark scripting, or silent changes to other plugins.
+- Hookmark stays copy-only: commands put bare `[title](url)` Markdown links on the clipboard and nothing else. Frontmatter never records hooks (`hook://`, `hookmarkHookedAt` or similar); the hub key set is closed. Any hook/unhook automation belongs to a future sibling plugin, not here.
 - Local install scripts explicitly back up, migrate and verify the old plugin ID. Keep other Zotero plugins installed until replacement is validated.
 
 ## Development
@@ -22,6 +23,7 @@ A desktop-only, local-first Zotero integration: verified identities and index, c
 - BBT transport uses Node HTTP for local server compatibility (desktop-only). Bound timeouts/concurrency and validate response shapes. Do not replace it with browser fetch based on obsolete guidance.
 - Prefer Obsidian public APIs for vault writes, UI and protocol registration. Use `Setting.setHeading()`, CSS classes and safe text construction.
 - Command IDs: kebab-case without plugin ID or `command`. Sentence-case labels. No global eslint rule suppression.
+- Note addresses shown to people and agents come from `obsidianOpenURI` (`obsidian://open?vault=&file=`, percent-encoded, `.md` stripped: the form Obsidian copies and Hookmark records). Peer rows use `peerNoteURI` (Advanced URI when the peer lists that plugin). `noteDeepLink` (`obsidian://cmds-zotero`) is only for the rename-safe identity link and the protocol handler.
 - Run `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
 - Public release tags equal manifest versions without a `v` prefix; CI builds and attests assets. Release/community submission require explicit approval.
 

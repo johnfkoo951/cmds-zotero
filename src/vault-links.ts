@@ -2,7 +2,7 @@ import { App, TFile } from "obsidian";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { noteDeepLink } from "./uris";
+import { compareNoteRows, listsAdvancedUri, obsidianOpenURI, peerNoteURI } from "./uris";
 import { buildAliasIndex, noteIdentity } from "./note-aliases";
 import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory, relativePath } from "./vault-storage";
 
@@ -66,13 +66,16 @@ export class VaultLinks {
 		} catch { return false; }
 	}
 
+	/** 0.5 R15: rows carry the address people and Hookmark use (obsidian://open, or Advanced URI when the peer vault lists it); hub/@citekey rows first. */
 	async find(entry: ZoteroIndexEntry, index: ZoteroIndex): Promise<VaultLinkReport> {
-		const links = this.localFiles(entry, index).map(file => ({
-			vault: this.app.vault.getName(), path: file.path,
-			uri: `obsidian://open?${new URLSearchParams({ vault: this.app.vault.getName(), file: file.path }).toString()}`,
-		}));
+		const citekeys = [entry.citekey, ...entry.citekeyHistory];
+		const order = (a: VaultNoteLink, b: VaultNoteLink): number => compareNoteRows(a, b, citekeys);
+		const links: VaultNoteLink[] = this.localFiles(entry, index)
+			.map(file => ({ vault: this.app.vault.getName(), path: file.path, uri: obsidianOpenURI(this.app.vault.getName(), file.path) }))
+			.sort(order);
 		const warnings: string[] = [];
 		for (const peer of this.settings().peerVaults) {
+			const rows: VaultNoteLink[] = [];
 			try {
 				if (!path.isAbsolute(peer.path)) throw new Error("The registered vault path must be absolute.");
 				const root = await fs.realpath(peer.path);
@@ -87,18 +90,35 @@ export class VaultLinks {
 				if (map.version !== 1 || map.vault !== peer.name || !map.notes || typeof map.notes !== "object") throw new Error("Refresh the index in the registered vault to publish its note map.");
 				const paths: unknown = map.notes[entry.id];
 				if (!Array.isArray(paths)) continue;
+				const advancedUri = await this.peerListsAdvancedUri(root);
 				for (const value of paths) {
 					if (typeof value !== "string") continue;
 					const relative = relativePath(value);
 					if (!relative.endsWith(".md")) continue;
 					const realFile = await fs.realpath(path.join(root, relative));
 					if (!realFile.startsWith(root + path.sep)) throw new Error("A peer note points outside its vault.");
-					links.push({ vault: peer.name, path: relative, uri: noteDeepLink(peer.name, entry) });
+					rows.push({ vault: peer.name, path: relative, uri: peerNoteURI(peer.name, relative, { advancedUri }) });
 				}
 			} catch (error) {
 				warnings.push(`${peer.name}: ${error instanceof Error ? error.message : "Could not read the peer note map."}`);
+			} finally {
+				links.push(...rows.sort(order));
 			}
 		}
 		return { links, warnings };
+	}
+
+	/**
+	 * Read-only check of a peer vault's `<configDir>/community-plugins.json`, assuming the peer uses the same configuration
+	 * folder name as this vault; any failure (different folder, unreadable, oversized) means "no Advanced URI". 0.5 R15
+	 */
+	private async peerListsAdvancedUri(root: string): Promise<boolean> {
+		try {
+			const candidate = await fs.realpath(path.join(root, this.app.vault.configDir, "community-plugins.json"));
+			if (!candidate.startsWith(root + path.sep)) return false;
+			const info = await fs.stat(candidate);
+			if (!info.isFile() || info.size > 256 * 1024) return false;
+			return listsAdvancedUri(JSON.parse(await fs.readFile(candidate, "utf8")));
+		} catch { return false; }
 	}
 }

@@ -5,7 +5,7 @@
  */
 import type { CmdsZoteroSettings, Diagnostic, ZoteroIndex, ZoteroIndexEntry } from "../types";
 import type { ConnectionInfo, Envelope, FailureReason, IndexView, NoteRecord, NoteRef, RankedItem, ResolveOutcome, ScanReport, Selector, VaultNotes, VaultReader } from "./types";
-import { HUB_IDENTITY_KEYS } from "./types";
+import { HUB_IDENTITY_KEYS, noteRef } from "./types";
 import { buildEnvelope, infoWarnings, staleGate } from "./connection";
 import { resolveIndex, selectorKind } from "./resolve";
 import { buildNoteIndexes, classifyNotes, noteKind } from "./note-classify";
@@ -243,7 +243,8 @@ function emptyEntry(): ZoteroIndexEntry {
 }
 
 function toRefMaps(indexes: ReturnType<typeof buildNoteIndexes>, vault: string): NoteLookups & { hubByDoi: Map<string, NoteRef[]>; rawByDoi: Map<string, NoteRef[]> } {
-	const convert = (source: Map<string, NoteRecord[]>): Map<string, NoteRef[]> => new Map([...source].map(([key, records]) => [key, records.map(record => ({ path: record.path, basename: record.basename, uri: `obsidian://open?${new URLSearchParams({ vault, file: record.path }).toString()}` }))]));
+	// 0.5 R15: one canonical obsidian://open builder for every NoteRef.
+	const convert = (source: Map<string, NoteRecord[]>): Map<string, NoteRef[]> => new Map([...source].map(([key, records]) => [key, records.map(record => noteRef(vault, record.path))]));
 	return { hubByCitekey: convert(indexes.hubByCitekey), rawByCitekey: convert(indexes.rawByCitekey), hubByDoi: convert(indexes.hubByDoi), rawByDoi: convert(indexes.rawByDoi), skipped: indexes.skipped };
 }
 
