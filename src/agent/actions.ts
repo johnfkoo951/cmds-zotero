@@ -38,7 +38,10 @@ export interface PdfCacheReader {
 	list(dir: string): Promise<string[]>;
 	read(path: string): Promise<string | null>;
 	statLocal(absolutePath: string): Promise<{ size: number; mtimeMs: number } | null>;
-	/** sha256 of a vault-relative PDF (`--file` targets); null when absent or refused. */
+	/**
+	 * sha256 of a vault-relative PDF (`--file` targets); null when absent or outside the vault. A present file refused for
+	 * its size or content throws a `LocalFileError` (`too-large` / `bad-magic`) so the host can report the precise reason.
+	 */
 	fileHash(vaultRelativePath: string): Promise<{ sha256: string; absolutePath: string } | null>;
 }
 
@@ -252,10 +255,25 @@ function toRefMaps(indexes: ReturnType<typeof buildNoteIndexes>, vault: string):
 	return { hubByCitekey: convert(indexes.hubByCitekey), rawByCitekey: convert(indexes.rawByCitekey), hubByDoi: convert(indexes.hubByDoi), rawByDoi: convert(indexes.rawByDoi), skipped: indexes.skipped };
 }
 
-async function notesUnder(host: ActionHost, path: string, recursive: boolean): Promise<{ notes: NoteRecord[]; truncated: boolean; isFile: boolean }> {
+/** 0.5 R13/F14: one note by vault-relative path, with or without its `.md` extension; shared by cites and locate. */
+export function findNote(notes: NoteRecord[], path: string): NoteRecord | null {
 	const clean = path.replace(/^\/+|\/+$/g, "");
-	const all = await host.reader.listNotes();
-	const exact = all.find(note => note.path === clean || note.path === `${clean}.md`);
+	return notes.find(note => note.path === clean || note.path === `${clean}.md`) ?? null;
+}
+
+/**
+ * A path no vault reader could resolve inside the vault: scheme-prefixed, traversing, or carrying `\` / NUL. Call it with
+ * the slash-trimmed path: a leading `/` is vault-root-relative for every `--path` action (cites has always read it so).
+ */
+function outsideVault(path: string): boolean {
+	return /^[a-z]+:/i.test(path) || path.includes("\\") || path.includes("\0") || path.split("/").some(part => part === "..");
+}
+
+// 0.5 R13/F13: callers that already listed the vault pass `listed` so one request never scans it twice.
+async function notesUnder(host: ActionHost, path: string, recursive: boolean, listed?: NoteRecord[]): Promise<{ notes: NoteRecord[]; truncated: boolean; isFile: boolean }> {
+	const clean = path.replace(/^\/+|\/+$/g, "");
+	const all = listed ?? await host.reader.listNotes();
+	const exact = findNote(all, clean);
 	if (exact) return { notes: [exact], truncated: false, isFile: true };
 	const prefix = clean ? `${clean}/` : "";
 	const inside = all.filter(note => note.path.startsWith(prefix) && (recursive || !note.path.slice(prefix.length).includes("/")));
@@ -269,9 +287,9 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	const forcedEvidenceGate = host.connection.index.complete !== true || host.connection.index.stale === null;
 	const stale = forcedEvidenceGate || host.connection.index.stale === true;
 	const allowStaleNegative = request.allowStale === true && !forcedEvidenceGate;
-	const { notes: targets, truncated, isFile } = await notesUnder(host, request.path, request.recursive === true);
-	if (!targets.length && !isFile) return { ...envelope(host, "cites", 2, { reason: "path-outside-vault", message: `No Markdown notes found at ${request.path}.` }) };
 	const all = await host.reader.listNotes();
+	const { notes: targets, truncated, isFile } = await notesUnder(host, request.path, request.recursive === true, all);
+	if (!targets.length && !isFile) return { ...envelope(host, "cites", 2, { reason: "path-outside-vault", message: `No Markdown notes found at ${request.path}.` }) };
 	const indexes = buildNoteIndexes(all);
 	const lookups = toRefMaps(indexes, host.vault);
 	const scan = scanOf(host);
@@ -314,11 +332,11 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	return { ...envelope(host, "cites", 2), files, keys, references, ...(referencesReason ? { referencesReason } : {}), ...(referencesReason && bbtError ? { bbtError } : {}), summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
 }
 
-export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean }> {
+export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest, listedNotes?: NoteRecord[]): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean }> {
 	const view = host.indexView;
 	// Preserve raw freshness for proposals/apply: allowStale relaxes reporting only and never turns stale evidence fresh.
 	const stale = view ? host.connection.index.complete !== true || host.connection.index.stale !== false : true;
-	const listed = await host.reader.listNotes();
+	const listed = listedNotes ?? await host.reader.listNotes();
 	const notes: NoteRecord[] = [];
 	for (const note of listed) {
 		const kind = noteKind(note);
@@ -392,7 +410,7 @@ export async function diagnosticsAction(host: ActionHost, request: CommonRequest
 	const diagnostics: (Diagnostic | AgentDiagnostic)[] = [...view.index.diagnostics];
 	const listed = await host.reader.listNotes();
 	for (const note of listed) if (note.frontmatter?.citekeyProvisional === true) diagnostics.push({ code: "provisional-citekey", severity: "warning", message: `Provisional citekey: ${note.path}. Pin it in Zotero; do not rename the note automatically.`, path: note.path } as AgentDiagnostic);
-	const { result } = await reconcileDryRun(host, { allowStale: request.allowStale });
+	const { result } = await reconcileDryRun(host, { allowStale: request.allowStale }, listed);
 	diagnostics.push(...result.diagnostics);
 	const citing = listed.filter(note => typeof note.frontmatter?.type === "string" && ["research-question", "synthesis"].includes(note.frontmatter.type));
 	if (citing.length) {
@@ -428,7 +446,8 @@ export async function locateTarget(host: ActionHost, request: LocateRequestArgs,
 	if (request.file) {
 		const hash = await host.pdfCache.fileHash(request.file);
 		if (!hash) return { failure: { reason: "path-outside-vault", message: `PDF not found inside the vault: ${request.file}` } };
-		const prefix = cachePrefix({ kind: "file" });
+		// 0.5 R13/F17: the prefix carries the path hash, so identical bytes at two vault paths never share a cache name.
+		const prefix = cachePrefix({ kind: "file", path: request.file });
 		return { target: { item: null, attachment: { key: null, openURI: null, path: request.file }, prefix, exactName: `${prefix}-${hash.sha256.slice(0, 16)}.json`, localPath: hash.absolutePath } };
 	}
 	if (!host.indexView) return { failure: host.indexFailure ?? { reason: "index-missing", message: "No validated Zotero index is available." } };
@@ -477,10 +496,14 @@ export async function locateAction(host: ActionHost, request: LocateRequestArgs)
 	let quotes: LocateRequest[] = [];
 	let citekeyFromNote: string | null = null;
 	if (request.path) {
-		const body = await host.reader.readNote(request.path);
-		const notes = await host.reader.listNotes();
-		const note = notes.find(candidate => candidate.path === request.path || candidate.path === `${request.path}.md`);
-		const fmKey = typeof note?.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;
+		// 0.5 R13/F14: resolve the note record first (with or without `.md`, exactly as cites does) and read its real path;
+		// an unknown note is a structured refusal, never a thrown error.
+		const cleanPath = request.path.replace(/^\/+|\/+$/g, "");
+		if (outsideVault(cleanPath)) return { ...envelope(host, "locate", 2, { reason: "path-outside-vault", message: `Note path is outside the vault: ${request.path}` }) };
+		const note = findNote(await host.reader.listNotes(), cleanPath);
+		if (!note) return { ...envelope(host, "locate", 2, { reason: "invalid-request", message: `Note not found: ${request.path}` }) };
+		const body = await host.reader.readNote(note.path);
+		const fmKey = typeof note.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;
 		if (request.citekey && fmKey && request.citekey !== fmKey) throw new Error(`--citekey ${request.citekey} disagrees with the note's citekey ${fmKey}.`);
 		citekeyFromNote = fmKey;
 		quotes = extractQuoteCallouts(body).map(item => ({ line: item.line, quote: item.quote }));

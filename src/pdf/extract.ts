@@ -4,11 +4,13 @@
  */
 import { App, FileSystemAdapter, loadPdfJs } from "obsidian";
 import { join } from "node:path";
+import { promises as fs } from "node:fs";
 import { createHash } from "crypto";
 import { joinTextItems, normalizePageLabel, type PageText, type TextItem } from "./locate";
-import { cacheFileName, cachePrefix, evictionSet, evictionSetByPath, parseCacheName, MAX_CACHE_BYTES, PDF_TEXT_CACHE_DIR, validateCache, type CacheScope, type PdfTextCache } from "./cache";
+import { cacheFileName, cachePrefix, evictionSet, evictionSetByPath, normalizeVaultPath, parseCacheName, MAX_CACHE_BYTES, PDF_TEXT_CACHE_DIR, validateCache, type CacheScope, type PdfTextCache } from "./cache";
 import { readLocalFile } from "../local-file";
 import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory } from "../vault-storage";
+import { PdfExtractError } from "./errors";
 
 export const MAX_PDF_BYTES = 64 * 1024 * 1024;
 export const MAX_PDF_PAGES = 2000;
@@ -55,12 +57,18 @@ export interface PdfCacheStore {
 
 export function vaultCacheStore(app: App): PdfCacheStore {
 	const adapter = app.vault.adapter;
+	// 0.5 R13/F11: resolved once; the guarded reader refuses any path whose realpath differs (a symlinked vault root included).
+	let root: Promise<string> | null = null;
+	const basePath = (): Promise<string> => {
+		if (!(adapter instanceof FileSystemAdapter)) return Promise.reject(new Error("A desktop vault is required for PDF caches"));
+		root ??= fs.realpath(adapter.getBasePath()).catch(() => adapter.getBasePath());
+		return root;
+	};
 	return {
 		exists: path => adapter.exists(path),
 		read: async path => {
 			await assertVaultBoundary(app, path);
-			if (!(adapter instanceof FileSystemAdapter)) throw new Error("A desktop vault is required for PDF caches");
-			const bytes = (await readLocalFile(join(adapter.getBasePath(), path), { maxBytes: MAX_CACHE_BYTES, minBytes: 0, magic: () => true })).bytes;
+			const bytes = (await readLocalFile(join(await basePath(), path), { maxBytes: MAX_CACHE_BYTES, minBytes: 0, magic: () => true })).bytes;
 			return Buffer.from(bytes).toString("utf8");
 		},
 		write: (path, content) => adapter.write(path, content),
@@ -85,7 +93,7 @@ interface PdfDocument {
 }
 
 function toCacheScope(scope: ExtractScope): CacheScope {
-	return scope.kind === "file" ? { kind: "file" } : { kind: "attachment", libraryType: scope.libraryType, libraryID: scope.libraryID, attachmentKey: scope.attachmentKey };
+	return scope.kind === "file" ? { kind: "file", path: scope.path } : { kind: "attachment", libraryType: scope.libraryType, libraryID: scope.libraryID, attachmentKey: scope.attachmentKey };
 }
 
 export function truncatedPages(pages: PageText[]): number[] {
@@ -101,11 +109,14 @@ export class PdfTextService {
 	}
 
 	private assertWritable(): void {
-		if (!this.canWrite()) throw new Error("The plugin was unloaded or reconfigured; PDF cache publication was cancelled");
+		// 0.5 R13/F08: typed so the ingest API never classifies this by its wording.
+		if (!this.canWrite()) throw new PdfExtractError("cancelled", "The plugin was unloaded or reconfigured; PDF cache publication was cancelled");
 	}
 
 	/** Per-page text for one PDF; concurrent requests for the same target share one extraction. */
-	extract(scope: ExtractScope, options: ExtractOptions = {}): Promise<ExtractResult> {
+	extract(requested: ExtractScope, options: ExtractOptions = {}): Promise<ExtractResult> {
+		// 0.5 R13/F17: one spelling of a vault path per cache (recorded, compared and hashed in normalized form).
+		const scope: ExtractScope = requested.kind === "file" ? { ...requested, path: normalizeVaultPath(requested.path) } : requested;
 		const key = `${cachePrefix(toCacheScope(scope))}:${scope.kind === "file" ? scope.absolutePath : scope.path}:${options.force ? "force" : "cache"}`;
 		const flight = this.flights.get(key);
 		if (flight) return flight;
@@ -141,9 +152,9 @@ export class PdfTextService {
 			path: scope.path,
 			tool,
 		};
-		if (!validateCache(extracted)) throw new Error("PDF extraction produced invalid cache metadata");
+		if (!validateCache(extracted)) throw new PdfExtractError("invalid-cache", "PDF extraction produced invalid cache metadata");
 		const serialized = JSON.stringify(extracted);
-		if (Buffer.byteLength(serialized) > MAX_CACHE_BYTES) throw new Error("PDF text cache exceeds the 32 MiB limit");
+		if (Buffer.byteLength(serialized) > MAX_CACHE_BYTES) throw new PdfExtractError("cache-too-large", "PDF text cache exceeds the 32 MiB limit");
 		this.assertWritable();
 		await this.store.ensureIgnore();
 		this.assertWritable();
@@ -174,12 +185,13 @@ export class PdfTextService {
 	}
 
 	/**
-	 * Removes older caches of the same PDF: by attachment prefix, or for `--file` by the vault-relative path each
-	 * `file-` cache recorded (their names carry no identity, and another paper's cache must never be evicted).
+	 * Removes older caches of the same PDF: by attachment prefix, or for `--file` by the path-hash prefix *and* the
+	 * vault-relative path each `file-` cache recorded (another paper's cache must never be evicted).
 	 */
 	private async evictOthers(keepName: string, scope: ExtractScope): Promise<string[]> {
 		const names = await this.store.list(PDF_TEXT_CACHE_DIR);
-		const stale = scope.kind === "file" ? evictionSetByPath(await this.fileCachePaths(names), keepName, scope.path) : evictionSet(names, keepName);
+		// 0.5 R13/F17: only caches sharing the kept path prefix are opened; every other `file-` cache stays unread.
+		const stale = scope.kind === "file" ? evictionSetByPath(await this.fileCachePaths(names.filter(name => name !== keepName), cachePrefix(scope)), keepName, scope.path) : evictionSet(names, keepName);
 		const evicted: string[] = [];
 		for (const name of stale) {
 			const path = `${PDF_TEXT_CACHE_DIR}/${name}`;
@@ -191,11 +203,12 @@ export class PdfTextService {
 		return evicted;
 	}
 
-	/** The recorded `path` of every valid `file-` cache; damaged ones are skipped (never evicted blindly). */
-	private async fileCachePaths(names: string[]): Promise<{ name: string; path: string }[]> {
+	/** The recorded `path` of every valid `file-` cache under `prefix`; damaged ones are skipped (never evicted blindly). */
+	private async fileCachePaths(names: string[], prefix: string): Promise<{ name: string; path: string }[]> {
 		const entries: { name: string; path: string }[] = [];
 		for (const name of names) {
-			if (parseCacheName(name)?.scope.kind !== "file") continue;
+			const parsed = parseCacheName(name);
+			if (parsed?.scope.kind !== "file" || parsed.prefix !== prefix) continue;
 			try {
 				const path = `${PDF_TEXT_CACHE_DIR}/${name}`;
 				await this.store.assertBoundary(path);
@@ -209,14 +222,18 @@ export class PdfTextService {
 	}
 
 	private async extractPages(bytes: Uint8Array, warnings: string[]): Promise<{ pages: PageText[]; pageCount: number; tool: string }> {
-		const pdfjs = await loadPdfJs() as PdfJsModule;
+		// 0.5 R13/F08: every failure of this stage carries a code; pdf.js's own message is kept inside `unreadable`.
+		let pdfjs: PdfJsModule;
+		try { pdfjs = await loadPdfJs() as PdfJsModule; }
+		catch (error) { throw new PdfExtractError("pdfjs-unavailable", `pdf.js could not be loaded: ${error instanceof Error ? error.message : String(error)}`); }
 		const tool = `pdfjs/${typeof pdfjs.version === "string" && pdfjs.version ? pdfjs.version : "unknown"}`;
 		const task = pdfjs.getDocument({ data: bytes, disableFontFace: true, isEvalSupported: false, useSystemFonts: false, stopAtErrors: false });
 		let doc: PdfDocument | null = null;
 		try {
-			doc = await task.promise;
-			if (doc.numPages > MAX_PDF_PAGES) throw new Error(`PDF has ${doc.numPages} pages; the extraction limit is ${MAX_PDF_PAGES}`);
-			if (doc.numPages < 1) throw new Error("PDF has no pages");
+			try { doc = await task.promise; }
+			catch (error) { throw new PdfExtractError("unreadable", `pdf.js could not parse the PDF: ${error instanceof Error ? error.message : String(error)}`); }
+			if (doc.numPages > MAX_PDF_PAGES) throw new PdfExtractError("too-many-pages", `PDF has ${doc.numPages} pages; the extraction limit is ${MAX_PDF_PAGES}`);
+			if (doc.numPages < 1) throw new PdfExtractError("no-pages", "PDF has no pages");
 			let labels: (string | null)[] | null = null;
 			try { labels = await doc.getPageLabels(); } catch { labels = null; }
 			const pages: PageText[] = [];
@@ -231,7 +248,7 @@ export class PdfTextService {
 				}
 				const extractedPage = { page: n, pageLabel: normalizePageLabel(labels?.[n - 1], n), text };
 				serializedBytes += Buffer.byteLength(JSON.stringify(extractedPage));
-				if (serializedBytes > MAX_CACHE_BYTES - 8192) throw new Error("PDF text cache exceeds the 32 MiB limit");
+				if (serializedBytes > MAX_CACHE_BYTES - 8192) throw new PdfExtractError("cache-too-large", "PDF text cache exceeds the 32 MiB limit");
 				pages.push(extractedPage);
 				page.cleanup?.();
 			}

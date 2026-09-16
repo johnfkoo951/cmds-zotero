@@ -17,16 +17,37 @@ interface NoteMap {
 export interface VaultNoteLink { vault: string; path: string; uri: string }
 export interface VaultLinkReport { links: VaultNoteLink[]; warnings: string[] }
 
+/** The part of a note map that decides whether a publication changes anything; `generatedAt` is deliberately excluded. */
+function mapFingerprint(map: Pick<NoteMap, "version" | "vault" | "indexGeneratedAt" | "notes">): string {
+	return JSON.stringify([map.version, map.vault, map.indexGeneratedAt, map.notes]);
+}
+
 export class VaultLinks {
 	private publication: Promise<void> = Promise.resolve();
+	/** Fingerprint of the map last seen on disk or written by this instance; null until the first publication seeds it. */
+	private lastPublished: string | null = null;
 	constructor(private app: App, private settings: () => CmdsZoteroSettings, private canWrite: () => boolean = () => true) {}
 
-	localFiles(entry: ZoteroIndexEntry, index: ZoteroIndex): TFile[] {
+	/**
+	 * 0.5 R13/F06: every Markdown note this plugin recognizes as a literature note, grouped by index entry id, in one pass
+	 * over the vault (one alias index, one metadata-cache lookup per file). Paths within an entry are sorted.
+	 */
+	localFilesByEntry(index: ZoteroIndex): Map<string, TFile[]> {
 		const lookup = buildAliasIndex(index.entries);
-		return this.app.vault.getMarkdownFiles().filter(file => {
+		const byEntry = new Map<string, TFile[]>();
+		for (const file of this.app.vault.getMarkdownFiles()) {
 			const fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(file)?.frontmatter;
-			return noteIdentity(file.basename, fm, lookup) === entry.id;
-		});
+			const id = noteIdentity(file.basename, fm, lookup);
+			if (!id) continue;
+			const files = byEntry.get(id);
+			if (files) files.push(file); else byEntry.set(id, [file]);
+		}
+		for (const files of byEntry.values()) files.sort((a, b) => a.path.localeCompare(b.path));
+		return byEntry;
+	}
+
+	localFiles(entry: ZoteroIndexEntry, index: ZoteroIndex): TFile[] {
+		return this.localFilesByEntry(index).get(entry.id) ?? [];
 	}
 
 	publish(index: ZoteroIndex): Promise<void> {
@@ -34,36 +55,45 @@ export class VaultLinks {
 		return this.publication;
 	}
 
+	/**
+	 * 0.5 R13/F07: deterministic map (sorted entry ids, sorted paths) compared against the last published fingerprint,
+	 * seeded from disk on the first publication of a session, so an unchanged map is never rewritten.
+	 */
 	private async publishNow(index: ZoteroIndex): Promise<void> {
 		if (!this.canWrite()) return;
 		const notes: Record<string, string[]> = {};
-		const lookup = buildAliasIndex(index.entries);
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(file)?.frontmatter;
-			const id = noteIdentity(file.basename, fm, lookup);
-			if (id) (notes[id] ??= []).push(file.path);
-		}
-		for (const files of Object.values(notes)) files.sort();
+		const byEntry = this.localFilesByEntry(index);
+		for (const id of [...byEntry.keys()].sort()) notes[id] = byEntry.get(id)!.map(file => file.path).sort();
 		const map: NoteMap = { version: 1, vault: this.app.vault.getName(), generatedAt: new Date().toISOString(), indexGeneratedAt: index.generatedAt, notes };
 		await assertVaultBoundary(this.app, MAP_PATH);
 		if (!this.canWrite()) return;
 		// Published from every UI read: rewriting an unchanged map would dirty a git-tracked vault on each start.
-		if (await this.unchanged(map)) return;
+		const fingerprint = mapFingerprint(map);
+		if (this.lastPublished === null) this.lastPublished = await this.fingerprintOnDisk();
+		if (this.lastPublished === fingerprint && await this.app.vault.adapter.exists(MAP_PATH)) return;
 		await ensureCmdsIgnore(this.app);
 		await ensureDirectory(this.app, MAP_PATH);
 		if (!this.canWrite()) return;
 		await this.app.vault.adapter.write(MAP_PATH, JSON.stringify(map, null, 2));
+		this.lastPublished = fingerprint;
 	}
 
-	/** True when the map on disk already carries the same vault, index generation and notes (its own `generatedAt` is ignored). */
-	private async unchanged(map: NoteMap): Promise<boolean> {
+	/** Fingerprint of the map currently on disk; "" when absent or unreadable (so any real map differs from it). */
+	private async fingerprintOnDisk(): Promise<string> {
 		try {
-			if (!(await this.app.vault.adapter.exists(MAP_PATH))) return false;
+			if (!(await this.app.vault.adapter.exists(MAP_PATH))) return "";
 			const raw: unknown = JSON.parse(await this.app.vault.adapter.read(MAP_PATH));
-			if (!raw || typeof raw !== "object") return false;
+			if (!raw || typeof raw !== "object") return "";
 			const existing = raw as Partial<NoteMap>;
-			return existing.version === map.version && existing.vault === map.vault && existing.indexGeneratedAt === map.indexGeneratedAt && JSON.stringify(existing.notes) === JSON.stringify(map.notes);
-		} catch { return false; }
+			if (existing.version !== 1 || typeof existing.vault !== "string" || typeof existing.indexGeneratedAt !== "string" || !existing.notes || typeof existing.notes !== "object") return "";
+			const notes: Record<string, string[]> = {};
+			for (const id of Object.keys(existing.notes).sort()) {
+				const paths: unknown = existing.notes[id];
+				if (!Array.isArray(paths) || paths.some(value => typeof value !== "string")) return "";
+				notes[id] = [...paths as string[]].sort();
+			}
+			return mapFingerprint({ version: 1, vault: existing.vault, indexGeneratedAt: existing.indexGeneratedAt, notes });
+		} catch { return ""; }
 	}
 
 	/** 0.5 R15: rows carry the address people and Hookmark use (obsidian://open, or Advanced URI when the peer vault lists it); hub/@citekey rows first. */

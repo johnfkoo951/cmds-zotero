@@ -1,4 +1,4 @@
-import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TFile, parseYaml, stringifyYaml } from "obsidian";
+import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, parseYaml, stringifyYaml } from "obsidian";
 import { BbtService } from "./bbt";
 import { IndexService, describeRefreshFailure, formatIndexAge, refreshRefusal, type CollectPrecondition } from "./index-service";
 import { ImportService } from "./importer";
@@ -9,10 +9,10 @@ import { ObsidianVaultReader } from "./obsidian-vault";
 import { PdfTextService } from "./pdf/extract";
 import { applyReconcile } from "./reconcile-apply";
 import { probeGit } from "./git-probe";
-import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as nodePath from "node:path";
 import { readLocalFile } from "./local-file";
+import { hashLocalPdf } from "./pdf/file-hash";
 import { validateIndex } from "./identity";
 import { describeBbtError, transportReasonOf } from "./api/transport";
 import { VaultLinks } from "./vault-links";
@@ -113,8 +113,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 			if (view instanceof MarkdownView) this.lastView = view;
 		}));
 		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.scheduleMap(); }));
-		this.registerEvent(this.app.vault.on("rename", () => this.scheduleMap()));
-		this.registerEvent(this.app.vault.on("delete", () => this.scheduleMap()));
+		// 0.5 R13/F07: only Markdown notes and folders (which may contain notes) can change the note map; attachments never do.
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (this.affectsNoteMap(file) || oldPath.endsWith(".md")) this.scheduleMap(); }));
+		this.registerEvent(this.app.vault.on("delete", file => { if (this.affectsNoteMap(file)) this.scheduleMap(); }));
 		// 0.5 R4: status-bar item; click probes BBT once (no refresh); the minute tick only re-renders the age text.
 		this.statusBar = this.addStatusBarItem();
 		this.statusBar.addClass("cmds-zotero-status-bar", "mod-clickable");
@@ -159,7 +160,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 		const index = await indexToken.peek();
 		const adapter = this.app.vault.adapter;
 		const indexExists = await adapter.exists(this.settings.zoteroIndexPath);
-		const root = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
+		// 0.5 R13/F11: the guarded local reader requires realpath === path, so a vault opened through a symlink must join
+		// vault-relative paths onto the resolved base, not the path Obsidian was given.
+		const root = adapter instanceof FileSystemAdapter ? await fs.realpath(adapter.getBasePath()).catch(() => adapter.getBasePath()) : null;
 		const bbtInfo = action === "connection" ? await this.bbt.capabilities().then(value => ({ reachable: true, zotero: value.zotero, betterbibtex: value.betterbibtex }), (error: unknown) => { const reason = transportReasonOf(error); return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable", ...(reason ? { reason } : {}) }; }) : { reachable: null };
 		const connection = buildConnection({
 			mode: "live", obsidian: "ok", pluginVersion: this.manifest.version, pluginApiVersions: [1, 2], pluginEnabled: true, bbt: bbtInfo,
@@ -186,7 +189,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 				statLocal: async path => { try { if (await fs.realpath(path) !== path) return null; const stat = await fs.lstat(path); return stat.isFile() && !stat.isSymbolicLink() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null; } catch { return null; } },
 				fileHash: async path => {
 					if (!root) return null;
-					try { await assertVaultBoundary(this.app, path); const full = nodePath.join(root, relativePath(path)); const bytes = (await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 5, magic: ["255044462d"], label: "PDF" })).bytes; return { sha256: createHash("sha256").update(bytes).digest("hex"), absolutePath: full }; } catch { return null; }
+					// 0.5 R13/F08: the shared guarded reader surfaces an oversized or non-PDF file by code; boundary failures stay null.
+					try { await assertVaultBoundary(this.app, path); } catch { return null; }
+					return hashLocalPdf(nodePath.join(root, relativePath(path)));
 				},
 			},
 			vaultPdfPaths: async () => this.app.vault.getFiles().filter(file => file.extension.toLowerCase() === "pdf").map(file => file.path).sort(),
@@ -239,7 +244,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	 * that slipped past the check, and the old storage's write guard rejects a late replacement.
 	 */
 	async saveSettings(next: CmdsZoteroSettings): Promise<void> {
-		if (this.service.busy) throw new Error("Wait for index refresh to finish before changing configuration.");
+		if (this.service.busy) throw new Error(this.busyMessage());
 		const settings = normalizeSettings(next);
 		settings.bbtEndpoint = validateEndpoint(settings.bbtEndpoint);
 		relativePath(settings.zoteroIndexPath);
@@ -641,5 +646,18 @@ export default class CMDSZoteroPlugin extends Plugin {
 			const capabilities = await this.bbt.capabilities();
 			new Notice(`Connected: Zotero ${capabilities.zotero}; Better BibTeX ${capabilities.betterbibtex}.`);
 		} catch (error) { new Notice(describeBbtError(error)); }
+	}
+
+	// 0.5 R13/F07: rename/delete of an attachment or image never changes which notes belong to which entry (a note renamed
+	// away from `.md` is caught by the rename listener through its old path).
+	private affectsNoteMap(file: TAbstractFile): boolean {
+		return file instanceof TFolder || (file instanceof TFile && file.extension === "md");
+	}
+
+	// 0.5 R13/F18: the settings guard names what is holding the write gate so a user is not told to wait for nothing.
+	private busyMessage(): string {
+		const pending = this.service.pendingWrites();
+		if (!pending.length) return "Wait for index refresh to finish before changing configuration.";
+		return `Wait for the running agent request${pending.length === 1 ? "" : "s"} to finish before changing configuration: ${pending.map(job => `${job.action} (${job.id})`).join(", ")}. Each request times out on its own.`;
 	}
 }

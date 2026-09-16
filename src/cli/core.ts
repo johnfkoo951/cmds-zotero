@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 
-import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
 import { validateIndex } from "../identity";
 import { buildConnection, buildEnvelope } from "../agent/connection";
@@ -9,8 +8,21 @@ import type { FailureReason, IndexView } from "../agent/types";
 import { probeBbt } from "./bbt-direct";
 import { FsVaultReader, locateVault, readPluginSettings, readEnabledPlugins, readInstalledPluginVersion } from "./fs-vault";
 import { probeGit } from "../git-probe";
-import { readLocalFile } from "../local-file";
+import { LocalFileError, readLocalFile } from "../local-file";
+import { hashLocalPdf } from "../pdf/file-hash";
 import type { ZoteroIndex } from "../types";
+
+/**
+ * 0.5 R13/F10: contract-2 support is decided by the installed manifest's numeric major.minor (>= 0.4 advertises [1, 2],
+ * 0.0-0.3 only [1]); an absent or unparsable version stays unknown rather than being downgraded.
+ */
+export function pluginApiVersionsFor(version: string | null): number[] | null {
+	const match = version ? /^(\d+)\.(\d+)(?:\.|$|-|\+)/.exec(version.trim()) : null;
+	if (!match) return null;
+	const major = Number(match[1]);
+	const minor = Number(match[2]);
+	return major > 0 || minor >= 4 ? [1, 2] : [1];
+}
 
 
 export interface OfflineRunInput { action: string; vault: string; vaultPath?: string | null; request?: unknown; obsidianError?: string | null; now?: Date }
@@ -45,13 +57,11 @@ function cacheReader(reader: FsVaultReader): PdfCacheReader {
 			try { if (await fs.realpath(path) !== path) return null; const stat = await fs.lstat(path); return stat.isFile() && !stat.isSymbolicLink() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null; } catch { return null; }
 		},
 		fileHash: async path => {
-			try {
-				const full = await reader.resolveInside(path);
-				const stat = await fs.lstat(full);
-				if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 * 1024) return null;
-				const bytes = (await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 5, magic: ["255044462d"], label: "PDF" })).bytes;
-				return { sha256: createHash("sha256").update(bytes).digest("hex"), absolutePath: full };
-			} catch { return null; }
+			// 0.5 R13/F08: no size pre-check here; the shared guarded reader refuses an oversized or non-PDF file with its
+			// code (pdf-too-large / pdf-invalid), while an absent or boundary-failing path stays null.
+			let full: string;
+			try { full = await reader.resolveInside(path); } catch { return null; }
+			return hashLocalPdf(full);
 		},
 	};
 }
@@ -89,7 +99,7 @@ async function offlineHost(input: OfflineRunInput, action: AgentAction): Promise
 	const bbt = action === "connection" ? await probeBbt(settings.bbtEndpoint) : { reachable: null };
 	const connection = buildConnection({
 		mode: "offline", obsidian: "unavailable", ...(input.obsidianError ? { obsidianError: input.obsidianError } : {}), pluginVersion: version,
-		pluginApiVersions: version === "0.4.0" ? [1, 2] : version && /^0\.[0-3]\./.test(version) ? [1] : null, pluginEnabled: enabled === null ? (settingsPresent ? null : false) : enabled.includes("cmds-zotero"), bbt,
+		pluginApiVersions: pluginApiVersionsFor(version), pluginEnabled: enabled === null ? (settingsPresent ? null : false) : enabled.includes("cmds-zotero"), bbt,
 		index: { source: loaded.index ? "offline-file" : "none", path: settings.zoteroIndexPath, generatedAt: loaded.index?.generatedAt ?? null, count: loaded.index?.count ?? null, complete: loaded.index?.complete ?? null, schemaVersion: loaded.index?.schemaVersion ?? null },
 		maxAgeMinutes: settings.indexMaxAgeMinutes, legacyPluginEnabled: enabled === null ? null : enabled.includes("cmds-link-zotero"), git: await probeGit(root, settings.zoteroIndexPath), now,
 	});
@@ -109,7 +119,8 @@ export async function runAction(input: OfflineRunInput): Promise<Record<string, 
 	try { return await dispatch(host, action, input.request ?? {}) as Record<string, unknown>; }
 	catch (error) {
 		const message = error instanceof Error ? error.message : "Offline action failed.";
-		const reason: FailureReason = /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
+		// 0.5 R13/F08: typed local-file refusals map by code before any message pattern.
+		const reason: FailureReason = error instanceof LocalFileError ? (error.code === "too-large" ? "pdf-too-large" : "pdf-invalid") : /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
 		return { ...buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, host.now, { reason, message }), ...(ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {}) };
 	}
 }
