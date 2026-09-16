@@ -53,7 +53,8 @@ No new flags may be silently discarded when talking to an old plugin.
 
 Jobs retain creation/completion timestamps. At most 16 unconsumed jobs exist.
 Completed/failed jobs expire after ten minutes; pending jobs are not evicted by that TTL.
-The first successful retrieval consumes a completed result. Lost delivery is an uncertain outcome;
+A completed result persists until the client acknowledges it or its ten-minute TTL elapses; repeated reads
+return the same result. Lost delivery is an uncertain outcome;
 inspect the current state with read-only reconcile rather than automatically reapplying.
 Unloading prevents late completion from recreating jobs or performing later writes.
 

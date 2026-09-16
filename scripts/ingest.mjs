@@ -2,6 +2,12 @@
 // CMDS Zotero agent CLI (contract 2). Bridge-first through the Obsidian CLI; offline fallback over the vault's
 // validated index for read-only actions. Every response is JSON on stdout with an envelope; see
 // skills/cmds-zotero/references/cli-contract-v2.md.
+//
+// Transport notes: a busy Obsidian renderer makes `obsidian eval` return exit 0 with EMPTY stdout while the eval
+// still runs. Such bridge failures are transient: discovery is retried up to three times before submission, a
+// submission with unknown outcome is never repeated, and result polling keeps trying until the --timeout deadline.
+// Completed results persist in the plugin until this script acknowledges them (p.service.ackJob) or their TTL.
+// CMDS_ZOTERO_POLL_MS (tests only): overrides the poll deadline in milliseconds instead of --timeout seconds.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -120,8 +126,11 @@ const request = {};
 const map = { '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict' };
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
-const timeoutMs = (parsed.values['--timeout'] ?? (action === 'pdf-text' ? 900 : 300)) * 1000;
+const pollOverride = /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
+const timeoutMs = pollOverride ?? (parsed.values['--timeout'] ?? (action === 'pdf-text' ? 900 : 300)) * 1000;
 const offline = parsed.values['--offline'] === true;
+const TRANSIENT_DELAY_MS = 500;
+const DISCOVERY_RETRIES = 3;
 
 function classifyBridgeOutput(output) {
 	const lines = output.split(/\r?\n/).filter(Boolean);
@@ -144,8 +153,18 @@ function evaluate(expression) {
 	return classifyBridgeOutput(output);
 }
 
+// Pre-submission reads are side-effect free, so a transient bridge failure may be retried a few times.
+async function evaluateBeforeSubmission(expression) {
+	let outcome = evaluate(expression);
+	for (let retry = 0; retry < DISCOVERY_RETRIES && outcome.kind === 'bridge-failure'; retry++) {
+		await delay(TRANSIENT_DELAY_MS);
+		outcome = evaluate(expression);
+	}
+	return outcome;
+}
+
 async function runLive() {
-	const versions = evaluate(`{apiVersion:p.service.apiVersion,apiVersions:p.service.apiVersions||[p.service.apiVersion]}`);
+	const versions = await evaluateBeforeSubmission(`{apiVersion:p.service.apiVersion,apiVersions:p.service.apiVersions||[p.service.apiVersion]}`);
 	if (versions.kind !== 'result') return { bridge: versions, phase: 'discovery' };
 	const apiVersions = Array.isArray(versions.value.apiVersions) ? versions.value.apiVersions : [versions.value.apiVersion];
 	if (!apiVersions.includes(2)) {
@@ -156,21 +175,39 @@ async function runLive() {
 	}
 	let id = null;
 	for (let attempt = 0; attempt < 4; attempt++) {
+		// The submission itself is never retried on a bridge failure: an empty reply may still have started the job.
 		const started = evaluate(`p.service.startJob(${JSON.stringify(action)},${JSON.stringify(request)})`);
 		if (started.kind === 'result') { id = started.value; break; }
 		if (started.kind === 'plugin-error' && /Too many active/.test(started.message) && attempt < 3) { await delay(1000 * 2 ** attempt); continue; }
-		if (started.kind === 'plugin-error') return { bridge: started, phase: 'discovery' };
+		if (started.kind === 'plugin-error' && /Too many active|was unloaded/.test(started.message)) return { bridge: started, phase: 'discovery' };
+		// Any other throw is the plugin rejecting the request before acceptance: Obsidian and the plugin are present.
+		if (started.kind === 'plugin-error') return { bridge: { kind: 'invalid-request', message: started.message, apiVersions }, phase: 'discovery' };
 		return { bridge: started, phase: 'submission-uncertain' };
 	}
 	const deadline = Date.now() + timeoutMs;
+	let lastBridgeFailure = null;
 	while (true) {
 		const job = evaluate(`p.service.getJob(${JSON.stringify(id)})`);
-		if (job.kind !== 'result') return { bridge: job, phase: 'accepted' };
-		if (job.value.state === 'failed') return { bridge: { kind: 'plugin-error', message: job.value.error ?? 'Ingest request failed.' }, phase: 'accepted' };
-		if (job.value.state === 'completed') return { result: job.value.result };
-		if (job.value.state !== 'pending') return { bridge: { kind: 'plugin-error', message: 'Unsupported job response.' }, phase: 'accepted' };
-		if (Date.now() >= deadline) return { bridge: { kind: 'timeout', message: `Timed out after ${timeoutMs / 1000}s waiting for the plugin job.` }, phase: 'accepted' };
-		await delay(500);
+		if (job.kind === 'result') {
+			lastBridgeFailure = null;
+			if (job.value.state === 'failed') return { bridge: { kind: 'plugin-error', message: job.value.error ?? 'Ingest request failed.' }, phase: 'accepted' };
+			if (job.value.state === 'completed') {
+				// Best effort: release the persisted result now that it has been read. Failure to acknowledge is not an error.
+				evaluate(`typeof p.service.ackJob==='function'?p.service.ackJob(${JSON.stringify(id)}):false`);
+				return { result: job.value.result };
+			}
+			if (job.value.state !== 'pending') return { bridge: { kind: 'plugin-error', message: 'Unsupported job response.' }, phase: 'accepted' };
+		} else if (job.kind === 'plugin-error') {
+			return { bridge: job, phase: 'accepted' };
+		} else {
+			// Empty output or a CLI transport failure is transient on a busy renderer; the job keeps its result for us.
+			lastBridgeFailure = job.message;
+		}
+		if (Date.now() >= deadline) {
+			const detail = lastBridgeFailure ? ` The last poll failed: ${lastBridgeFailure}.` : '';
+			return { bridge: { kind: 'timeout', message: `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for the plugin job.${detail}` }, phase: 'accepted' };
+		}
+		await delay(TRANSIENT_DELAY_MS);
 	}
 }
 
@@ -183,8 +220,15 @@ async function runOffline(obsidianError) {
 function unknownConnection(obsidianError, mode = offline ? 'offline' : 'live') {
 	return { mode, obsidian: 'unavailable', ...(obsidianError ? { obsidianError } : {}), plugin: { status: 'unknown', version: null, apiVersions: null }, bbt: { reachable: null }, index: { source: 'none', path: '', schemaVersion: null, generatedAt: null, ageMinutes: null, count: null, complete: null, stale: null, maxAgeMinutes: 60 }, legacyPluginEnabled: null, git: null };
 }
-function structuredFailure(reason, message, refused = false) {
-	return { apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason, message, ...(V1_ACTIONS.includes(action) ? { status: 'unavailable' } : {}), checkedAt: new Date().toISOString(), connection: unknownConnection(message), ...(refused && action === 'reconcile' && request.apply ? { mode: 'apply', apply: { mode: 'refused', refusedReason: reason } } : {}) };
+function structuredFailure(reason, message, refused = false, connection = unknownConnection(message)) {
+	return { apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason, message, ...(V1_ACTIONS.includes(action) ? { status: 'unavailable' } : {}), checkedAt: new Date().toISOString(), connection, ...(refused && action === 'reconcile' && request.apply ? { mode: 'apply', apply: { mode: 'refused', refusedReason: reason } } : {}) };
+}
+// The plugin answered discovery and rejected the request itself: Obsidian and the plugin are present, only the request is bad.
+function presentPluginConnection(apiVersions) {
+	const connection = unknownConnection(null);
+	connection.obsidian = 'ok';
+	connection.plugin = { status: 'ok', version: null, apiVersions };
+	return connection;
 }
 function legacyEnvelope(payload) {
 	if (payload && payload.contract === 2 && payload.connection) return payload;
@@ -213,6 +257,7 @@ async function main() {
 		if (live.phase === 'accepted' || live.phase === 'submission-uncertain') {
 			await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', `${bridge.message ?? 'The job result is unavailable.'} The submission may have been accepted; do not resubmit automatically.`)); return;
 		}
+		if (bridge.kind === 'invalid-request') { await emit(structuredFailure('invalid-request', bridge.message, true, presentPluginConnection(bridge.apiVersions))); return; }
 		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') { await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message)); return; }
 		if (bridge.kind === 'too-old' || bridge.kind === 'too-old-read') {
 			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !(action === 'reconcile' && request.apply)) { await emit(await runOffline(`Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`)); return; }
