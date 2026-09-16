@@ -65,12 +65,21 @@ export class IngestAPI {
 		return id;
 	}
 
+	/** Reads never consume: a completed result persists until `ackJob` or its TTL, so a lost CLI delivery can be re-read. */
 	getJob(id: string): IngestJob {
 		this.prune();
 		const job = this.jobs.get(id);
 		if (!job) return { state: "failed", createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(), error: "Request expired, was consumed, or the plugin was reloaded. Do not resubmit a possibly completed write; inspect current state first." };
-		if (job.state === "completed") this.jobs.delete(id);
 		return { ...job };
+	}
+
+	/** Releases a terminal job after the client has read its result. Pending jobs are never acknowledged away. */
+	ackJob(id: string): boolean {
+		this.prune();
+		const job = this.jobs.get(id);
+		if (!job || job.state === "pending") return false;
+		this.jobs.delete(id);
+		return true;
 	}
 
 	dispose(): void {

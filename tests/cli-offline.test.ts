@@ -59,7 +59,8 @@ function fakeObsidian(mode: "old" | "submission-fails" | "poll-fails"): { dir: s
 	const executable = join(dir, "obsidian");
 	writeFileSync(executable, `#!/bin/sh\ncode="$3"\ncase "$code" in\n  *apiVersions*) if [ "$FAKE_MODE" = old ]; then echo '=> {"apiVersion":1,"apiVersions":[1]}'; else echo '=> {"apiVersion":2,"apiVersions":[1,2]}'; fi;;\n  *startJob*) if [ "$FAKE_MODE" = submission-fails ]; then exit 1; else echo '=> "job-1"'; fi;;\n  *getJob*) exit 1;;\nesac\n`);
 	chmodSync(executable, 0o755);
-	return { dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_MODE: mode } };
+	// Poll failures are transient until the deadline; keep the deadline short so the uncertain case stays fast.
+	return { dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_MODE: mode, CMDS_ZOTERO_POLL_MS: "1500" } };
 }
 
 test("old read-only hosts fall back before submission, while uncertain submissions never fall back", () => {
