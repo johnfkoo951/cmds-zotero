@@ -63,14 +63,21 @@ inspect the current state with read-only reconcile rather than automatically rea
 Unloading prevents late completion from recreating jobs or performing later writes.
 A pending job is failed by the host after a per-action timeout (`pdf-text` 900 s, every other action 300 s); the
 failure text names the action and the timeout, releases the write gate that blocks reconfiguration, and a late
-settlement never reverses it. A timed-out write is an uncertain outcome like any other timeout.
+settlement never reverses it. A timed-out write is an uncertain outcome like any other timeout and its failure text
+says so; a timed-out read-only job says it left no state behind. The underlying work is not cancelled.
 
-Failure `reason` values come from typed errors and the request, never from message text: an index refusal keeps its
-own reason; a local-file refusal maps by code (`too-large` → `pdf-too-large`, any other → `pdf-invalid`), so an
-oversized or non-PDF `--file` target is named precisely; `apply-failed` is reserved for a `reconcile` that was asked
-to write (`--apply`), while a failing dry-run or read reports `invalid-request`.
-`locate --path` and `cites --path` resolve a note with or without its `.md` extension; an unknown note is a
-structured `invalid-request`, and a path that cannot lie inside the vault is `path-outside-vault`.
+Failure `reason` values are derived from typed errors and the request first: an index refusal keeps its own reason;
+a local-file refusal maps by code (`too-large` → `pdf-too-large`, any other → `pdf-invalid`), in the live host and
+the offline CLI alike, so an oversized or non-PDF `--file` target is named precisely; a typed extraction failure maps
+by code (`pdfjs-unavailable` → `pdfjs-unavailable`; unreadable, page-less, over-long or malformed → `pdf-invalid`;
+text over the cache limit → `pdf-too-large`; a publication cancelled by a plugin reload → `invalid-request`);
+`apply-failed` is reserved for a `reconcile` that was asked to write (`--apply`), while a failing dry-run or read
+reports `invalid-request`. Only an untyped failure of `pdf-text`/`locate` is still classified by its wording, as a
+last resort.
+`locate --path` and `cites --path` resolve a note with or without its `.md` extension and treat a leading `/` as
+vault-root-relative. A path that cannot lie inside the vault (scheme, `..`, `\`) is `path-outside-vault`. An
+unknown note is `invalid-request` for `locate`; `cites` keeps reporting a path with no Markdown notes as
+`path-outside-vault` (unchanged since 0.4).
 
 ## Identity and matching
 
@@ -167,7 +174,8 @@ Page is one-based physical position; pageLabel is printed text. Empty/dash-only 
 
 Cache names bind source scope and content hash: `<libraryType>-<libraryID>-<attachmentKey>-<sha16>.json` for
 Zotero attachments and `file-<pathHash16>-<sha16>.json` for vault PDFs, where the path hash is the SHA-256 of the
-vault-relative path. Attachment and vault-file caches cannot select/evict each other, and two vault PDFs with
+normalized vault-relative path (`./`, leading, trailing and repeated `/` ignored, so `./A/x.pdf` and `A/x.pdf` name
+one cache). Attachment and vault-file caches cannot select/evict each other, and two vault PDFs with
 identical bytes at different paths keep separate caches. Pre-0.5 `file-<sha16>.json` names are foreign: never
 selected, never evicted; re-run `pdf-text` to rebuild.
 Validate schema, source identity, file scope, page order/uniqueness, limits and metadata before use.

@@ -256,9 +256,12 @@ export function findNote(notes: NoteRecord[], path: string): NoteRecord | null {
 	return notes.find(note => note.path === clean || note.path === `${clean}.md`) ?? null;
 }
 
-/** A path no vault reader could resolve inside the vault: absolute, scheme-prefixed, traversing, or carrying `\` / NUL. */
+/**
+ * A path no vault reader could resolve inside the vault: scheme-prefixed, traversing, or carrying `\` / NUL. Call it with
+ * the slash-trimmed path: a leading `/` is vault-root-relative for every `--path` action (cites has always read it so).
+ */
 function outsideVault(path: string): boolean {
-	return path.startsWith("/") || /^[a-z]+:/i.test(path) || path.includes("\\") || path.includes("\0") || path.split("/").some(part => part === "..");
+	return /^[a-z]+:/i.test(path) || path.includes("\\") || path.includes("\0") || path.split("/").some(part => part === "..");
 }
 
 // 0.5 R13/F13: callers that already listed the vault pass `listed` so one request never scans it twice.
@@ -480,8 +483,9 @@ export async function locateAction(host: ActionHost, request: LocateRequestArgs)
 	if (request.path) {
 		// 0.5 R13/F14: resolve the note record first (with or without `.md`, exactly as cites does) and read its real path;
 		// an unknown note is a structured refusal, never a thrown error.
-		if (outsideVault(request.path)) return { ...envelope(host, "locate", 2, { reason: "path-outside-vault", message: `Note path is outside the vault: ${request.path}` }) };
-		const note = findNote(await host.reader.listNotes(), request.path);
+		const cleanPath = request.path.replace(/^\/+|\/+$/g, "");
+		if (outsideVault(cleanPath)) return { ...envelope(host, "locate", 2, { reason: "path-outside-vault", message: `Note path is outside the vault: ${request.path}` }) };
+		const note = findNote(await host.reader.listNotes(), cleanPath);
 		if (!note) return { ...envelope(host, "locate", 2, { reason: "invalid-request", message: `Note not found: ${request.path}` }) };
 		const body = await host.reader.readNote(note.path);
 		const fmKey = typeof note.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;

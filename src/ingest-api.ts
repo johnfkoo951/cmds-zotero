@@ -7,6 +7,7 @@ import { ACTION_API_VERSION, AGENT_ACTIONS, runAction, validateActionRequest, ty
 import { buildEnvelope } from "./agent/connection";
 import type { FailureReason } from "./agent/types";
 import { LocalFileError } from "./local-file";
+import { PdfExtractError, type PdfExtractErrorCode } from "./pdf/errors";
 import { clearTimeout as nodeClearTimeout, setTimeout as nodeSetTimeout } from "node:timers";
 
 export type IngestAction = AgentAction;
@@ -32,6 +33,13 @@ export interface IngestAPIOptions {
 	timeoutMs?: Partial<Record<IngestAction, number>>;
 }
 /** A pending job is failed after this long so a hung extraction or bridge cannot block reconfiguration until reload. */
+// 0.5 R13/F08: every typed extraction failure names its reason; only `cancelled` (plugin reloaded or reconfigured mid-job)
+// has no PDF-specific reason and asks for a plain resubmission.
+const PDF_EXTRACT_REASON: Readonly<Record<PdfExtractErrorCode, FailureReason>> = {
+	cancelled: "invalid-request", "pdfjs-unavailable": "pdfjs-unavailable", unreadable: "pdf-invalid", "too-many-pages": "pdf-invalid",
+	"no-pages": "pdf-invalid", "cache-too-large": "pdf-too-large", "invalid-cache": "pdf-invalid",
+};
+
 export const JOB_TIMEOUT_MS: Readonly<Record<IngestAction, number>> = {
 	connection: 300_000, info: 300_000, refresh: 300_000, resolve: 300_000, identity: 300_000, cites: 300_000, reconcile: 300_000, diagnostics: 300_000, locate: 300_000,
 	"pdf-text": 900_000,
@@ -120,7 +128,9 @@ export class IngestAPI {
 		const timeoutMs = this.timeouts[action];
 		this.timerHandles.set(id, this.timers.setTimeout(() => {
 			this.timerHandles.delete(id);
-			settle({ state: "failed", error: `Request timed out after ${Math.round(timeoutMs / 1000)} s (${action}). A timed-out write may still have completed; inspect the current state before resubmitting.`, finishedAt: new Date().toISOString() });
+			// A read-only job leaves nothing behind; only a write is an uncertain outcome worth inspecting.
+			const consequence = writes ? "A timed-out write may still have completed; inspect the current state before resubmitting." : "The request was read-only and left no state behind; resubmit once the host responds.";
+			settle({ state: "failed", error: `Request timed out after ${Math.round(timeoutMs / 1000)} s (${action}). ${consequence}`, finishedAt: new Date().toISOString() });
 			release();
 		}, timeoutMs));
 		void this.execute(action, request).then(result => {
@@ -241,6 +251,8 @@ export class IngestAPI {
 	private static failureReason(action: AgentAction, request: unknown, error: unknown, message: string): FailureReason {
 		if (error instanceof IndexRefusalError) return error.reason;
 		if (error instanceof LocalFileError) return error.code === "too-large" ? "pdf-too-large" : "pdf-invalid";
+		if (error instanceof PdfExtractError) return PDF_EXTRACT_REASON[error.code];
+		// Last resort for the few untyped host errors of the PDF actions (e.g. an attachment that left the index mid-job).
 		if (action === "pdf-text" || action === "locate") {
 			if (/64 MiB|too large/i.test(message)) return "pdf-too-large";
 			if (/PDF|pdf\.js|extraction/i.test(message)) return "pdf-invalid";

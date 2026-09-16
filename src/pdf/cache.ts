@@ -47,10 +47,19 @@ const ATTACHMENT_KEY = /^[A-Z0-9]{8}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const CACHE_NAME = /^(?:(user|group)-([1-9]\d*)-([A-Z0-9]{8})|file-([0-9a-f]{16}))-([0-9a-f]{16})\.json$/;
 
-/** First 16 hex characters of the SHA-256 of a vault-relative path; binds a `file-` cache to its path. */
+/**
+ * 0.5 R13/F17: the spelling-independent form of a vault-relative path (`./`, leading/trailing and repeated `/` dropped),
+ * so `pdf-text --file ./A/x.pdf` and `locate --file A/x.pdf` name the same cache. `..` is kept: the hosts refuse it.
+ */
+export function normalizeVaultPath(path: string): string {
+	return path.split("/").filter(part => part !== "" && part !== ".").join("/");
+}
+
+/** First 16 hex characters of the SHA-256 of a normalized vault-relative path; binds a `file-` cache to its path. */
 export function filePathHash(path: string): string {
-	if (typeof path !== "string" || !path) throw new Error("Invalid vault path for the PDF text cache");
-	return createHash("sha256").update(path).digest("hex").slice(0, 16);
+	const normalized = typeof path === "string" ? normalizeVaultPath(path) : "";
+	if (!normalized) throw new Error("Invalid vault path for the PDF text cache");
+	return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
 /**
@@ -119,7 +128,8 @@ export function evictionSet(names: string[], keepName: string): string[] {
 export function evictionSetByPath(entries: { name: string; path: string }[], keepName: string, path: string): string[] {
 	const keep = parseCacheName(keepName);
 	if (!keep || keep.scope.kind !== "file") throw new Error("Invalid PDF text cache name for a file scope");
-	return [...new Set(entries.filter(entry => entry.name !== keepName && entry.path === path && parseCacheName(entry.name)?.prefix === keep.prefix).map(entry => entry.name))].sort();
+	const wanted = normalizeVaultPath(path);
+	return [...new Set(entries.filter(entry => entry.name !== keepName && normalizeVaultPath(entry.path) === wanted && parseCacheName(entry.name)?.prefix === keep.prefix).map(entry => entry.name))].sort();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

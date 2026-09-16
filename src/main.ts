@@ -9,10 +9,10 @@ import { ObsidianVaultReader } from "./obsidian-vault";
 import { PdfTextService } from "./pdf/extract";
 import { applyReconcile } from "./reconcile-apply";
 import { probeGit } from "./git-probe";
-import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as nodePath from "node:path";
-import { LocalFileError, readLocalFile } from "./local-file";
+import { readLocalFile } from "./local-file";
+import { hashLocalPdf } from "./pdf/file-hash";
 import { validateIndex } from "./identity";
 import { rpc } from "./api/transport";
 import { VaultLinks } from "./vault-links";
@@ -106,7 +106,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		}));
 		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.scheduleMap(); }));
 		// 0.5 R13/F07: only Markdown notes and folders (which may contain notes) can change the note map; attachments never do.
-		this.registerEvent(this.app.vault.on("rename", file => { if (this.affectsNoteMap(file)) this.scheduleMap(); }));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (this.affectsNoteMap(file) || oldPath.endsWith(".md")) this.scheduleMap(); }));
 		this.registerEvent(this.app.vault.on("delete", file => { if (this.affectsNoteMap(file)) this.scheduleMap(); }));
 		void this.warmIndex();
 	}
@@ -172,9 +172,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 				statLocal: async path => { try { if (await fs.realpath(path) !== path) return null; const stat = await fs.lstat(path); return stat.isFile() && !stat.isSymbolicLink() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null; } catch { return null; } },
 				fileHash: async path => {
 					if (!root) return null;
-					try { await assertVaultBoundary(this.app, path); const full = nodePath.join(root, relativePath(path)); const bytes = (await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 5, magic: ["255044462d"], label: "PDF" })).bytes; return { sha256: createHash("sha256").update(bytes).digest("hex"), absolutePath: full }; }
-					// 0.5 R13/F08: a present file refused for its size or content surfaces with its code; absence or boundary failures stay null.
-					catch (error) { if (error instanceof LocalFileError && (error.code === "too-large" || error.code === "bad-magic")) throw error; return null; }
+					// 0.5 R13/F08: the shared guarded reader surfaces an oversized or non-PDF file by code; boundary failures stay null.
+					try { await assertVaultBoundary(this.app, path); } catch { return null; }
+					return hashLocalPdf(nodePath.join(root, relativePath(path)));
 				},
 			},
 			vaultPdfPaths: async () => this.app.vault.getFiles().filter(file => file.extension.toLowerCase() === "pdf").map(file => file.path).sort(),
@@ -551,7 +551,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 		});
 	}
 
-	// 0.5 R13/F07: rename/delete of an attachment or image never changes which notes belong to which entry.
+	// 0.5 R13/F07: rename/delete of an attachment or image never changes which notes belong to which entry (a note renamed
+	// away from `.md` is caught by the rename listener through its old path).
 	private affectsNoteMap(file: TAbstractFile): boolean {
 		return file instanceof TFolder || (file instanceof TFile && file.extension === "md");
 	}

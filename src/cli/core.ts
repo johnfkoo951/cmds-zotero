@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 
-import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
 import { validateIndex } from "../identity";
 import { buildConnection, buildEnvelope } from "../agent/connection";
@@ -10,6 +9,7 @@ import { probeBbt } from "./bbt-direct";
 import { FsVaultReader, locateVault, readPluginSettings, readEnabledPlugins, readInstalledPluginVersion } from "./fs-vault";
 import { probeGit } from "../git-probe";
 import { LocalFileError, readLocalFile } from "../local-file";
+import { hashLocalPdf } from "../pdf/file-hash";
 import type { ZoteroIndex } from "../types";
 
 /**
@@ -57,15 +57,11 @@ function cacheReader(reader: FsVaultReader): PdfCacheReader {
 			try { if (await fs.realpath(path) !== path) return null; const stat = await fs.lstat(path); return stat.isFile() && !stat.isSymbolicLink() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null; } catch { return null; }
 		},
 		fileHash: async path => {
-			try {
-				const full = await reader.resolveInside(path);
-				const stat = await fs.lstat(full);
-				if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 * 1024) return null;
-				const bytes = (await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 5, magic: ["255044462d"], label: "PDF" })).bytes;
-				return { sha256: createHash("sha256").update(bytes).digest("hex"), absolutePath: full };
-			}
-			// 0.5 R13/F08: a present file refused for its size or content surfaces with its code; absence or boundary failures stay null.
-			catch (error) { if (error instanceof LocalFileError && (error.code === "too-large" || error.code === "bad-magic")) throw error; return null; }
+			// 0.5 R13/F08: no size pre-check here; the shared guarded reader refuses an oversized or non-PDF file with its
+			// code (pdf-too-large / pdf-invalid), while an absent or boundary-failing path stays null.
+			let full: string;
+			try { full = await reader.resolveInside(path); } catch { return null; }
+			return hashLocalPdf(full);
 		},
 	};
 }

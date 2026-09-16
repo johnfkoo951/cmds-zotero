@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { IngestAPI, JOB_TIMEOUT_MS } from "../src/ingest-api";
 import { LocalFileError } from "../src/local-file";
+import { PdfExtractError, type PdfExtractErrorCode } from "../src/pdf/errors";
 import { buildConnection } from "../src/agent/connection";
 import { DEFAULT_SETTINGS } from "../src/types";
 import type { ActionHost } from "../src/agent/actions";
@@ -211,6 +212,18 @@ test("oversized and non-PDF vault files report pdf-too-large and pdf-invalid by 
 	assert.equal(await reasonOf(notPdf, "pdf-text", { file: "Attachments/fake.pdf" }), "pdf-invalid");
 });
 
+test("typed extraction failures map by code: pdfjs-unavailable, pdf-invalid, pdf-too-large, and invalid-request for a cancelled publication", async () => {
+	const expectations: [PdfExtractErrorCode, string][] = [
+		["pdfjs-unavailable", "pdfjs-unavailable"], ["unreadable", "pdf-invalid"], ["too-many-pages", "pdf-invalid"], ["no-pages", "pdf-invalid"],
+		["invalid-cache", "pdf-invalid"], ["cache-too-large", "pdf-too-large"], ["cancelled", "invalid-request"],
+	];
+	for (const [code, reason] of expectations) {
+		// The message deliberately avoids every word the last-resort pattern would key on.
+		const host = failingHost({ pdfCache: { list: async () => [], read: async () => null, statLocal: async () => null, fileHash: async () => ({ sha256: "a".repeat(64), absolutePath: "/synthetic/vault/x.pdf" }) }, extractPdf: async () => { throw new PdfExtractError(code, "synthetic failure"); } });
+		assert.equal(await reasonOf(host, "pdf-text", { file: "x.pdf" }), reason, code);
+	}
+});
+
 test("reconcile errors are apply-failed only when a write was requested; other action errors are invalid-request", async () => {
 	const broken = failingHost({ reader: { vaultName: () => "Research", listNotes: async () => { throw new Error("Note exceeds 2 MiB: Hubs/big.md"); }, readNote: async () => "", exists: async () => false } });
 	assert.equal(await reasonOf(broken, "reconcile", {}), "invalid-request");
@@ -278,6 +291,14 @@ test("a job that settles in time clears its timer and reads never appear in pend
 	assert.equal(clock.scheduled.size, 0, "the timer is cleared on settlement");
 	clock.fire();
 	assert.equal(api.getJob(id).state, "completed", "a stale timer cannot fail a completed job");
+	// A hung read-only job times out with read-only wording: nothing to inspect, just resubmit.
+	const hungRead = new IngestAPI({ vault: { getName: () => "Research" } } as never, { capabilities: () => new Promise(() => {}) } as never, { collecting: false } as never, {} as never, async () => {}, undefined, { timers: clock.timers, timeoutMs: { connection: 5 } });
+	const readId = hungRead.startJob("connection");
+	clock.fire();
+	assert.equal(hungRead.getJob(readId).state, "failed");
+	assert.match(hungRead.getJob(readId).error ?? "", /timed out after 0 s \(connection\)\. The request was read-only/);
+	assert.doesNotMatch(hungRead.getJob(readId).error ?? "", /may still have completed/);
+	assert.equal(hungRead.activeCount, 0);
 	// dispose clears outstanding timers.
 	const hung = new IngestAPI({ vault: { getName: () => "Research" } } as never, { capabilities: () => new Promise(() => {}) } as never, { collecting: false } as never, {} as never, async () => {}, undefined, { timers: clock.timers });
 	hung.startJob("connection");

@@ -89,11 +89,23 @@ test("F14: a missing or outside note path is a structured refusal, never a throw
 	assert.equal(missing.ok, false);
 	assert.equal(missing.reason, "invalid-request");
 	assert.match(missing.message as string, /Note not found/);
-	for (const path of ["../outside/Hub", "/abs/Hub.md", "C:/vault/Hub.md", "Hubs\\Hub.md"]) {
+	for (const path of ["../outside/Hub", "Hubs/../../Hub", "C:/vault/Hub.md", "Hubs\\Hub.md"]) {
 		const outside = await runAction(host(), "locate", { path });
 		assert.equal(outside.ok, false, path);
 		assert.equal(outside.reason, "path-outside-vault", path);
 	}
+});
+
+test("F14: a leading slash is vault-root-relative for locate exactly as for cites, and an unknown note differs by action as documented", async () => {
+	const cites = await runAction(host(), "cites", { path: `/${HUB.slice(0, -3)}` });
+	assert.equal(cites.ok, true, JSON.stringify(cites));
+	assert.equal((cites.files as { path: string }[])[0]?.path, HUB);
+	const located = await runAction(host(), "locate", { path: `/${HUB.slice(0, -3)}` });
+	assert.equal(located.reason, "no-cache", "the note resolved through its leading-slash spelling; only the attachment cache is absent");
+	const unknownCites = await runAction(host(), "cites", { path: "Nowhere/Missing" });
+	assert.equal(unknownCites.reason, "path-outside-vault", "cites keeps its 0.4 reason for a path with no notes");
+	const unknownLocate = await runAction(host(), "locate", { path: "/Nowhere/Missing" });
+	assert.equal(unknownLocate.reason, "invalid-request");
 });
 
 test("F17: identical vault PDFs at two paths keep separate file caches; the other path reports no-cache", async () => {
@@ -150,6 +162,30 @@ test("F17: extraction of identical bytes at two vault paths writes two caches an
 	assert.equal(again.cache.hit, true);
 	assert.equal(again.cache.path, a.cache.path);
 	assert.equal(files.size, 2);
+});
+
+test("F17: --file eviction opens only caches of the same path prefix and leaves every other file cache unread", async () => {
+	const { PdfTextService } = await extractModule();
+	const pathA = "Attachments/copy-a.pdf";
+	const staleA = `${PDF_TEXT_CACHE_DIR}/file-${filePathHash(pathA)}-${"b".repeat(16)}.json`;
+	const foreign = `${PDF_TEXT_CACHE_DIR}/file-${filePathHash("Attachments/other.pdf")}-${"c".repeat(16)}.json`;
+	const files = new Map<string, string>([[staleA, JSON.stringify(cacheFor(pathA))], [foreign, JSON.stringify(cacheFor("Attachments/other.pdf"))]]);
+	const reads: string[] = [];
+	const store: PdfCacheStore = {
+		exists: async path => files.has(path), read: async path => { reads.push(path); return files.get(path)!; }, write: async (path, content) => { files.set(path, content); },
+		remove: async path => { files.delete(path); }, list: async () => [...files.keys()].map(path => path.split("/").pop()!),
+		ensureDirectory: async () => {}, assertBoundary: async () => {}, ensureIgnore: async () => {},
+	};
+	const service = new PdfTextService({}, store);
+	const a = await service.extract({ kind: "file", path: pathA, absolutePath: "/synthetic/vault/Attachments/copy-a.pdf" });
+	assert.deepEqual(a.cache.evicted, [staleA], "the older cache of the same path is evicted");
+	assert.deepEqual(reads, [staleA], "only the same-prefix cache was opened; the other path's cache was never read");
+	assert.ok(files.has(foreign));
+	// The same PDF spelled with ./ and a doubled slash resolves to the same cache and is a hit.
+	reads.length = 0;
+	const spelled = await service.extract({ kind: "file", path: `.//${pathA}`, absolutePath: "/synthetic/vault/Attachments/copy-a.pdf" });
+	assert.equal(spelled.cache.hit, true);
+	assert.equal(spelled.cache.path, a.cache.path);
 });
 
 test("F11 premise: the guarded reader refuses a path through a symlinked directory but accepts the same file via its realpath", async () => {

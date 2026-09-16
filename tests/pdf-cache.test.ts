@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CACHE_SCHEMA, cacheFileName, cachePrefix, evictionSet, evictionSetByPath, filePathHash, parseCacheName, PDF_TEXT_CACHE_DIR, pickNewest, validateCache, verifyCache, type PdfTextCache } from "../src/pdf/cache";
+import { CACHE_SCHEMA, cacheFileName, cachePrefix, evictionSet, evictionSetByPath, filePathHash, normalizeVaultPath, parseCacheName, PDF_TEXT_CACHE_DIR, pickNewest, validateCache, verifyCache, type PdfTextCache } from "../src/pdf/cache";
 
 const SHA = "0123456789abcdef".repeat(4);
 const OTHER_SHA = "fedcba9876543210".repeat(4);
@@ -82,6 +82,19 @@ test("eviction keeps the current cache and leaves other prefixes and foreign fil
 	assert.deepEqual(evictionSet(names, `file-${hashA}-0000000000000000.json`), [`file-${hashA}-eeeeeeeeeeeeeeee.json`]);
 	assert.deepEqual(evictionSet(names, "group-42-GRPATT01-aaaaaaaaaaaaaaaa.json"), []);
 	assert.throws(() => evictionSet(names, "not-a-cache.json"), /cache name/);
+});
+
+// 0.5 R13/F17: the path hash ignores the spelling of a vault-relative path, so pdf-text and locate agree across calls.
+test("file-scope names and eviction ignore ./, leading, trailing and repeated slashes in the vault path", () => {
+	assert.equal(normalizeVaultPath("./A//x.pdf/"), "A/x.pdf");
+	assert.equal(normalizeVaultPath("/A/./x.pdf"), "A/x.pdf");
+	assert.equal(normalizeVaultPath("A/../x.pdf"), "A/../x.pdf", "traversal is kept for the hosts to refuse");
+	for (const spelling of ["./A/x.pdf", "/A/x.pdf", "A//x.pdf", "A/x.pdf/"]) assert.equal(filePathHash(spelling), filePathHash("A/x.pdf"), spelling);
+	assert.notEqual(filePathHash("A/x.pdf"), filePathHash("a/x.pdf"), "case is significant");
+	assert.throws(() => filePathHash("./"), /Invalid vault path/);
+	const hash = filePathHash("A/x.pdf");
+	const entries = [{ name: `file-${hash}-aaaaaaaaaaaaaaaa.json`, path: "./A/x.pdf" }, { name: `file-${hash}-bbbbbbbbbbbbbbbb.json`, path: "A/x.pdf" }];
+	assert.deepEqual(evictionSetByPath(entries, `file-${hash}-bbbbbbbbbbbbbbbb.json`, "/A//x.pdf"), [`file-${hash}-aaaaaaaaaaaaaaaa.json`]);
 });
 
 test("file-scope eviction follows the recorded vault path, never the prefix alone", () => {

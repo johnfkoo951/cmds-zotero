@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { entryHash } from "../src/identity";
@@ -165,5 +165,28 @@ test("offline envelopes advertise API 2 for installed 0.4.1 and 0.5.0 manifests 
 		const payload = JSON.parse(result.stdout);
 		assert.deepEqual(payload.connection.plugin.apiVersions, expected, `manifest ${version}`);
 		assert.equal(payload.connection.plugin.version, version);
+	}
+});
+
+// 0.5 R13/F08: the offline CLI names an oversized or non-PDF --file target by its local-file code, never as "not inside the vault".
+
+test("offline locate --file reports pdf-too-large for an oversized PDF and pdf-invalid for a non-PDF", () => {
+	const root = vault();
+	// A sparse file: the 64 MiB limit is checked against the size before any byte is allocated or read.
+	writeFileSync(join(root, "80. References", "huge.pdf"), "%PDF-1.7\n");
+	truncateSync(join(root, "80. References", "huge.pdf"), 64 * 1024 * 1024 + 1);
+	writeFileSync(join(root, "80. References", "notes.pdf"), "Plain text saved with a .pdf extension.\n");
+	const expectations: [string, string, RegExp][] = [
+		["huge.pdf", "pdf-too-large", /exceeds the 67108864 byte limit/],
+		["notes.pdf", "pdf-invalid", /does not match the expected format/],
+		["absent.pdf", "path-outside-vault", /not found inside the vault/],
+	];
+	for (const [name, reason, message] of expectations) {
+		const result = run(["--vault", "Research", "--vault-path", root, "--offline", "--action", "locate", "--file", `80. References/${name}`, "--quote", "a quote long enough to be looked up"]);
+		assert.equal(result.status, 1, result.stderr);
+		const payload = JSON.parse(result.stdout);
+		assert.equal(payload.ok, false, name);
+		assert.equal(payload.reason, reason, `${name}: ${JSON.stringify(payload)}`);
+		assert.match(payload.message, message, name);
 	}
 });
