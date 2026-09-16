@@ -24,7 +24,8 @@ test('note-map publication is serialized and checks lifecycle after awaits',asyn
   }]});
   const {VaultLinks}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
   let active=true;let release!:()=>void;const writes:string[]=[];
-  const app={boundary:()=>new Promise<void>(resolve=>{release=resolve;}),vault:{getName:()=> 'Research',getMarkdownFiles:()=>[],adapter:{write:async(_p:string,value:string)=>{writes.push(value);}}}};
+  let onDisk:string|null=null;
+  const app={boundary:()=>new Promise<void>(resolve=>{release=resolve;}),vault:{getName:()=> 'Research',getMarkdownFiles:()=>[],adapter:{write:async(_p:string,value:string)=>{writes.push(value);onDisk=value;},exists:async()=>onDisk!==null,read:async()=>onDisk??''}}};
   const links=new VaultLinks(app,()=>({peerVaults:[]}),()=>active);
   const pending=links.publish({entries:[],generatedAt:'example'});
   await new Promise(resolve=>setImmediate(resolve));active=false;release();await pending;
@@ -32,4 +33,12 @@ test('note-map publication is serialized and checks lifecycle after awaits',asyn
   active=true;app.boundary=async()=>{};
   await Promise.all([links.publish({entries:[],generatedAt:'first'}),links.publish({entries:[],generatedAt:'second'})]);
   assert.equal(writes.length,2);assert.equal(JSON.parse(writes[1]).indexGeneratedAt,'second');
+  // Publishing from every UI read must not rewrite an unchanged map (its own generatedAt is ignored); a new generation still writes.
+  await links.publish({entries:[],generatedAt:'second'});
+  assert.equal(writes.length,2,'an unchanged note map is not rewritten');
+  onDisk='{not json';
+  await links.publish({entries:[],generatedAt:'second'});
+  assert.equal(writes.length,3,'an unreadable map on disk is replaced');
+  await links.publish({entries:[],generatedAt:'third'});
+  assert.equal(writes.length,4);assert.equal(JSON.parse(writes[3]).indexGeneratedAt,'third');
 });

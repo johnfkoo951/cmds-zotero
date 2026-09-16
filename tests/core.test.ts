@@ -6,7 +6,7 @@ import { DEFAULT_SETTINGS, type ZoteroIndex } from "../src/types";
 import { contentHash, entryHash, validateEntry, validateIndex } from "../src/identity";
 import { normalizeAttachments, normalizeEntry } from "../src/api/normalize";
 import { identityKey, markdownLink, noteDeepLink, parseZoteroURI, pdfURI, selectURI } from "../src/uris";
-import { IndexRefusalError, IndexService, describeRefreshFailure, formatIndexAge } from "../src/index-service";
+import { IndexRefusalError, IndexService, classifyRefreshError, describeRefreshFailure, formatIndexAge } from "../src/index-service";
 import { httpRequest, rpc } from "../src/api/transport";
 
 const parent = (libraryID = 1, citationKey = "Example2026", itemKey = "ABCD2345") => ({ libraryID, citationKey, itemKey, uri: libraryID === 1 ? `http://zotero.org/users/local/Example/items/${itemKey}` : `http://zotero.org/groups/12345/items/${itemKey}`, itemType: "journalArticle", title: "Synthetic example", date: "2026", creators: [{ firstName: "Example", lastName: "Author" }], tags: [{ tag: "synthetic" }], attachments: [{ select: libraryID === 1 ? "zotero://select/library/items/EFGH2345" : "zotero://select/groups/12345/items/EFGH2345", title: "Synthetic PDF" }], notes: [] });
@@ -131,10 +131,11 @@ test("a stale validated cache is served as stale-fallback when collection fails;
 	assert.ok((outcome.ageMinutesBefore ?? 0) >= 179);
 	assert.equal((await service.get()).generatedAt, stale.generatedAt);
 	assert.equal((await service.resolve("Example2026")).status, "resolved");
-	await assert.rejects(service.get(true), /ECONNREFUSED/);
+	await assert.rejects(service.get(true), (error: unknown) => error instanceof IndexRefusalError && error.reason === "bbt-unreachable" && /ECONNREFUSED/.test(error.message), "a forced request reports the same structured reason as the fallback");
 	assert.equal(await service.peek(), outcome.index, "the failed forced refresh leaves the cache intact");
 	assert.equal(writes, 0);
 	assert.equal(collections, 4);
+	assert.equal(service.collecting, false);
 	const none = new IndexService(bbt, { read: async () => null, writeValidated: async () => { writes++; } }, () => 60);
 	await assert.rejects(none.get(), /ECONNREFUSED/, "without any snapshot there is nothing to fall back to");
 	assert.equal((await none.resolve("Example2026")).status, "unavailable");
@@ -199,7 +200,52 @@ test("a forced refresh chained after a failing non-forced flight still runs and 
 	assert.equal((await service.refresh()).reason, "fresh", "no stale flight reference survives the chain");
 });
 
+test("collection errors are classified: cancellation is not a failure, timeouts are distinct from unreachable, and forced requests carry the reason", async () => {
+	const stale = staleIndex();
+	let error: Error = new Error("BBT request timed out");
+	let released = () => {};
+	const bbt = { collect: async () => { await new Promise<void>(resolve => { released = resolve; }); throw error; } } as unknown as BbtService;
+	const service = new IndexService(bbt, { read: async () => JSON.stringify(stale), writeValidated: async () => { throw new Error("must not write"); } }, () => 60);
+	const pending = service.refresh();
+	while (!service.collecting) await settle();
+	assert.equal(service.collecting, true, "collecting reflects the in-flight BBT call");
+	released();
+	const timeout = await pending;
+	assert.equal(service.collecting, false);
+	assert.equal(timeout.reason, "stale-fallback");
+	assert.equal(timeout.failure, "timeout");
+	const forcedTimeout = service.refresh({ force: true });
+	while (!service.collecting) await settle();
+	released();
+	await assert.rejects(forcedTimeout, (rejection: unknown) => rejection instanceof IndexRefusalError && rejection.reason === "timeout");
+	const abort = new Error("The operation was aborted");
+	abort.name = "AbortError";
+	for (const cancellation of [abort, new Error("BBT collection cancelled"), new Error("BBT response aborted")]) {
+		error = cancellation;
+		const outcome = service.refresh();
+		while (!service.collecting) await settle();
+		released();
+		const cancelled = await outcome;
+		assert.equal(cancelled.reason, "stale-fallback");
+		assert.equal(cancelled.failure, undefined, `${cancellation.message} is the plugin's own cancellation, not a BBT failure`);
+		assert.equal(cancelled.error, cancellation.message);
+		assert.equal(classifyRefreshError(cancellation), "cancelled");
+	}
+	const forcedAbort = service.refresh({ force: true });
+	while (!service.collecting) await settle();
+	released();
+	await assert.rejects(forcedAbort, (rejection: unknown) => rejection === error, "a cancelled forced request rethrows the original error unwrapped");
+	assert.equal(classifyRefreshError(new Error("connect ECONNREFUSED 127.0.0.1:23119")), "bbt-unreachable");
+	assert.equal(classifyRefreshError(new Error("BBT request timed out")), "timeout");
+	assert.equal(classifyRefreshError(new IndexRefusalError("legacy-plugin-enabled", "legacy")), "legacy-plugin-enabled");
+	assert.equal(classifyRefreshError(new Error("Refusing to save invalid Zotero index")), null);
+});
+
 test("index age labels and refresh failures map to one human sentence", () => {
+	assert.equal(describeRefreshFailure(new Error("BBT request timed out"), "http://127.0.0.1:23119", 90), "Zotero/Better BibTeX at http://127.0.0.1:23119 did not respond in time; using the saved index from 2 h ago.");
+	assert.equal(describeRefreshFailure(new IndexRefusalError("timeout", "BBT request timed out"), "http://127.0.0.1:23119", 90), "Zotero/Better BibTeX at http://127.0.0.1:23119 did not respond in time; using the saved index from 2 h ago.");
+	assert.equal(describeRefreshFailure(new Error("BBT collection cancelled"), "http://127.0.0.1:23119", 5), "The index refresh was cancelled; using the saved index from 5 min ago.");
+	assert.equal(describeRefreshFailure(new IndexRefusalError("bbt-unreachable", "connect ECONNREFUSED 127.0.0.1:23119"), "http://127.0.0.1:23119", null), "Zotero/Better BibTeX is not reachable at http://127.0.0.1:23119; no saved index is available yet. Start Zotero and refresh the index.");
 	assert.equal(formatIndexAge(null), "unknown age");
 	assert.equal(formatIndexAge(0), "under a minute");
 	assert.equal(formatIndexAge(12), "12 min");

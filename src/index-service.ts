@@ -16,17 +16,38 @@ export interface GetOptions {
  * newest validated snapshot instead; `error` carries the cause. A forced request never falls back.
  */
 export type RefreshReason = "forced" | "stale" | "fresh" | "stale-fallback";
-/** `failure` classifies a `stale-fallback` cause when it maps to a contract reason (`legacy-plugin-enabled`, `bbt-unreachable`). */
+/**
+ * `failure` classifies a `stale-fallback` cause when it maps to a contract reason (`legacy-plugin-enabled`,
+ * `bbt-unreachable`, `timeout`). A collection cancelled by the plugin's own abort carries no `failure`.
+ */
 export interface RefreshOutcome { index: ZoteroIndex; refreshed: boolean; reason: RefreshReason; ageMinutesBefore: number | null; error?: string; failure?: FailureReason }
 
-const UNREACHABLE = /ECONNREFUSED|ECONNRESET|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN|timed out|socket hang up|fetch failed|abort/i;
+const UNREACHABLE = /ECONNREFUSED|ECONNRESET|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN|socket hang up|fetch failed/i;
+const TIMED_OUT = /timed out/i;
+/** The plugin's own abort (`bbt.dispose()`), Node's AbortError text, or the collector's cancellation check. */
+const CANCELLED = /\baborted\b|cancelled/i;
 
 /** Host-injected precondition consulted before every BBT collection; a refusal is structured so callers can map it. */
 export type CollectPrecondition = () => { ok: true } | { ok: false; reason: "legacy-plugin-enabled"; message: string };
 
-/** A collection that was refused before contacting BBT; `reason` is a contract failure reason. */
+/** A collection that was refused before contacting BBT or failed for a contract-classifiable reason (`reason`). */
 export class IndexRefusalError extends Error {
 	constructor(readonly reason: FailureReason, message: string) { super(message); this.name = "IndexRefusalError"; }
+}
+
+export type RefreshFailureKind = FailureReason | "cancelled";
+
+/**
+ * Classifies a collection error: the contract reason it already carries, `bbt-unreachable` for connectivity faults,
+ * `timeout` for a reachable but unresponsive BBT, `cancelled` for the plugin's own abort, else null.
+ */
+export function classifyRefreshError(error: unknown): RefreshFailureKind | null {
+	if (error instanceof IndexRefusalError) return error.reason;
+	const message = error instanceof Error ? error.message : String(error);
+	if ((error instanceof Error && error.name === "AbortError") || CANCELLED.test(message)) return "cancelled";
+	if (UNREACHABLE.test(message)) return "bbt-unreachable";
+	if (TIMED_OUT.test(message)) return "timeout";
+	return null;
 }
 
 interface Flight { promise: Promise<RefreshOutcome>; force: boolean; thresholdMs: number }
@@ -36,8 +57,12 @@ export class IndexService {
 	private flight?: Flight;
 	private loaded = false;
 	private fingerprint: string | null = null;
+	private collections = 0;
 
 	constructor(private bbt: BbtService, private storage: IndexStorage, private maxAgeMinutes: () => number, private canCollect: CollectPrecondition = () => ({ ok: true })) {}
+
+	/** True while a BBT collection or the index write that follows it is in flight, whether forced or not. */
+	get collecting(): boolean { return this.collections > 0; }
 
 	get(force = false): Promise<ZoteroIndex> {
 		return this.refresh({ force }).then(outcome => outcome.index);
@@ -100,18 +125,24 @@ export class IndexService {
 			if (fallback) return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: gate.message, failure: gate.reason };
 			throw new IndexRefusalError(gate.reason, gate.message);
 		}
-		let candidate: ZoteroIndex;
-		try { candidate = await this.bbt.collect(this.cache); }
-		catch (error) {
-			if (!fallback) throw error;
-			const message = error instanceof Error ? error.message : String(error);
-			return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: message, ...(UNREACHABLE.test(message) ? { failure: "bbt-unreachable" as const } : {}) };
-		}
-		if (!validateIndex(candidate)) throw new Error("Refusing to save invalid Zotero index");
-		await this.storage.writeValidated(JSON.stringify(candidate, null, 2));
-		this.fingerprint = (await this.storage.fingerprint?.()) ?? null;
-		this.cache = candidate;
-		return { index: candidate, refreshed: true, reason: options.force ? "forced" : "stale", ageMinutesBefore: ageBefore };
+		this.collections++;
+		try {
+			let candidate: ZoteroIndex;
+			try { candidate = await this.bbt.collect(this.cache); }
+			catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				const kind = classifyRefreshError(error);
+				const failure = kind !== null && kind !== "cancelled" ? kind : undefined;
+				// A forced request reports transport faults with the same structured reason a non-forced fallback carries.
+				if (!fallback) throw failure !== undefined && !(error instanceof IndexRefusalError) ? new IndexRefusalError(failure, message) : error;
+				return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: message, ...(failure !== undefined ? { failure } : {}) };
+			}
+			if (!validateIndex(candidate)) throw new Error("Refusing to save invalid Zotero index");
+			await this.storage.writeValidated(JSON.stringify(candidate, null, 2));
+			this.fingerprint = (await this.storage.fingerprint?.()) ?? null;
+			this.cache = candidate;
+			return { index: candidate, refreshed: true, reason: options.force ? "forced" : "stale", ageMinutesBefore: ageBefore };
+		} finally { this.collections--; }
 	}
 
 	/** Resolves against a loaded index; when no index can be loaded or collected, the newest persisted snapshot is used. */
@@ -150,7 +181,10 @@ export function formatIndexAge(minutes: number | null): string {
 /** Maps a refresh failure to one human sentence; `ageMinutes` is the age of the snapshot that reads keep using, or null when none exists. */
 export function describeRefreshFailure(error: unknown, endpoint: string, ageMinutes: number | null): string {
 	const message = error instanceof Error ? error.message : String(error);
-	const cause = UNREACHABLE.test(message) ? `Zotero/Better BibTeX is not reachable at ${endpoint}`
+	const kind = classifyRefreshError(error);
+	const cause = kind === "bbt-unreachable" ? `Zotero/Better BibTeX is not reachable at ${endpoint}`
+		: kind === "timeout" ? `Zotero/Better BibTeX at ${endpoint} did not respond in time`
+		: kind === "cancelled" ? "The index refresh was cancelled"
 		: error instanceof IndexRefusalError ? message
 		: `The index could not be refreshed (${message})`;
 	const consequence = ageMinutes === null ? "no saved index is available yet. Start Zotero and refresh the index." : `using the saved index from ${formatIndexAge(ageMinutes)} ago.`;

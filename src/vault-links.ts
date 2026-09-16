@@ -47,10 +47,23 @@ export class VaultLinks {
 		const map: NoteMap = { version: 1, vault: this.app.vault.getName(), generatedAt: new Date().toISOString(), indexGeneratedAt: index.generatedAt, notes };
 		await assertVaultBoundary(this.app, MAP_PATH);
 		if (!this.canWrite()) return;
+		// Published from every UI read: rewriting an unchanged map would dirty a git-tracked vault on each start.
+		if (await this.unchanged(map)) return;
 		await ensureCmdsIgnore(this.app);
 		await ensureDirectory(this.app, MAP_PATH);
 		if (!this.canWrite()) return;
 		await this.app.vault.adapter.write(MAP_PATH, JSON.stringify(map, null, 2));
+	}
+
+	/** True when the map on disk already carries the same vault, index generation and notes (its own `generatedAt` is ignored). */
+	private async unchanged(map: NoteMap): Promise<boolean> {
+		try {
+			if (!(await this.app.vault.adapter.exists(MAP_PATH))) return false;
+			const raw: unknown = JSON.parse(await this.app.vault.adapter.read(MAP_PATH));
+			if (!raw || typeof raw !== "object") return false;
+			const existing = raw as Partial<NoteMap>;
+			return existing.version === map.version && existing.vault === map.vault && existing.indexGeneratedAt === map.indexGeneratedAt && JSON.stringify(existing.notes) === JSON.stringify(map.notes);
+		} catch { return false; }
 	}
 
 	async find(entry: ZoteroIndexEntry, index: ZoteroIndex): Promise<VaultLinkReport> {

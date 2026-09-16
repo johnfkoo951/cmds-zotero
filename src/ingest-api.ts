@@ -38,8 +38,11 @@ export class IngestAPI {
 		private hostFactory?: ActionHostFactory,
 	) {}
 
-	/** True only while a refresh or a writing job is active; read-only work never blocks reconfiguration. */
-	get busy(): boolean { return this.activeWrites > 0; }
+	/**
+	 * True while a refresh or a writing job is active, or while any request (a non-forced read included) has started a
+	 * BBT collection that will write the index; a read served from the snapshot never blocks reconfiguration.
+	 */
+	get busy(): boolean { return this.activeWrites > 0 || this.index.collecting === true; }
 	/** Every in-flight request, reads included. */
 	get activeCount(): number { return this.activeRequests; }
 
@@ -143,6 +146,11 @@ export class IngestAPI {
 			if (action === "refresh") {
 				const options = request as { ifOlderThanMinutes?: number };
 				const outcome = await this.index.refresh({ force: options.ifOlderThanMinutes === undefined, ...(options.ifOlderThanMinutes ? { ifOlderThanMs: options.ifOlderThanMinutes * 60000 } : {}) });
+				// Like the live host, the refresh action is an explicit publication: a snapshot that could not be revalidated is a failure.
+				if (outcome.reason === "stale-fallback") {
+					const message = outcome.error ?? "The index could not be refreshed.";
+					throw outcome.failure ? new IndexRefusalError(outcome.failure, message) : new Error(message);
+				}
 				await this.onIndex(outcome.index);
 				return { apiVersion: 1, vault: this.app.vault.getName(), count: outcome.index.count, complete: outcome.index.complete, generatedAt: outcome.index.generatedAt, diagnostics: outcome.index.diagnostics, refreshed: outcome.refreshed };
 			}

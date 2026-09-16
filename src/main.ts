@@ -219,7 +219,11 @@ export default class CMDSZoteroPlugin extends Plugin {
 		return host;
 	}
 
-	/** Reconfigures services. Only a refresh or writing job blocks this; an in-flight read collection is aborted by `bbt.dispose()`. */
+	/**
+	 * Reconfigures services. Blocked while a refresh, a writing job, or any BBT collection (a background warm-up
+	 * included) is in flight; a read served from the snapshot never blocks. `bbt.dispose()` still aborts anything
+	 * that slipped past the check, and the old storage's write guard rejects a late replacement.
+	 */
 	async saveSettings(next: CmdsZoteroSettings): Promise<void> {
 		if (this.service.busy) throw new Error("Wait for index refresh to finish before changing configuration.");
 		const settings = normalizeSettings(next);
@@ -251,6 +255,12 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	/** Entries from the most recently loaded index; empty until the index has been read once. */
 	cachedEntries(): ZoteroIndexEntry[] { return this.lastIndex?.entries ?? []; }
+
+	/** True once a validated snapshot has been published, even one with zero entries; UI negatives need this. */
+	indexLoaded(): boolean { return this.lastIndex !== null; }
+
+	/** True while an explicit (forced) warm-up is in flight, so a refresh control can be disabled meanwhile. */
+	forcedWarmActive(): boolean { return this.warming?.force === true; }
 
 	/** Age of the loaded snapshot in minutes, or null when none is loaded or its timestamp is unusable. */
 	cachedIndexAgeMinutes(): number | null { return this.index.ageMinutes(this.lastIndex); }
@@ -293,11 +303,14 @@ export default class CMDSZoteroPlugin extends Plugin {
 			if (snapshot && this.index.isStale(snapshot) === false) return;
 			if (!force && this.warmBackoffActive()) return;
 			const outcome = await service.ensureIndex(force);
+			// A warm-up aborted by saveSettings()/onunload() resolves as a cancelled stale-fallback; it must not report
+			// against the new configuration or start its backoff.
+			if (!this.active || this.service !== service) return;
 			if (outcome.reason !== "stale-fallback") return;
 			const message = outcome.error ?? "The index could not be refreshed.";
 			this.reportWarmFailure(outcome.failure ? new IndexRefusalError(outcome.failure, message) : new Error(message), outcome.index, force);
 		} catch (error) {
-			if (this.service !== service) return;
+			if (!this.active || this.service !== service) return;
 			this.reportWarmFailure(error, this.lastIndex, force);
 		}
 	}
@@ -317,7 +330,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 	 */
 	private async loadIndexForRead(): Promise<ZoteroIndex> {
 		const snapshot = await this.peekPublished();
-		if (!snapshot) return (await this.service.ensureIndex()).index;
+		if (!snapshot) {
+			try { return (await this.service.ensureIndex()).index; }
+			catch (error) { throw new Error(describeRefreshFailure(error, this.settings.bbtEndpoint, null)); }
+		}
 		if (this.index.isStale(snapshot) === true) {
 			if (this.noticedGeneration !== snapshot.generatedAt) {
 				this.noticedGeneration = snapshot.generatedAt;

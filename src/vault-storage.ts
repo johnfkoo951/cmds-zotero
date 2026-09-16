@@ -135,6 +135,9 @@ export class VaultIndexStorage implements IndexStorage {
 				await assertVaultBoundary(this.app, target);
 				await adapter.remove(target);
 			}
-		} catch { /* Pruning is best effort: a leftover backup is harmless, a failed refresh is not. */ }
+		} catch (error) {
+			// Pruning is best effort: a leftover backup is harmless, a failed refresh is not.
+			console.debug("CMDS Zotero: could not prune index backups", error);
+		}
 	}
 }
