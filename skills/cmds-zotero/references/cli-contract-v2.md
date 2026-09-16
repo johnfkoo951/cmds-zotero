@@ -51,10 +51,15 @@ No new flags may be silently discarded when talking to an old plugin.
 - Read-only fallback is allowed before submission. Once accepted, or submission outcome is uncertain,
   never automatically resubmit or fall back. A timeout is not evidence that a write did not occur.
 - Only explicit pre-acceptance capacity rejection retries, after 1, 2 and 4 seconds.
+- Side-effect-free discovery reads may be retried on a transient bridge failure (empty CLI output) before
+  submission; a CLI that cannot spawn or exits non-zero is immediate bridge loss. After submission, transient
+  bridge failures (empty CLI output, transport errors) are retried until the deadline and then reported as timeout.
 
-Jobs retain creation/completion timestamps. At most 16 unconsumed jobs exist.
+Jobs retain creation/completion timestamps. At most 16 unacknowledged jobs exist; `ackJob(id)` releases a
+terminal job, so direct API callers acknowledge what they have read.
 Completed/failed jobs expire after ten minutes; pending jobs are not evicted by that TTL.
-The first successful retrieval consumes a completed result. Lost delivery is an uncertain outcome;
+A completed result persists until the client acknowledges it or its ten-minute TTL elapses; repeated reads
+return the same result. Lost delivery is an uncertain outcome;
 inspect the current state with read-only reconcile rather than automatically reapplying.
 Unloading prevents late completion from recreating jobs or performing later writes.
 
@@ -91,10 +96,20 @@ A stale negative answer is withheld unless explicitly allowed, retaining the und
 `--allow-stale` does not make missing, malformed or incomplete evidence complete and never authorizes apply.
 Positive identity evidence and source availability are separate from permission to write.
 
+Vault-discovery incompleteness (notes skipped for malformed frontmatter, or a truncated scan) affects hub/raw
+classification and reconcile apply, never the Zotero-index verdict: `resolve`/`identity` still return `not-found`
+(`citekeyProvisional:true`) beside unrelated unparseable notes. Every such payload carries `scan {skipped, truncated}`
+and a `vaultNotes.warnings` entry; truncated discovery (notes may be missing entirely) is reported as
+`ok:false, reason: discovery-incomplete` with the skipped count and up to ten paths, while the index `status` stands.
+`--allow-stale` addresses index age only and never lifts `discovery-incomplete`. Only the stale gate yields `stale-index`.
+
 `cites` scans body and relevant frontmatter citations, unions canonical/history identities, and reports
-resolved, hub-only, raw-only, dangling, ambiguous or unchecked. Provisional hub-only citations remain usable
-when the Zotero index is stale. Raw-only/dangling negative claims are withheld when evidence is insufficient.
-References output is deterministic and returned for review, not written into the note.
+resolved, hub-only, raw-only, dangling, ambiguous or unchecked. Hub/raw evidence is attached before any gate and
+citekeys match exactly (case-preserving, as pandoc does), so provisional hub-only citations remain usable
+when the Zotero index is stale or discovery is incomplete. Raw-only/dangling negative claims are withheld as
+`unchecked` when evidence is insufficient, with `uncheckedReason: stale-index` (stale gate; `--allow-stale` lifts it)
+or `discovery-incomplete` (skipped/truncated notes; repair them, `--allow-stale` does not apply); hints, diagnostics
+and References lines name that cause. References output is deterministic and returned for review, not written into the note.
 
 ## Reconcile transition contract
 

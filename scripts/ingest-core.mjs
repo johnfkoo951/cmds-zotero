@@ -8036,7 +8036,7 @@ function buildNoteIndexes(notes) {
     if (!note.frontmatter) continue;
     const kind = noteKind(note);
     if (kind !== "hub" && kind !== "raw") continue;
-    const citekey = noteCitekey(note).toLowerCase();
+    const citekey = noteCitekey(note);
     const doi = noteDoi(note);
     if (kind === "hub") {
       push(indexes.hubByCitekey, citekey, note);
@@ -8444,9 +8444,22 @@ var HINTS = {
   "hub-only": "Provisional: register the item in Zotero and pin the citekey; the hub's full citation is used meanwhile",
   "raw-only": "Raw source only: create a hub or register the item in Zotero",
   dangling: "No Zotero item, hub or raw source note carries this citekey; check the spelling or register the item",
-  ambiguous: "Several Zotero items carry this citekey; pin one with a Citation Key line in Extra",
-  unchecked: "Index stale: run refresh or pass --allow-stale to see the index verdict"
+  ambiguous: "Several Zotero items carry this citekey; pin one with a Citation Key line in Extra"
 };
+var UNCHECKED_HINTS = {
+  "stale-index": "Index stale: run refresh or pass --allow-stale to see the index verdict",
+  "discovery-incomplete": "Vault discovery incomplete: notes with malformed frontmatter (or a truncated scan) were not classified, so a hub or raw source may exist unseen; repair the reported notes (--allow-stale does not apply)"
+};
+var UNCHECKED_CAUSES = {
+  "stale-index": "index stale",
+  "discovery-incomplete": "vault discovery incomplete"
+};
+function hintFor(status, reason) {
+  return status === "unchecked" ? UNCHECKED_HINTS[reason ?? "stale-index"] : HINTS[status];
+}
+function uncheckedCause(reason) {
+  return UNCHECKED_CAUSES[reason ?? "stale-index"];
+}
 var REFERENCES_HEADING = /^##\s+References\s*#*\s*$/i;
 var SECTION_END = /^#{1,2}\s/;
 var LIST_ITEM_BRACKET = /^\s*[-*+]\s+\[/;
@@ -8486,7 +8499,7 @@ function classifyKey(key, byCitekey, byHistory, lookups) {
     return { citeStatus: "resolved", entryId: entry.id, matchedHistory, ...matchedHistory ? { citekeyCurrent: entry.citekey } : {}, ...notes };
   }
   if (hub) return { citeStatus: "hub-only", ...notes };
-  if (lookups.skipped?.length) return { citeStatus: "unchecked", ...notes };
+  if (lookups.skipped?.length) return { citeStatus: "unchecked", ...notes, uncheckedReason: "discovery-incomplete" };
   if (raw) return { citeStatus: "raw-only", raw };
   return { citeStatus: "dangling" };
 }
@@ -8501,7 +8514,7 @@ function classifyKeys(keys, index, lookups, stale, allowStale) {
   const verdicts = /* @__PURE__ */ new Map();
   for (const key of uniqueInOrder(keys)) {
     const verdict2 = classifyKey(key, byCitekey, byHistory, lookups);
-    verdicts.set(key, withhold && NEGATIVE_STATUSES.has(verdict2.citeStatus) ? { ...verdict2, citeStatus: "unchecked" } : verdict2);
+    verdicts.set(key, withhold && NEGATIVE_STATUSES.has(verdict2.citeStatus) ? { ...verdict2, citeStatus: "unchecked", uncheckedReason: "stale-index" } : verdict2);
   }
   return verdicts;
 }
@@ -8572,6 +8585,7 @@ function verdictFields(verdict2) {
   if (verdict2.citekeyCurrent !== void 0) fields.citekeyCurrent = verdict2.citekeyCurrent;
   if (verdict2.hub) fields.hub = verdict2.hub;
   if (verdict2.raw) fields.raw = verdict2.raw;
+  if (verdict2.uncheckedReason !== void 0) fields.uncheckedReason = verdict2.uncheckedReason;
   return fields;
 }
 function citesForNote(note, verdicts) {
@@ -8600,6 +8614,7 @@ function keysForFiles(files) {
         ...citation.entryId !== void 0 ? { entryId: citation.entryId } : {},
         ...citation.hub ? { hub: citation.hub } : {},
         ...citation.raw ? { raw: citation.raw } : {},
+        ...citation.uncheckedReason !== void 0 ? { uncheckedReason: citation.uncheckedReason } : {},
         count: 1,
         files: [file.path]
       });
@@ -8610,7 +8625,7 @@ function keysForFiles(files) {
 function occurrenceSuffix(count) {
   return count === 1 ? "" : ` (${count} occurrences)`;
 }
-function diagnosticMessage(status, citekey, count) {
+function diagnosticMessage(status, citekey, count, reason) {
   const suffix = occurrenceSuffix(count);
   switch (status) {
     case "dangling":
@@ -8622,7 +8637,7 @@ function diagnosticMessage(status, citekey, count) {
     case "ambiguous":
       return `@${citekey} matches several Zotero items; pin one citekey${suffix}`;
     case "unchecked":
-      return `@${citekey} could not be checked because the index is stale; refresh or pass --allow-stale${suffix}`;
+      return (reason ?? "stale-index") === "discovery-incomplete" ? `@${citekey} could not be checked because vault discovery was incomplete (notes with malformed frontmatter or a truncated scan); a hub or raw source may exist unseen \u2014 repair the reported notes; --allow-stale does not apply${suffix}` : `@${citekey} could not be checked because the index is stale; refresh or pass --allow-stale${suffix}`;
   }
 }
 function citesDiagnostics(files) {
@@ -8633,11 +8648,11 @@ function citesDiagnostics(files) {
     for (const citation of file.citations) {
       const seen = counts.get(citation.citekey);
       if (seen) seen.count++;
-      else counts.set(citation.citekey, { status: citation.citeStatus, count: 1 });
+      else counts.set(citation.citekey, { status: citation.citeStatus, reason: citation.uncheckedReason, count: 1 });
     }
-    for (const [citekey, { status, count }] of counts) {
+    for (const [citekey, { status, reason, count }] of counts) {
       if (status === "resolved") continue;
-      diagnostics.push({ code: DIAGNOSTIC_CODES[status], severity: DIAGNOSTIC_SEVERITIES[status], message: diagnosticMessage(status, citekey, count), path: file.path, citekey });
+      diagnostics.push({ code: DIAGNOSTIC_CODES[status], severity: DIAGNOSTIC_SEVERITIES[status], message: diagnosticMessage(status, citekey, count, reason), path: file.path, citekey });
     }
   }
   return diagnostics;
@@ -8695,7 +8710,7 @@ function referencesLine(citekey, verdict2, bibliography, hubFullCitation) {
     case "ambiguous":
       return `${prefix} (ambiguous: several Zotero items)`;
     case "unchecked":
-      return `${prefix} (unchecked: index stale)`;
+      return `${prefix} (unchecked: ${uncheckedCause(verdict2.uncheckedReason)})`;
     default:
       return `${prefix} (unresolved)`;
   }
@@ -8707,9 +8722,10 @@ function referencesPayload(keys, classified, bibliography, hubFullCitation) {
   const resolved = [];
   const unresolved2 = [];
   for (const citekey of uniqueInOrder(keys)) {
-    const status = classified.get(citekey)?.citeStatus ?? "dangling";
+    const verdict2 = classified.get(citekey);
+    const status = verdict2?.citeStatus ?? "dangling";
     if (status === "resolved") resolved.push({ citekey, text: oneLine(bibliography.get(citekey) ?? "") });
-    else unresolved2.push({ citekey, citeStatus: status, hint: HINTS[status] });
+    else unresolved2.push({ citekey, citeStatus: status, ...status === "unchecked" && verdict2?.uncheckedReason ? { uncheckedReason: verdict2.uncheckedReason } : {}, hint: hintFor(status, verdict2?.uncheckedReason) });
   }
   return { resolved, unresolved: unresolved2, markdown: referencesMarkdown(keys, classified, bibliography, hubFullCitation) };
 }
@@ -9501,17 +9517,26 @@ function evidenceOf(entry) {
 function reducedItem(entry) {
   return { id: entry.id, itemKey: entry.itemKey, libraryID: entry.libraryID, libraryType: entry.libraryType, ...entry.groupID === void 0 ? {} : { groupID: entry.groupID }, citekey: entry.citekey, citekeyHistory: entry.citekeyHistory, title: entry.title, authors: entry.authors, year: entry.year, doi: emitDoi(entry.doi), zoteroSelectURI: entry.zoteroSelectURI };
 }
+function scanOf(host) {
+  const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+  return { skipped: [...scan.skipped], truncated: scan.truncated };
+}
+function discoveryFailure(scan) {
+  const shown = scan.skipped.slice(0, 10);
+  const paths = shown.length ? ` Skipped notes (first ${shown.length} of ${scan.skipped.length}): ${shown.join(", ")}.` : "";
+  return { reason: "discovery-incomplete", message: `Vault discovery was truncated at the note limit and ${scan.skipped.length} notes were skipped; hub and raw-source notes may be missing from vaultNotes, so the vault classification is incomplete. The Zotero-index verdict stands.${paths}` };
+}
 async function resolveCore(host, selector, allowStale, view) {
   const check = selectorKind(selector);
   if (check.error || !check.kind) throw new Error(check.error ?? "Provide exactly one selector.");
   const outcome = resolveIndex(view.index, selector);
   const notes = await host.reader.listNotes();
-  const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
-  const evidenceIncomplete = scan.truncated || scan.skipped.length > 0;
-  const withheld = outcome.status === "not-found" && (staleGate(host.connection, allowStale) || evidenceIncomplete);
+  const scan = scanOf(host);
+  const withheld = outcome.status === "not-found" && staleGate(host.connection, allowStale);
   const vaultNotes = classifyNotes(host.vault, notes, outcome.entry, hintsOf(selector, outcome.entry), view.index, { outputFolder: host.settings.outputFolder });
-  if (evidenceIncomplete) vaultNotes.warnings.push(`Vault discovery incomplete: ${scan.skipped.length} skipped; truncated ${scan.truncated}.`);
-  return { outcome, view, notes, vaultNotes, withheld };
+  if (scan.truncated || scan.skipped.length > 0) vaultNotes.warnings.push(`Vault discovery incomplete: ${scan.skipped.length} skipped; truncated ${scan.truncated}. Hub/raw classification may be incomplete; the Zotero-index verdict is unaffected.`);
+  const failure = withheld ? { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` } : scan.truncated ? discoveryFailure(scan) : null;
+  return { outcome, view, notes, vaultNotes, withheld, scan, failure };
 }
 function rankedOf(outcome) {
   return outcome.ranked;
@@ -9520,9 +9545,9 @@ async function resolveAction(host, request) {
   const index = requireIndex(host, "resolve", 1);
   if ("failure" in index) return index.failure;
   const selector = selectorOf(request);
-  const { outcome, view, vaultNotes, withheld } = await resolveCore(host, selector, request.allowStale === true, index.view);
+  const { outcome, view, vaultNotes, withheld, scan, failure } = await resolveCore(host, selector, request.allowStale === true, index.view);
   const entry = outcome.entry;
-  const base = { ...envelope(host, "resolve", 1, withheld ? { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` } : void 0) };
+  const base = { ...envelope(host, "resolve", 1, failure ?? void 0) };
   return {
     ...base,
     status: withheld ? "unavailable" : outcome.status,
@@ -9535,6 +9560,7 @@ async function resolveAction(host, request) {
     matchedBy: outcome.matchedBy,
     ranked: rankedOf(outcome),
     vaultNotes,
+    scan,
     citekeyShape: entry ? citekeyShape(entry.citekey) : null,
     pinnedGuess: entry ? citekeyShape(entry.citekey) === "vault" : null
   };
@@ -9545,7 +9571,7 @@ async function identityAction(host, request) {
   const selector = selectorOf(request);
   const lookupSelector = { ...selector };
   if (selector.citekey && (selector.doi || selector.arxiv || selector.title || selector.query || selector.itemKey)) delete lookupSelector.citekey;
-  const { outcome, view, notes, vaultNotes, withheld } = await resolveCore(host, lookupSelector, request.allowStale === true, index.view);
+  const { outcome, view, notes, vaultNotes, withheld, scan, failure } = await resolveCore(host, lookupSelector, request.allowStale === true, index.view);
   const entry = outcome.entry;
   const requestedCitekey = request.citekey ?? null;
   const frontmatter = identityFrontmatter({ requestedCitekey, outcome, stale: withheld, now: host.now, emittedDoi: emitDoi(request.doi ?? entry?.doi ?? "") });
@@ -9571,7 +9597,7 @@ async function identityAction(host, request) {
   const citekeyCheck = keyToCheck ? checkCitekey(keyToCheck, view.index, lookup, { doi: hints.doi, arxiv: hints.arxiv, ownId: entry?.id, ownPaths: vaultNotes.hub ? [vaultNotes.hub.path] : [] }) : null;
   const status = frontmatter.zoteroStatus;
   return {
-    ...envelope(host, "identity", 2, withheld ? { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` } : void 0),
+    ...envelope(host, "identity", 2, failure ?? void 0),
     status: withheld ? "unavailable" : outcome.status,
     ...withheld ? { indexAnswer: outcome.status } : {},
     matchedBy: outcome.matchedBy,
@@ -9580,6 +9606,7 @@ async function identityAction(host, request) {
     citekeyCurrent,
     ranked: rankedOf(outcome),
     vaultNotes,
+    scan,
     frontmatter,
     yaml: yamlFragment(frontmatter),
     s01,
@@ -9620,7 +9647,7 @@ async function citesAction(host, request) {
   const all = await host.reader.listNotes();
   const indexes = buildNoteIndexes(all);
   const lookups = toRefMaps(indexes, host.vault);
-  const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+  const scan = scanOf(host);
   lookups.skipped = [.../* @__PURE__ */ new Set([...lookups.skipped ?? [], ...scan.skipped, ...scan.truncated ? ["<vault-scan-truncated>"] : []])];
   const withBodies = [];
   for (const note of targets) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
@@ -9680,7 +9707,7 @@ async function reconcileDryRun(host, request) {
 }
 async function reconcileAction(host, request) {
   const { result, view } = await reconcileDryRun(host, request);
-  const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+  const scan = scanOf(host);
   if (!request.apply) return { ...envelope(host, "reconcile", 2), mode: "dry-run", ...result, scan, apply: { mode: "dry-run" }, generatedAt: view?.index.generatedAt ?? null };
   if (scan.truncated || scan.skipped.length) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: "Vault discovery was incomplete; reconcile apply is refused." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete" }, generatedAt: view?.index.generatedAt ?? null };
   if (!host.applyReconcile) return { ...envelope(host, "reconcile", 2, { reason: "requires-obsidian", message: "reconcile --apply requires the live Obsidian host." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "requires-obsidian" }, generatedAt: view?.index.generatedAt ?? null };
@@ -9747,7 +9774,7 @@ async function diagnosticsAction(host, request) {
     const stale = forcedEvidenceGate || host.connection.index.stale === true;
     const allowStaleNegative = request.allowStale === true && !forcedEvidenceGate;
     const lookups = toRefMaps(buildNoteIndexes(listed), host.vault);
-    const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+    const scan = scanOf(host);
     lookups.skipped = [.../* @__PURE__ */ new Set([...lookups.skipped ?? [], ...scan.skipped, ...scan.truncated ? ["<vault-scan-truncated>"] : []])];
     const withBodies = [];
     for (const note of citing.slice(0, MAX_CITES_FILES)) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
