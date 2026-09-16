@@ -84,7 +84,7 @@ export interface VaultNotes {
 
 /** `uri` is the canonical `obsidian://open` address (percent-encoded, `.md` stripped) that Obsidian and Hookmark use. 0.5 R15 */
 export function noteRef(vault: string, path: string): NoteRef {
-	const basename = path.split("/").pop()?.replace(/\.md$/, "") ?? path;
+	const basename = path.split("/").pop()?.replace(/\.md$/i, "") ?? path;
 	return { path, basename, uri: obsidianOpenURI(vault, path) };
 }
 

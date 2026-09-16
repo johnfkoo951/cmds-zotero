@@ -98,9 +98,10 @@ export function markdownLink(title: string, url: string, options: MarkdownLinkOp
 // 0.5 R15 — canonical Obsidian addresses and link classification.
 
 /**
- * The address Obsidian itself copies for a note and Hookmark records through `hook-get-address`:
- * `obsidian://open?vault=<vault>&file=<path without .md>`. Both values are percent-encoded with
- * `encodeURIComponent` (spaces become `%20`, never `+`; `/` becomes `%2F`), so the string equals Obsidian's own form.
+ * The address Obsidian's own "Copy Obsidian URL" produces for a note: `obsidian://open?vault=<vault>&file=<path without .md>`.
+ * Both values are percent-encoded with `encodeURIComponent` (spaces become `%20`, never `+`; `/` becomes `%2F`).
+ * Hookmark records the same `obsidian://open?vault=&file=` form for notes; whether its path encoding matches byte-for-byte
+ * has not been checked against a live "Hook to Copied Link" round-trip (see README, Hookmark).
  */
 export function obsidianOpenURI(vault: string, path: string): string {
 	if (!vault.trim()) throw new Error("Vault name is required");

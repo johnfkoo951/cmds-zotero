@@ -75,8 +75,8 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 - **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID` 또는 citekey로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
 - **Find notes citing a source**는 항목의 현재·이전 citekey를 볼트 전체에서 찾아 첫 인용 위치로 엽니다.
 - **Update all owned literature notes**는 이 플러그인이 소유한 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀을 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
-- **Open link under cursor**는 `zotero://select` 링크를 Zotero에서 열고, `zotero://open-pdf` 링크는 인덱스의 첨부 키로 부모 항목을 찾아 PDF를 엽니다(페이지·주석 유지, 추측 없음). `[@citekey]`, `@citekey`, `[[@citekey]]`에서는 항목 액션 창을 엽니다. 그 밖에는 알림만 표시하며, 형식이 잘못된 Zotero URI는 가장 비슷한 항목이 아니라 "없음"으로 처리합니다.
-- **Find literature across vaults**는 이 볼트와 등록한 각 피어 볼트에서 항목에 해당하는 모든 노트를 일반 `obsidian://open?vault=…&file=…` 행으로 나열합니다(피어 볼트의 커뮤니티 플러그인 목록에 Advanced URI가 있으면 `obsidian://advanced-uri?…&filepath=…`). 논문 허브와 `@citekey` 노트가 먼저 옵니다. 플러그인 자체의 `obsidian://cmds-zotero` 프로토콜은 이름 변경에 안전한 identity 링크와 에이전트 전송 용도로만 남깁니다.
+- **Open link under cursor**는 `zotero://select` 링크를 Zotero에서 열고, `zotero://open-pdf` 링크는 인덱스에서 항목을 찾아 PDF를 엽니다(첨부 키 우선, 없으면 Zotero 자체가 허용하는 부모 항목 키. 페이지·주석 유지, 라이브러리를 넘어 추측하지 않음). `[@citekey]`, `@citekey`, `[[@citekey]]`(별칭·헤딩 접미사 무시)에서는 항목 액션 창을 엽니다. 문장 부호가 뒤따르는 링크도 인식합니다. 그 밖에는 알림만 표시하며, 형식이 잘못된 Zotero URI는 선택 여부와 관계없이 가장 비슷한 항목이 아니라 "없음"으로 처리합니다.
+- **Find literature across vaults**는 이 볼트와 등록한 각 피어 볼트에서 항목에 해당하는 모든 노트를 일반 `obsidian://open?vault=…&file=…` 행으로 나열합니다(피어 볼트의 커뮤니티 플러그인 목록에 Advanced URI가 있으면 `obsidian://advanced-uri?…&filepath=…`. 목록은 `<피어>/<이 볼트의 설정 폴더>/community-plugins.json`에서 읽으므로, 설정 폴더 이름이 다른 피어는 `obsidian://open`으로 돌아갑니다). 논문 허브와 `@citekey` 노트가 먼저 옵니다. 플러그인 자체의 `obsidian://cmds-zotero` 프로토콜은 이름 변경에 안전한 identity 링크와 에이전트 전송 용도로만 남깁니다.
 
 가져온 노트는 CMDS 콜아웃 레이아웃을 사용합니다: `[!Cite]`, `[!Abstract]`, 인라인 Dataview 필드를 담은 `[!md]`(역할별 저자, 저널, 권·호, 출판사, 쪽, DOI, ISBN, 컬렉션, 관련 문헌 `[[@citekey]]`), Zotero select URI와 `file://` 첨부 링크를 담은 `[!LINK]`, 그리고 `[!Highlight]`·`[!Image]`·`[!Note]` 주석 콜아웃. 하이라이트 본문은 `<mark class="cmds-zotero-hl-<color>">`로 감싸며 색상은 Zotero 팔레트에서 가장 가까운 색조입니다. 설정한 제목용 색상(기본 gray)의 하이라이트는 `#####` 제목이 됩니다. "Excluded tags"(기본 `obscite`)의 태그는 제외합니다. 프론트매터에는 identity 키와 함께 `zotero_title`, `zotero_author`, `zotero_year`, `zotero_journal`, `zotero_doi`, `zotero_url`, `zotero_tags`가 들어가며 생성 후에는 사용자 소유입니다.
 
@@ -89,10 +89,10 @@ Hookmark 지원은 **복사 전용**입니다. 플러그인은 Markdown 링크�
 | 명령 | 복사 내용 | 용도 |
 | --- | --- | --- |
 | Copy Zotero item link (Hookmark-compatible) | `zotero://select/library/items/KEY` | 무엇이든 Zotero 항목에 hook할 때. 개인 라이브러리에서는 Hookmark가 Zotero 항목에 쓰는 주소와 동일하므로 양쪽에서 만든 hook이 한 북마크에 모입니다. |
-| Copy Obsidian file link (Hookmark-native) | `obsidian://open?vault=…&file=…` | 문헌노트에 hook하고 노트를 연 상태에서 Hookmark 창에 그 hook이 보여야 할 때. Obsidian이 복사하고 Hookmark가 `hook-get-address`로 기록하는 주소와 같으며, 노트 이름을 바꾸거나 옮기면 끊어집니다. |
+| Copy Obsidian file link (Hookmark-native) | `obsidian://open?vault=…&file=…` | 문헌노트에 hook하고 노트를 연 상태에서 Hookmark 창에 그 hook이 보여야 할 때. Obsidian의 "Obsidian URL 복사"가 만드는 주소이며, Hookmark도 노트에 같은 `obsidian://open?vault=&file=` 형식을 기록합니다(경로 인코딩이 Hook to Copied Link와 바이트 단위로 일치하는지는 아직 확인하지 않음). 노트 이름을 바꾸거나 옮기면 끊어집니다. |
 | Copy literature note identity link (rename-safe) | `obsidian://cmds-zotero?vault=…&libraryID=…&itemKey=…&target=note` | 이름 변경 후에도 살아남아야 하는 링크(`zoteroID`로 해석). Hookmark에서 노트를 열 수는 있지만 Hookmark는 Obsidian 연동이 돌려주는 주소를 기준으로 hook을 묶으므로, 이 링크로 만든 hook은 노트 안의 Hookmark 창에 **표시되지 않습니다**. |
 
-Hookmark 문서와 기록된 주소 형식으로 확인한 것: select URI를 통한 Hookmark → Zotero, `obsidian://open`(네이티브) 또는 `obsidian://cmds-zotero`(플러그인 프로토콜 핸들러, Obsidian의 URI 콜백 허용 필요)를 통한 Hookmark → Obsidian, Hook to Copied Link의 복사한 Markdown 링크 수용. 확인하지 않은 것: 그룹 라이브러리 항목, 볼트 이름 변경 후 동작. Hookmark의 클립보드·AppleScript 명령이 시간 초과(Apple 이벤트 오류 `-1712`)되기 시작하면 Hookmark를 종료 후 다시 실행하세요.
+Hookmark 문서와 기록된 주소 형식으로 확인한 것: select URI를 통한 Hookmark → Zotero, `obsidian://open`(네이티브. Hookmark는 열려 있는 노트의 이 주소를 자체 `obsidian://hook-get-address` 연동으로 가져오며, 이때 Obsidian의 URI 콜백 허용이 필요) 또는 `obsidian://cmds-zotero`(플러그인 프로토콜 핸들러)를 통한 Hookmark → Obsidian, Hook to Copied Link의 복사한 Markdown 링크 수용. 확인하지 않은 것: 복사한 파일 링크와 Hookmark가 같은 노트에 기록하는 주소의 경로 인코딩이 바이트 단위로 일치하는지(복사한 링크로 만든 hook은 어느 쪽이든 노트를 열지만, Hookmark 자체 북마크와 합쳐지는지는 미확인), 그룹 라이브러리 항목, 볼트 이름 변경 후 동작. Hookmark의 클립보드·AppleScript 명령이 시간 초과(Apple 이벤트 오류 `-1712`)되기 시작하면 Hookmark를 종료 후 다시 실행하세요.
 
 ## 인덱스·연동 계약
 

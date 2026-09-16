@@ -109,8 +109,10 @@ export class VaultLinks {
 	}
 
 	/**
-	 * Read-only check of a peer vault's `<configDir>/community-plugins.json`, assuming the peer uses the same configuration
-	 * folder name as this vault; any failure (different folder, unreadable, oversized) means "no Advanced URI". 0.5 R15
+	 * Read-only check of a peer vault's `<configDir>/community-plugins.json`, where `configDir` is this vault's configuration
+	 * folder name (`Vault#configDir`; the peer's own setting is not readable without hardcoding a folder name). A peer using a
+	 * different folder name, or an unreadable/oversized file, means "no Advanced URI": the row falls back to `obsidian://open`.
+	 * Documented in the README. 0.5 R15
 	 */
 	private async peerListsAdvancedUri(root: string): Promise<boolean> {
 		try {

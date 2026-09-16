@@ -18,7 +18,7 @@ import { rpc } from "./api/transport";
 import { VaultLinks } from "./vault-links";
 import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
-import { citekeyAtCursor, classifyLink, parseProtocolRequest } from "./protocol";
+import { citekeyAtCursor, classifyLink, parseProtocolRequest, resolveOpenPdfTarget } from "./protocol";
 import { pdfURI, noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "./uris";
 import { CmdsZoteroSettingsTab } from "./settings";
 import { ActionsModal, ImportPreviewModal, PageJumpModal, PickerModal, ReportModal } from "./modals";
@@ -574,13 +574,11 @@ export default class CMDSZoteroPlugin extends Plugin {
 		});
 	}
 
-	/** Resolves an open-pdf URI's attachment key against the index to its parent entry and honours page/annotation. */
+	/** Resolves an open-pdf URI (attachment key, or a parent key as Zotero itself accepts) against the index and honours page/annotation. */
 	private async openPdfLink(parsed: ParsedZoteroURI): Promise<void> {
-		const index = await this.loadIndexForRead();
-		const sameLibrary = (entry: ZoteroIndexEntry): boolean => parsed.libraryType === "group" ? entry.libraryType === "group" && entry.groupID === parsed.groupID : entry.libraryType === "user";
-		const parents = index.entries.filter(entry => sameLibrary(entry) && entry.attachments.some(attachment => attachment.key === parsed.itemKey));
-		if (!parents.length) throw new Error("This PDF attachment is not in the index. Refresh the index; the link may also belong to another library.");
-		if (parents.length > 1) throw new Error("More than one entry owns this attachment key. Use Search literature to select a library.");
-		await this.openPdf(parents[0], parsed.page ?? 1, parsed.annotationKey, false, parsed.itemKey);
+		const target = resolveOpenPdfTarget(await this.loadIndexForRead(), parsed);
+		if (target.kind === "not-found") throw new Error("This PDF link is not in the index. Refresh the index; the link may also belong to another library.");
+		if (target.kind === "ambiguous") throw new Error("More than one entry owns this item key. Use Search literature to select a library.");
+		await this.openPdf(target.entry, parsed.page ?? 1, parsed.annotationKey, false, target.kind === "attachment" ? target.attachmentKey : undefined);
 	}
 }

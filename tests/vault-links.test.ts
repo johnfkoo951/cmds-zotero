@@ -94,6 +94,17 @@ test('find() links every peer path with a Hookmark-native address and orders hub
   await fs.writeFile(path.join(peerRoot,'.obsidian/community-plugins.json'),'{broken');
   assert.ok((await links.find(entry,index)).links[2].uri.startsWith('obsidian://open?'),'an unreadable plugin list falls back to obsidian://open');
 
+  // 0.5 R15 fix pass: the plugin list is read under this vault's own config folder name (Vault#configDir), as documented.
+  const customApp={...app,vault:{...app.vault,configDir:'custom-config'}};
+  const customLinks=new VaultLinks(customApp,()=>({peerVaults:[{name:'Wiki Vault',path:peerRoot}]}),()=>true);
+  await fs.writeFile(path.join(peerRoot,'.obsidian/community-plugins.json'),JSON.stringify(['obsidian-advanced-uri']));
+  assert.ok((await customLinks.find(entry,index)).links[2].uri.startsWith('obsidian://open?'),'a peer whose folder name differs from this vault\'s configDir falls back to obsidian://open (documented caveat)');
+  await fs.mkdir(path.join(peerRoot,'custom-config'),{recursive:true});
+  await fs.writeFile(path.join(peerRoot,'custom-config/community-plugins.json'),JSON.stringify(['obsidian-advanced-uri']));
+  assert.ok((await customLinks.find(entry,index)).links[2].uri.startsWith('obsidian://advanced-uri?'),'a peer sharing this vault\'s custom folder name is detected');
+  await fs.rm(path.join(peerRoot,'custom-config'),{recursive:true,force:true});
+  await fs.writeFile(path.join(peerRoot,'.obsidian/community-plugins.json'),'{broken');
+
   // A missing peer file or an absolute path is reported once per vault; rows validated before it are kept.
   await fs.rm(path.join(peerRoot,peerPaths[1]));
   const partial=await links.find(entry,index);

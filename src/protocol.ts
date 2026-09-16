@@ -1,4 +1,5 @@
 import { parseZoteroURI, type ParsedZoteroURI } from "./uris";
+import type { ZoteroIndex, ZoteroIndexEntry } from "./types";
 
 export interface ProtocolRequest {
 	vault: string;
@@ -39,11 +40,14 @@ export type LinkUnderCursor =
 	| { kind: "none" };
 
 const ZOTERO_URI = /zotero:\/\/(?:select|open-pdf)\/[^\s<>()[\]"']+/g;
+/** Prose punctuation that may follow a bare link (`…ABCD2345.` / `…ABCD2345,`); never part of a Zotero URI. */
+const TRAILING_PUNCTUATION = /[.,;:!?]+$/;
+const WIKILINK_CITEKEY = /\[\[@([^\s\]|#]+)(?:[#|][^\]]*)?\]\]/g;
 
 /**
  * Classifies what sits under the cursor: a `zotero://select` or `zotero://open-pdf` URI (bare, `<…>` or `[t](…)`),
- * a `[@citekey]` / `@citekey` / `[[@citekey]]` citation, or nothing. A non-empty selection is classified as a whole.
- * Malformed Zotero URIs are `none`, never a guess.
+ * a `[@citekey]` / `@citekey` / `[[@citekey]]` citation (alias and heading suffixes dropped), or nothing.
+ * A non-empty selection is classified as a whole. Malformed Zotero URIs are `none`, never a guess.
  */
 export function classifyLink(line: string, column = 0, selection = ""): LinkUnderCursor {
 	const text = selection.trim() ? selection.trim() : line;
@@ -51,17 +55,55 @@ export function classifyLink(line: string, column = 0, selection = ""): LinkUnde
 	ZOTERO_URI.lastIndex = 0;
 	let match: RegExpExecArray | null;
 	while ((match = ZOTERO_URI.exec(text)) !== null) {
+		const uri = match[0].replace(TRAILING_PUNCTUATION, "");
 		const start = match.index;
-		const end = start + match[0].length;
+		const end = start + uri.length;
 		if (at !== -1 && (at < start || at > end)) continue;
 		try {
-			const parsed = parseZoteroURI(match[0]);
-			return { kind: parsed.action, uri: match[0], parsed };
+			const parsed = parseZoteroURI(uri);
+			return { kind: parsed.action, uri, parsed };
 		} catch { /* not a valid Zotero URI at this position */ }
 	}
-	const wikilink = /^\[\[@([^\s\]|#]+)(?:[#|][^\]]*)?\]\]$/.exec(selection.trim());
-	const citekey = wikilink ? wikilink[1] : citekeyAtCursor(line, column, selection);
+	// A selected Zotero URI that did not parse is malformed, not a citekey.
+	if (at === -1 && /^<?zotero:\/\//i.test(text)) return { kind: "none" };
+	const wikilink = wikilinkCitekey(text, at);
+	const citekey = wikilink ?? citekeyAtCursor(line, column, selection);
 	return citekey ? { kind: "citekey", citekey } : { kind: "none" };
+}
+
+/** The citekey of a `[[@key|alias]]` / `[[@key#heading]]` wikilink under the cursor (or of a whole selection), without its suffix. */
+function wikilinkCitekey(text: string, at: number): string | undefined {
+	WIKILINK_CITEKEY.lastIndex = 0;
+	let match: RegExpExecArray | null;
+	while ((match = WIKILINK_CITEKEY.exec(text)) !== null) {
+		if (at === -1 ? match[0] === text : at >= match.index && at <= match.index + match[0].length) return match[1];
+	}
+	return undefined;
+}
+
+// 0.5 R15 — open-pdf link resolution against the index (pure, mirrors Zotero's own fallback from parent key to attachment).
+export type OpenPdfTarget =
+	| { kind: "attachment"; entry: ZoteroIndexEntry; attachmentKey: string }
+	| { kind: "parent"; entry: ZoteroIndexEntry }
+	| { kind: "not-found" }
+	| { kind: "ambiguous" };
+
+/**
+ * Finds the entry an `open-pdf` URI belongs to, within the URI's library (user library, or the exact group).
+ * The item key is matched against attachment keys first (the form the plugin emits), then against parent item keys
+ * (Zotero accepts `zotero://open-pdf/library/items/<parentKey>` and picks the best attachment itself).
+ * More than one owner is `ambiguous`; nothing is `not-found`. Never guesses across libraries.
+ */
+export function resolveOpenPdfTarget(index: Pick<ZoteroIndex, "entries">, parsed: ParsedZoteroURI): OpenPdfTarget {
+	const sameLibrary = (entry: ZoteroIndexEntry): boolean =>
+		parsed.libraryType === "group" ? entry.libraryType === "group" && entry.groupID === parsed.groupID : entry.libraryType === "user";
+	const attachmentOwners = index.entries.filter(entry => sameLibrary(entry) && entry.attachments.some(attachment => attachment.key === parsed.itemKey));
+	if (attachmentOwners.length > 1) return { kind: "ambiguous" };
+	if (attachmentOwners.length === 1) return { kind: "attachment", entry: attachmentOwners[0], attachmentKey: parsed.itemKey };
+	const parents = index.entries.filter(entry => sameLibrary(entry) && entry.itemKey === parsed.itemKey);
+	if (parents.length > 1) return { kind: "ambiguous" };
+	if (parents.length === 1) return { kind: "parent", entry: parents[0] };
+	return { kind: "not-found" };
 }
 
 export function citekeyAtCursor(line: string, column: number, selection = ""): string {

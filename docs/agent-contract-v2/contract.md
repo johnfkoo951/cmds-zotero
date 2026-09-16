@@ -73,11 +73,14 @@ Hub fields are `citekey`, `doi`, `citekeyProvisional`, `zoteroID`, `zoteroSelect
 `zoteroStatus`, and `zoteroCheckedAt`. The plugin may apply only the last five identity keys,
 not `citekey` or `doi`. Existing plugin-owned literature-note fields remain supported.
 
-Note references (`hub`, `raw`, `atoms`, `literatureNote`, `other`, `vaultLinks`) carry `path`, `basename` and `uri`.
+Note references (`hub`, `raw`, `atoms`, `literatureNote`, `other`) carry `path`, `basename` and `uri`.
+`vaultLinks` rows carry `vault`, `path` and `uri` (this vault's rows first, then each registered peer vault;
+offline hosts return no rows plus a warning).
 `uri` is the canonical Obsidian address `obsidian://open?vault=<vault>&file=<path without .md>` with both values
-percent-encoded (`%20` for spaces, never `+`), the same string Obsidian copies and Hookmark records. Peer-vault rows
-in `vaultLinks` use the Advanced URI form `obsidian://advanced-uri?vault=<peer>&filepath=<path>.md` when that vault
-lists the plugin. `obsidian://cmds-zotero` identity links are never emitted in note references.
+percent-encoded (`%20` for spaces, never `+`), the string Obsidian's own Copy Obsidian URL produces (Hookmark records
+the same form; path-encoding parity with Hookmark is not verified). Peer-vault rows in `vaultLinks` use the Advanced
+URI form `obsidian://advanced-uri?vault=<peer>&filepath=<path>.md` when that vault lists the plugin.
+`obsidian://cmds-zotero` identity links are never emitted in note references.
 
 - The vault citekey is the requested/existing hub key, never implicitly the current index key.
   DOI-only identity responses without a vault key omit `frontmatter.citekey`.
