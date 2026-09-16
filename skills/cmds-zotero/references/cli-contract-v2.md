@@ -36,6 +36,20 @@ Legacy fields preserve their values/types; new envelope fields are additive, not
 index source/path/schema/generation/age/completeness/staleness/threshold, legacy-plugin state, and Git coverage.
 Unknown is represented as unknown/null, never fabricated success. Ignored and already-tracked files are separate concerns.
 
+BBT transport faults are classified once (0.5): `connection-refused` (any socket-level fault), `timeout`, `http-404`,
+`http-other`, `aborted` (the plugin's own cancellation, never an observation about Zotero), `rpc` (a JSON-RPC error
+envelope) and `invalid-response`. When the `connection` probe fails, `connection.bbt` carries `error` (human wording that
+names the endpoint) and, when classified, `reason` from that vocabulary. `identity` and `cites` add
+`bbtError {reason, endpoint}` beside `bibliographyReason`/`referencesReason: bbt-unreachable`, and a refused `refresh`
+(forced or `ifOlderThanMinutes`) adds it beside its `reason`, only when the fault was a typed transport error.
+`bibliographyReason`/`referencesReason: bbt-unreachable` remain the legacy coarse value for any failed BBT bibliography
+call; when `bbtError` is present its `reason` is authoritative (`rpc`, `http-other` and `invalid-response` mean BBT
+answered but the request failed). After a `connection-refused`, `timeout` or `http-404` fault, `cites` stops asking BBT
+for the remaining keys. A reconcile apply refused because the evidence snapshot threw reports `refusedReason: index-invalid`
+with `refusedMessage` (`bbt-unreachable` only for a typed transport error); a storage fault is never reported as a BBT outage.
+The plugin's human status line derives freshness from the same `ageMinutes`/`stale` math and reports the last real BBT
+call, so the UI and the CLI agree on freshness; its wording is UI copy, not part of this contract.
+
 Existing implicit refresh in read-only legacy operations is intentionally removed.
 The read-only wrapper must not call an old host that might refresh on a read.
 New CLI clients may use the offline core for old-host read-only capabilities; unsupported live writes fail explicitly.
@@ -62,6 +76,23 @@ A completed result persists until the client acknowledges it or its ten-minute T
 return the same result. Lost delivery is an uncertain outcome;
 inspect the current state with read-only reconcile rather than automatically reapplying.
 Unloading prevents late completion from recreating jobs or performing later writes.
+A pending job is failed by the host after a per-action timeout (`pdf-text` 900 s, every other action 300 s); the
+failure text names the action and the timeout, releases the write gate that blocks reconfiguration, and a late
+settlement never reverses it. A timed-out write is an uncertain outcome like any other timeout and its failure text
+says so; a timed-out read-only job says it left no state behind. The underlying work is not cancelled.
+
+Failure `reason` values are derived from typed errors and the request first: an index refusal keeps its own reason;
+a local-file refusal maps by code (`too-large` → `pdf-too-large`, any other → `pdf-invalid`), in the live host and
+the offline CLI alike, so an oversized or non-PDF `--file` target is named precisely; a typed extraction failure maps
+by code (`pdfjs-unavailable` → `pdfjs-unavailable`; unreadable, page-less, over-long or malformed → `pdf-invalid`;
+text over the cache limit → `pdf-too-large`; a publication cancelled by a plugin reload → `invalid-request`);
+`apply-failed` is reserved for a `reconcile` that was asked to write (`--apply`), while a failing dry-run or read
+reports `invalid-request`. Only an untyped failure of `pdf-text`/`locate` is still classified by its wording, as a
+last resort.
+`locate --path` and `cites --path` resolve a note with or without its `.md` extension and treat a leading `/` as
+vault-root-relative. A path that cannot lie inside the vault (scheme, `..`, `\`) is `path-outside-vault`. An
+unknown note is `invalid-request` for `locate`; `cites` keeps reporting a path with no Markdown notes as
+`path-outside-vault` (unchanged since 0.4).
 
 ## Identity and matching
 
@@ -73,6 +104,44 @@ Group-library IDs and local library IDs are not interchangeable.
 Hub fields are `citekey`, `doi`, `citekeyProvisional`, `zoteroID`, `zoteroSelectURI`,
 `zoteroStatus`, and `zoteroCheckedAt`. The plugin may apply only the last five identity keys,
 not `citekey` or `doi`. Existing plugin-owned literature-note fields remain supported.
+
+Note references (`hub`, `raw`, `atoms`, `literatureNote`, `other`) carry `path`, `basename` and `uri`.
+`vaultLinks` rows carry `vault`, `path` and `uri` (this vault's rows first, then each registered peer vault;
+offline hosts return no rows plus a warning).
+`uri` is the canonical Obsidian address `obsidian://open?vault=<vault>&file=<path without .md>` with both values
+percent-encoded (`%20` for spaces, never `+`), the string Obsidian's own Copy Obsidian URL produces (Hookmark records
+the same form; path-encoding parity with Hookmark is not verified). Peer-vault rows in `vaultLinks` use the Advanced
+URI form `obsidian://advanced-uri?vault=<peer>&filepath=<path>.md` when that vault lists the plugin.
+`obsidian://cmds-zotero` identity links are never emitted in note references.
+### Literature-note frontmatter (0.5)
+
+A literature note created by the plugin carries exactly `type: zotero` followed by `LITERATURE_IDENTITY_KEYS`
+(`src/agent/types.ts`), in this order: `zoteroID`, `zoteroSelectURI`, `zotero-key`, `citekey`, `doi`, `title`,
+`authors`, `year`, `tags`, then the display-parity group `zotero_title`, `zotero_author`, `zotero_year`,
+`zotero_journal`, `zotero_doi`, `zotero_url`, `zotero_tags`.
+
+- `zoteroID` is the only key agents may rely on. `zoteroSelectURI` carries the library scope (group items included).
+  `zotero-key` is the ZotLit-compatible bare item key; it identifies an item only while the index holds one library.
+  The `zotero_*` group mirrors the earlier CMDS template for display and carries no identity.
+- Pre-0.5 vintage: frontmatter is written once and is user-owned afterwards, so notes created by 0.3/0.4 keep
+  `zotero-id`, `zotero-library-id`, `zoteroItemKey`, `zoteroLibraryID`, `zoteroLibraryType` (and `zoteroGroupID`).
+  These keys are never rewritten, never read as identity, and `reconcile` lists such notes as `type: literature`
+  rows with the informational finding `legacy-frontmatter-dialect` (never apply-eligible). The rows are listed in
+  `notes` but not counted in `scanned` ({hubs, rawSources, parseErrors}). `reconcile` and `diagnostics` surface the
+  condition as one aggregated diagnostic per call (code `legacy-frontmatter-dialect`, severity `info`, `path` = the
+  first sampled note; the message carries the count and up to 5 sample paths), not one diagnostic per note.
+- Note identity ladder (note map, sidebars, "Update all", `vaultNotes`): `zoteroID`, then `zoteroSelectURI`, then
+  `zotero-key` (single-library index only), then citekey/history equality — and citekey evidence counts only when the
+  basename starts with `@` or `type` is one of `zotero`, `paper-hub`, `paper-analysis`, `raw-source`,
+  `literature-zotero`; the output folder is never identity evidence. An explicit identity that names an item outside
+  the index refuses the note rather than falling through. Notes carrying a foreign identity are never claimed on
+  evidence weaker than `zoteroID`: a `bookendsID` or any other `type` is a hard marker, and a `bookends://` or
+  `x-devonthink-item://` link in frontmatter marks only notes without a Zotero note `type` (a typed hub or raw source
+  may link its PDF through DEVONthink and still resolves by citekey or DOI). Bookends auto-citekeys share the
+  lastname+year shape of BBT keys.
+- "Update all owned literature notes" treats a note as owned only when it resolves, lies inside the output folder and
+  carries the owner marker; other linked notes are counted once (`Linked but not owned: M (not updated)`) and never
+  trigger BBT.
 
 - The vault citekey is the requested/existing hub key, never implicitly the current index key.
   DOI-only identity responses without a vault key omit `frontmatter.citekey`.
@@ -114,6 +183,8 @@ and References lines name that cause. References output is deterministic and ret
 ## Reconcile transition contract
 
 Discovery is by frontmatter type; folders only narrow it. Raw sources are report-only.
+`type: zotero` literature notes appear only when they carry pre-0.5 keys (`legacy-frontmatter-dialect`, report-only;
+listed in `notes`, not counted in `scanned`).
 The Raw Sources root is never writable even if a file is mislabeled paper-hub.
 ID/URI/key/history/folder/DOI/arXiv can contribute identity evidence, but precedence never overrides a contradiction.
 Present-but-invalid fields retain their presence: null, empty strings, wrong types and duplicate keys are not absent.
@@ -156,7 +227,12 @@ Capture the input byte length before passing a transferable buffer to pdf.js.
 Page is one-based physical position; pageLabel is printed text. Empty/dash-only labels fall back to position.
 `p.-` must never appear. Fuzzy/ambiguous/unverified matches must not masquerade as confirmed quote locations.
 
-Cache names bind source scope and content hash. Attachment and vault-file caches cannot select/evict each other.
+Cache names bind source scope and content hash: `<libraryType>-<libraryID>-<attachmentKey>-<sha16>.json` for
+Zotero attachments and `file-<pathHash16>-<sha16>.json` for vault PDFs, where the path hash is the SHA-256 of the
+normalized vault-relative path (`./`, leading, trailing and repeated `/` ignored, so `./A/x.pdf` and `A/x.pdf` name
+one cache). Attachment and vault-file caches cannot select/evict each other, and two vault PDFs with
+identical bytes at different paths keep separate caches. Pre-0.5 `file-<sha16>.json` names are foreign: never
+selected, never evicted; re-run `pdf-text` to rebuild.
 Validate schema, source identity, file scope, page order/uniqueness, limits and metadata before use.
 A changed PDF is verification failure; an unavailable original is unchecked. Preserve truncation warnings on cache hits.
 Always clean up pdf.js tasks/documents on failure or completion.

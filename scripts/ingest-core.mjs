@@ -7328,7 +7328,6 @@ var require_dist = __commonJS({
 
 // src/cli/core.ts
 import { promises as fs4 } from "node:fs";
-import { createHash as createHash3 } from "node:crypto";
 import { basename as basename2, join as join3, relative as relative2, sep as sep2 } from "node:path";
 
 // src/identity.ts
@@ -7388,6 +7387,12 @@ function pdfURI(openURI, page, annotationKey) {
     params.set("annotation", effectiveAnnotation);
   }
   return openURI.split("?")[0] + (params.size ? `?${params.toString()}` : "");
+}
+function obsidianOpenURI(vault, path) {
+  if (!vault.trim()) throw new Error("Vault name is required");
+  const file = path.replace(/^\/+/, "").replace(/\.md$/i, "");
+  if (!file.trim()) throw new Error("Note path is required");
+  return `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(file)}`;
 }
 
 // src/identity.ts
@@ -7587,98 +7592,6 @@ function privateIgnoreCoversAll(text3) {
   const last = parseGitignore(text3 ?? "").at(-1);
   return last !== void 0 && !last.negated && !last.dirOnly && !last.anchored && last.pattern === "*";
 }
-
-// src/agent/connection.ts
-var CONTRACT_API_VERSIONS = [1, 2];
-function indexAgeMinutes(generatedAt, now) {
-  if (generatedAt === null) return null;
-  const age = now.getTime() - Date.parse(generatedAt);
-  return Number.isFinite(age) && age >= 0 ? Math.floor(age / 6e4) : null;
-}
-function pluginStatus(enabled, apiVersions) {
-  if (enabled === false) return "off";
-  if (apiVersions === null) return "unknown";
-  return apiVersions.includes(2) ? "ok" : "too-old";
-}
-function compactBbt(bbt) {
-  return {
-    reachable: bbt.reachable,
-    ...bbt.zotero !== void 0 ? { zotero: bbt.zotero } : {},
-    ...bbt.betterbibtex !== void 0 ? { betterbibtex: bbt.betterbibtex } : {},
-    ...bbt.error !== void 0 ? { error: bbt.error } : {}
-  };
-}
-function buildIndex(index, maxAgeMinutes, now) {
-  const ageMinutes = indexAgeMinutes(index.generatedAt, now);
-  return {
-    source: index.source,
-    path: index.path,
-    schemaVersion: index.schemaVersion,
-    generatedAt: index.generatedAt,
-    ageMinutes,
-    count: index.count,
-    complete: index.complete,
-    stale: ageMinutes === null ? null : ageMinutes > maxAgeMinutes,
-    maxAgeMinutes
-  };
-}
-function buildConnection(input) {
-  return {
-    mode: input.mode,
-    obsidian: input.obsidian,
-    ...input.obsidianError !== void 0 ? { obsidianError: input.obsidianError } : {},
-    plugin: { status: pluginStatus(input.pluginEnabled, input.pluginApiVersions), version: input.pluginVersion, apiVersions: input.pluginApiVersions },
-    bbt: compactBbt(input.bbt),
-    index: buildIndex(input.index, input.maxAgeMinutes, input.now),
-    legacyPluginEnabled: input.legacyPluginEnabled,
-    git: input.git === null ? null : { ...input.git }
-  };
-}
-function buildEnvelope(action, vault, apiVersion, connection, now, failure) {
-  return {
-    apiVersion,
-    contract: 2,
-    apiVersions: [...CONTRACT_API_VERSIONS],
-    action,
-    vault,
-    ok: failure === void 0,
-    ...failure !== void 0 ? { reason: failure.reason, message: failure.message } : {},
-    checkedAt: now.toISOString(),
-    connection
-  };
-}
-function staleGate(connection, allowStale) {
-  return connection.index.complete !== true || connection.index.stale === null || !allowStale && connection.index.stale === true;
-}
-function gitWarning(connection) {
-  const git = connection.git;
-  if (git === null || !git.repo) return null;
-  const exposed = [];
-  if (git.indexIgnored === false || git.indexTracked === true) exposed.push(`index file "${connection.index.path}"`);
-  if (git.cacheIgnored === false || git.cacheTracked === true) exposed.push(`cache directory "${CACHE_DIR}/"`);
-  if (exposed.length === 0) return null;
-  return { code: "index-in-git", message: `The vault is a git repository and tracking or ignore rules expose the ${exposed.join(" or the ")}; ignore and untrack sensitive files before committing (existing history is unchanged).` };
-}
-function infoWarnings(connection) {
-  const warnings = [];
-  const git = gitWarning(connection);
-  if (git !== null) warnings.push(git);
-  if (connection.legacyPluginEnabled === true) {
-    warnings.push({ code: "legacy-plugin-enabled", message: "The legacy plugin cmds-link-zotero is enabled; disable it before refreshing or applying changes with cmds-zotero." });
-  }
-  if (connection.index.stale === true) {
-    warnings.push({ code: "index-stale", message: `The index is ${connection.index.ageMinutes ?? 0} minutes old (limit ${connection.index.maxAgeMinutes}); run refresh or pass --allow-stale.` });
-  }
-  return warnings;
-}
-
-// src/agent/types.ts
-function noteRef(vault, path) {
-  const basename3 = path.split("/").pop()?.replace(/\.md$/, "") ?? path;
-  return { path, basename: basename3, uri: `obsidian://open?${new URLSearchParams({ vault, file: path }).toString()}` };
-}
-var HUB_IDENTITY_KEYS = ["citekey", "citekeyProvisional", "doi", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
-var HUB_WRITABLE_KEYS = ["citekeyProvisional", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
 
 // src/agent/search.ts
 var RANKED_LIMIT = 10;
@@ -7988,6 +7901,281 @@ function resolveIndex(index, selector) {
   return resolveBySearch(index, selector, kind, query);
 }
 
+// src/api/transport.ts
+import * as http from "http";
+import * as https from "https";
+import * as timers from "timers";
+var REASON_ORDER = ["connection-refused", "timeout", "http-404", "http-other", "aborted", "rpc", "invalid-response"];
+var NETWORK_CODES = /\b(ECONNREFUSED|ECONNRESET|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN|ECONNABORTED|EPIPE|ENETUNREACH)\b/;
+var NETWORK_TEXT = /socket hang up|fetch failed/i;
+var TIMED_OUT = /\bETIMEDOUT\b|timed out/i;
+var CANCELLED = /\baborted\b|cancelled/i;
+var BbtTransportError = class extends Error {
+  constructor(reason, endpoint, detail, options = {}) {
+    super("");
+    this.name = "BbtTransportError";
+    this.reason = reason;
+    this.endpoint = endpoint;
+    this.detail = detail;
+    this.cause = options.cause;
+    if (options.code !== void 0) this.code = options.code;
+    if (options.status !== void 0) this.status = options.status;
+    if (options.timeoutMs !== void 0) this.timeoutMs = options.timeoutMs;
+    this.message = describeBbtError(this);
+  }
+};
+function isBbtTransportError(error) {
+  return error instanceof BbtTransportError || error instanceof Error && error.name === "BbtTransportError" && REASON_ORDER.includes(error.reason);
+}
+function codeOf(error) {
+  const code = error?.code;
+  return typeof code === "string" && code ? code : void 0;
+}
+function transportReasonOf(error) {
+  if (isBbtTransportError(error)) return error.reason;
+  const code = codeOf(error) ?? "";
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (error instanceof Error && error.name === "AbortError" || code === "ABORT_ERR") return "aborted";
+  if (NETWORK_CODES.test(code)) return "connection-refused";
+  if (CANCELLED.test(message)) return "aborted";
+  if (NETWORK_CODES.test(message) || NETWORK_TEXT.test(message)) return "connection-refused";
+  if (TIMED_OUT.test(code) || TIMED_OUT.test(message)) return "timeout";
+  return null;
+}
+function classifyTransportError(error, endpoint, timeoutMs, fallback = "invalid-response") {
+  if (isBbtTransportError(error)) return error;
+  const reason = transportReasonOf(error) ?? fallback;
+  const detail = error instanceof Error ? error.message : String(error);
+  return new BbtTransportError(reason, endpoint, detail, { cause: error, code: codeOf(error), ...reason === "timeout" ? { timeoutMs } : {} });
+}
+function bbtObservation(error) {
+  const at = error.endpoint;
+  switch (error.reason) {
+    case "connection-refused":
+      return `Zotero/Better BibTeX did not answer at ${at} (${error.code === "ECONNREFUSED" ? "connection refused" : error.code ?? "connection failed"})`;
+    case "timeout":
+      return `Zotero/Better BibTeX at ${at} did not respond within ${error.timeoutMs !== void 0 ? `${Math.max(1, Math.round(error.timeoutMs / 1e3))} s` : "the request timeout"} (request timed out)`;
+    case "http-404":
+      return `Zotero answered at ${at} but the Better BibTeX endpoint was not found (HTTP 404)`;
+    case "http-other":
+      return `Zotero answered at ${at} with HTTP ${error.status ?? "error"}`;
+    case "aborted":
+      return `The request to ${at} was aborted by the plugin before Zotero answered`;
+    case "rpc":
+      return `Better BibTeX at ${at} reported an error (${error.detail})`;
+    default:
+      return `Better BibTeX at ${at} returned an unexpected response (${error.detail})`;
+  }
+}
+function describeBbtError(error) {
+  if (!isBbtTransportError(error)) return error instanceof Error ? error.message : String(error);
+  const observed = bbtObservation(error);
+  switch (error.reason) {
+    case "connection-refused":
+      return `${observed}. Start Zotero, then retry.`;
+    case "timeout":
+      return `${observed}. Check that Zotero is responsive, then retry.`;
+    case "http-404":
+      return `${observed}; check that Better BibTeX is installed and the endpoint path is /better-bibtex.`;
+    case "http-other":
+      return `${observed}; check the Better BibTeX endpoint and the Zotero error log.`;
+    case "aborted":
+      return `${observed}.`;
+    default:
+      return `${observed}.`;
+  }
+}
+function bbtErrorPayload(error) {
+  return isBbtTransportError(error) ? { reason: error.reason, endpoint: error.endpoint } : null;
+}
+function endpointLabel(rawURL) {
+  const query = rawURL.indexOf("?");
+  return query < 0 ? rawURL : rawURL.slice(0, query);
+}
+function httpRequest(rawURL, timeoutMs, body, signal) {
+  const endpoint = endpointLabel(rawURL);
+  const fail = (reject) => (error) => {
+    reject(signal?.aborted ? new BbtTransportError("aborted", endpoint, error instanceof Error ? error.message : String(error), { cause: error, code: codeOf(error) }) : classifyTransportError(error, endpoint, timeoutMs, "connection-refused"));
+  };
+  return new Promise((resolve3, reject) => {
+    const url = new URL(rawURL);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid BBT endpoint");
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 3e5) throw new Error("Invalid request timeout");
+    const transport = url.protocol === "https:" ? https : http;
+    const request = transport.request(url, { signal, method: body === void 0 ? "GET" : "POST", headers: body === void 0 ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 64 * 1024 * 1024) {
+          request.destroy(new BbtTransportError("invalid-response", endpoint, "BBT response exceeds 64 MiB limit"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("error", fail(reject));
+      response.on("aborted", () => reject(signal?.aborted ? new BbtTransportError("aborted", endpoint, "BBT request aborted by the plugin") : new BbtTransportError("connection-refused", endpoint, "BBT response aborted by the remote end before it completed", { code: "ECONNRESET" })));
+      response.on("end", () => resolve3({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+    });
+    const timer = timers.setTimeout(() => request.destroy(new BbtTransportError("timeout", endpoint, "BBT request timed out", { timeoutMs })), timeoutMs);
+    request.on("close", () => timers.clearTimeout(timer));
+    request.on("error", fail(reject));
+    request.end(body);
+  });
+}
+async function rpc(endpoint, method, params, timeoutMs, signal) {
+  const url = `${endpoint.replace(/\/$/, "")}/json-rpc`;
+  const response = await httpRequest(url, timeoutMs, JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal);
+  if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", url, `BBT HTTP ${response.status} for ${method}`, { status: response.status });
+  let parsed;
+  try {
+    parsed = JSON.parse(response.text);
+  } catch (error) {
+    throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${method}`, { cause: error });
+  }
+  if (!record(parsed) || parsed.jsonrpc !== "2.0" || parsed.id !== 1) throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`);
+  if ("error" in parsed) throw new BbtTransportError("rpc", url, `BBT RPC error for ${method}`);
+  if (!("result" in parsed)) throw new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`);
+  return parsed.result;
+}
+
+// src/index-service.ts
+var IndexRefusalError = class extends Error {
+  constructor(reason, message, cause) {
+    super(message);
+    this.reason = reason;
+    this.name = "IndexRefusalError";
+    if (cause !== void 0) this.cause = cause;
+  }
+};
+
+// src/agent/connection.ts
+var CONTRACT_API_VERSIONS = [1, 2];
+function indexAgeMinutes(generatedAt, now) {
+  if (generatedAt === null) return null;
+  const age = now.getTime() - Date.parse(generatedAt);
+  return Number.isFinite(age) && age >= 0 ? Math.floor(age / 6e4) : null;
+}
+function pluginStatus(enabled, apiVersions) {
+  if (enabled === false) return "off";
+  if (apiVersions === null) return "unknown";
+  return apiVersions.includes(2) ? "ok" : "too-old";
+}
+function compactBbt(bbt) {
+  return {
+    reachable: bbt.reachable,
+    ...bbt.zotero !== void 0 ? { zotero: bbt.zotero } : {},
+    ...bbt.betterbibtex !== void 0 ? { betterbibtex: bbt.betterbibtex } : {},
+    ...bbt.error !== void 0 ? { error: bbt.error } : {},
+    ...bbt.reason !== void 0 ? { reason: bbt.reason } : {}
+  };
+}
+function buildIndex(index, maxAgeMinutes, now) {
+  const ageMinutes = indexAgeMinutes(index.generatedAt, now);
+  return {
+    source: index.source,
+    path: index.path,
+    schemaVersion: index.schemaVersion,
+    generatedAt: index.generatedAt,
+    ageMinutes,
+    count: index.count,
+    complete: index.complete,
+    stale: ageMinutes === null ? null : ageMinutes > maxAgeMinutes,
+    maxAgeMinutes
+  };
+}
+function buildConnection(input) {
+  return {
+    mode: input.mode,
+    obsidian: input.obsidian,
+    ...input.obsidianError !== void 0 ? { obsidianError: input.obsidianError } : {},
+    plugin: { status: pluginStatus(input.pluginEnabled, input.pluginApiVersions), version: input.pluginVersion, apiVersions: input.pluginApiVersions },
+    bbt: compactBbt(input.bbt),
+    index: buildIndex(input.index, input.maxAgeMinutes, input.now),
+    legacyPluginEnabled: input.legacyPluginEnabled,
+    git: input.git === null ? null : { ...input.git }
+  };
+}
+function buildEnvelope(action, vault, apiVersion, connection, now, failure) {
+  return {
+    apiVersion,
+    contract: 2,
+    apiVersions: [...CONTRACT_API_VERSIONS],
+    action,
+    vault,
+    ok: failure === void 0,
+    ...failure !== void 0 ? { reason: failure.reason, message: failure.message } : {},
+    checkedAt: now.toISOString(),
+    connection
+  };
+}
+function staleGate(connection, allowStale) {
+  return connection.index.complete !== true || connection.index.stale === null || !allowStale && connection.index.stale === true;
+}
+function gitWarning(connection) {
+  const git = connection.git;
+  if (git === null || !git.repo) return null;
+  const exposed = [];
+  if (git.indexIgnored === false || git.indexTracked === true) exposed.push(`index file "${connection.index.path}"`);
+  if (git.cacheIgnored === false || git.cacheTracked === true) exposed.push(`cache directory "${CACHE_DIR}/"`);
+  if (exposed.length === 0) return null;
+  return { code: "index-in-git", message: `The vault is a git repository and tracking or ignore rules expose the ${exposed.join(" or the ")}; ignore and untrack sensitive files before committing (existing history is unchanged).` };
+}
+function infoWarnings(connection) {
+  const warnings = [];
+  const git = gitWarning(connection);
+  if (git !== null) warnings.push(git);
+  if (connection.legacyPluginEnabled === true) {
+    warnings.push({ code: "legacy-plugin-enabled", message: "The legacy plugin cmds-link-zotero is enabled; disable it before refreshing or applying changes with cmds-zotero." });
+  }
+  if (connection.index.stale === true) {
+    warnings.push({ code: "index-stale", message: `The index is ${connection.index.ageMinutes ?? 0} minutes old (limit ${connection.index.maxAgeMinutes}); run refresh or pass --allow-stale.` });
+  }
+  return warnings;
+}
+
+// src/agent/types.ts
+function noteRef(vault, path) {
+  const basename3 = path.split("/").pop()?.replace(/\.md$/i, "") ?? path;
+  return { path, basename: basename3, uri: obsidianOpenURI(vault, path) };
+}
+var HUB_IDENTITY_KEYS = ["citekey", "citekeyProvisional", "doi", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
+var HUB_WRITABLE_KEYS = ["citekeyProvisional", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
+var LEGACY_LITERATURE_KEYS = ["zotero-id", "zotero-library-id", "zoteroItemKey", "zoteroLibraryID", "zoteroLibraryType", "zoteroGroupID"];
+var ZOTERO_NOTE_TYPES = ["zotero", "paper-hub", "paper-analysis", "raw-source", "literature-zotero"];
+
+// src/note-aliases.ts
+var FOREIGN_LINK = /\b(?:bookends|x-devonthink-item):\/\//;
+function typeOf(frontmatter) {
+  return typeof frontmatter.type === "string" ? frontmatter.type.trim() : "";
+}
+function isZoteroType(type) {
+  return ZOTERO_NOTE_TYPES.includes(type);
+}
+function hasForeignIdentity(frontmatter) {
+  if (!frontmatter) return false;
+  const bookends = frontmatter.bookendsID;
+  if (bookends !== void 0 && bookends !== null && bookends !== "") return true;
+  const type = typeOf(frontmatter);
+  if (type) return !isZoteroType(type);
+  for (const value of Object.values(frontmatter)) {
+    for (const item of Array.isArray(value) ? value : [value]) if (typeof item === "string" && FOREIGN_LINK.test(item)) return true;
+  }
+  return false;
+}
+function citekeyEvidenceAllowed(basename3, frontmatter) {
+  return basename3.startsWith("@") || frontmatter !== void 0 && isZoteroType(typeOf(frontmatter));
+}
+function selectIdentity(uri) {
+  if (typeof uri !== "string" || !uri.trim()) return null;
+  try {
+    const parsed = parseZoteroURI(uri.trim());
+    return parsed.action === "select" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 // src/agent/note-classify.ts
 var ITEM_KEY3 = /^[A-Z0-9]{8}$/;
 function comparePath(a, b) {
@@ -8068,13 +8256,19 @@ function buildMatcher(entry, hints, index, options) {
   const folder = text(options.outputFolder).replace(/^\/+|\/+$/g, "");
   return { entry, keys, keysCi, doi, arxiv, zotLitKey, outputFolder: folder };
 }
+function selectMatches(uri, entry) {
+  const select = selectIdentity(uri);
+  return select !== null && select.itemKey === entry.itemKey && select.libraryType === entry.libraryType && select.groupID === entry.groupID;
+}
 function matches(note, kind, m) {
   const fm = note.frontmatter;
   if (!fm) return false;
   const zoteroID = text(fm.zoteroID);
   if (m.entry && zoteroID && zoteroID === m.entry.id) return true;
-  const citekey = noteCitekey(note);
-  if (citekey && (m.keys.has(citekey) || m.keysCi.has(citekey.toLowerCase()))) return true;
+  if (hasForeignIdentity(fm)) return false;
+  if (m.entry && selectMatches(fm.zoteroSelectURI, m.entry)) return true;
+  const citekey = noteCitekey(note) || (note.basename.startsWith("@") ? note.basename.slice(1) : "");
+  if (citekeyEvidenceAllowed(note.basename, fm) && citekey && (m.keys.has(citekey) || m.keysCi.has(citekey.toLowerCase()))) return true;
   if (kind === "hub" || kind === "raw") {
     if (m.doi && noteDoi(note) === m.doi) return true;
     if (kind === "hub" && m.arxiv && noteArxiv(note) === m.arxiv) return true;
@@ -8748,7 +8942,9 @@ var DIAGNOSTIC_CODES2 = {
   "citekey-ambiguous": "error",
   "legacy-plugin-enabled": "error",
   "index-stale": "info",
-  "index-in-git": "warning"
+  "index-in-git": "warning",
+  "legacy-frontmatter-dialect": "info"
+  // 0.5 R14
 };
 function diagnostic(code, message, extra = {}) {
   const result = { code, severity: DIAGNOSTIC_CODES2[code], message };
@@ -8777,7 +8973,9 @@ var HUB_FINDINGS = [
   "index-stale",
   "index-incomplete",
   "raw-source-path",
-  "frontmatter-parse-error"
+  "frontmatter-parse-error",
+  "legacy-frontmatter-dialect"
+  // 0.5 R14: report-only, literature notes carrying pre-0.5 keys
 ];
 var APPLY_ELIGIBLE_FINDINGS = ["missing-zoteroID", "missing-zoteroSelectURI", "missing-zoteroStatus", "missing-zoteroCheckedAt", "citekeyProvisional-absent"];
 var DESYNC_FINDINGS = ["malformed-identity", "identity-conflict", "zoteroID-mismatch", "s01-says-unregistered", "citekeyProvisional-absent", "zoteroStatus-stale"];
@@ -8840,7 +9038,7 @@ function folderBasename(path) {
   const parts = path.split("/");
   return parts.length >= 2 ? stringValue(parts[parts.length - 2]) : void 0;
 }
-function selectIdentity(uri) {
+function selectIdentity2(uri) {
   if (!uri) return null;
   try {
     const parsed = parseZoteroURI(uri);
@@ -8900,7 +9098,7 @@ function resolveHub(note, index) {
   if (zoteroID) {
     for (const entry of entries) if (entry.id === zoteroID) hits.push({ entry, via: "zoteroID" });
   }
-  const select = selectIdentity(stringValue(frontmatter.zoteroSelectURI));
+  const select = selectIdentity2(stringValue(frontmatter.zoteroSelectURI));
   if (select) {
     for (const entry of entries) {
       if (entry.itemKey === select.itemKey && entry.libraryType === select.libraryType && entry.groupID === select.groupID) hits.push({ entry, via: "zoteroSelectURI" });
@@ -8932,7 +9130,7 @@ function observeIdentity(note) {
     doi: field("doi", (value) => typeof value === "string" && (value === "" || normalizeDoi(value) !== "")),
     citekeyProvisional: field("citekeyProvisional", (value) => typeof value === "boolean"),
     zoteroID: field("zoteroID", (value) => typeof value === "string" && /^[1-9]\d*:[A-Z0-9]{8}$/.test(value.trim())),
-    zoteroSelectURI: field("zoteroSelectURI", (value) => typeof value === "string" && selectIdentity(value.trim()) !== null),
+    zoteroSelectURI: field("zoteroSelectURI", (value) => typeof value === "string" && selectIdentity2(value.trim()) !== null),
     zoteroStatus: field("zoteroStatus", (value) => typeof value === "string" && ["resolved", "not-found", "unavailable", "ambiguous"].includes(value.trim())),
     zoteroCheckedAt: field("zoteroCheckedAt", (value) => typeof value === "string" && Number.isFinite(Date.parse(value)))
   };
@@ -9132,7 +9330,33 @@ function noteType(note) {
   if (isRawSourcePath(note.path) && frontmatter.type === "raw-source" && stringValue(frontmatter.citekey)) return "raw-source";
   if (frontmatter.type === "paper-hub") return "paper-hub";
   if (frontmatter.type === "raw-source" && stringValue(frontmatter.citekey)) return "raw-source";
+  if (frontmatter.type === "zotero" && legacyLiteratureKeys(frontmatter).length) return "literature";
   return null;
+}
+function legacyLiteratureKeys(frontmatter) {
+  return LEGACY_LITERATURE_KEYS.filter((key) => key in frontmatter);
+}
+function legacyLiteratureNote(note, index) {
+  const keys = legacyLiteratureKeys(note.frontmatter ?? {});
+  const resolution = resolveHub(note, index);
+  const entry = resolution.entry;
+  return {
+    path: note.path,
+    type: "literature",
+    citekey: resolution.citekey,
+    resolvedVia: resolution.resolvedVia,
+    classification: "unchecked",
+    findings: [finding("legacy-frontmatter-dialect", `Literature note carries pre-0.5 keys (${keys.join(", ")}); frontmatter is user-owned and is not rewritten. zoteroID remains the only identity key agents may rely on.`, keys.join(", "))],
+    index: entry ? { id: entry.id, citekey: entry.citekey, citekeyShape: citekeyShape(entry.citekey), hasPdf: hasPdf(entry) } : null,
+    observed: observeIdentity(note),
+    identityEvidence: resolution.evidence,
+    candidateIDs: resolution.candidates.map((candidate2) => candidate2.id),
+    proposalEligible: false,
+    proposed: null,
+    proposedS01: null,
+    applied: false,
+    skippedReason: "not-paper-hub"
+  };
 }
 function emptySummary() {
   return { registeredConsistent: 0, registeredDesynced: 0, registeredUnpinned: 0, provisionalNowRegistered: 0, unregisteredFlagged: 0, unregisteredUnflagged: 0, ambiguous: 0, unchecked: 0 };
@@ -9180,6 +9404,7 @@ function parseErrorNote(note) {
 }
 function reconcileNote(note, type, index, vault, opts) {
   if (type === "parse-error") return parseErrorNote(note);
+  if (type === "literature") return legacyLiteratureNote(note, index);
   const resolution = resolveHub(note, index);
   const verdict2 = classifyHub(note, resolution, opts.stale, opts.allowStale);
   const hub = type === "paper-hub";
@@ -9241,6 +9466,15 @@ function noteDiagnostics(note) {
   }
   return diagnostics;
 }
+var LEGACY_DIALECT_SAMPLE = 5;
+function legacyDialectDiagnostic(notes) {
+  const paths = notes.filter((note) => note.type === "literature").map((note) => note.path);
+  if (!paths.length) return null;
+  const sample = paths.slice(0, LEGACY_DIALECT_SAMPLE);
+  const rest = paths.length - sample.length;
+  const plural = paths.length === 1 ? "note carries" : "notes carry";
+  return diagnostic("legacy-frontmatter-dialect", `${paths.length} literature ${plural} pre-0.5 frontmatter keys; frontmatter is user-owned and is not rewritten. zoteroID remains the only identity key agents may rely on. Sample: ${sample.join(", ")}${rest ? ` (+${rest} more)` : ""}`, { path: sample[0] });
+}
 function reconcileNotes(notes, index, vault, opts) {
   const folders = normalizeFolders(opts.folders);
   const summary = emptySummary();
@@ -9254,16 +9488,19 @@ function reconcileNotes(notes, index, vault, opts) {
     if (!type || !inFolders(note.path, folders)) continue;
     if (type === "paper-hub") hubs += 1;
     else if (type === "raw-source") rawSources += 1;
-    else parseErrors += 1;
+    else if (type === "parse-error") parseErrors += 1;
     const result = reconcileNote(note, type, index, vault, opts);
     if (type === "paper-hub") summary[SUMMARY_KEY[result.classification]] += 1;
     results.push(result);
     diagnostics.push(...noteDiagnostics(result));
   }
+  const legacyDialect = legacyDialectDiagnostic(results);
+  if (legacyDialect) diagnostics.push(legacyDialect);
   return { folders, scanned: { hubs, rawSources, parseErrors }, notes: results, summary: { hubs: summary }, diagnostics };
 }
 
 // src/pdf/cache.ts
+import { createHash as createHash2 } from "node:crypto";
 var PDF_TEXT_CACHE_DIR = ".cmds-zotero/pdf-text";
 var MAX_CACHE_BYTES = 32 * 1024 * 1024;
 var CACHE_SCHEMA = {
@@ -9272,9 +9509,17 @@ var CACHE_SCHEMA = {
 };
 var ATTACHMENT_KEY = /^[A-Z0-9]{8}$/;
 var SHA256 = /^[0-9a-f]{64}$/;
-var CACHE_NAME = /^(?:(user|group)-([1-9]\d*)-([A-Z0-9]{8})|file)-([0-9a-f]{16})\.json$/;
+var CACHE_NAME = /^(?:(user|group)-([1-9]\d*)-([A-Z0-9]{8})|file-([0-9a-f]{16}))-([0-9a-f]{16})\.json$/;
+function normalizeVaultPath(path) {
+  return path.split("/").filter((part) => part !== "" && part !== ".").join("/");
+}
+function filePathHash(path) {
+  const normalized = typeof path === "string" ? normalizeVaultPath(path) : "";
+  if (!normalized) throw new Error("Invalid vault path for the PDF text cache");
+  return createHash2("sha256").update(normalized).digest("hex").slice(0, 16);
+}
 function cachePrefix(scope) {
-  if (scope.kind === "file") return "file";
+  if (scope.kind === "file") return `file-${filePathHash(scope.path)}`;
   if (scope.libraryType !== "user" && scope.libraryType !== "group") throw new Error("Invalid library type for the PDF text cache");
   if (!Number.isSafeInteger(scope.libraryID) || scope.libraryID < 1) throw new Error("Invalid library ID for the PDF text cache");
   if (!ATTACHMENT_KEY.test(scope.attachmentKey)) throw new Error("Invalid attachment key for the PDF text cache");
@@ -9283,8 +9528,8 @@ function cachePrefix(scope) {
 function parseCacheName(name) {
   const match = CACHE_NAME.exec(name);
   if (!match) return null;
-  const sha16 = match[4];
-  if (!match[1]) return { scope: { kind: "file" }, prefix: "file", sha16 };
+  const sha16 = match[5];
+  if (!match[1]) return { scope: { kind: "file", pathHash: match[4] }, prefix: `file-${match[4]}`, sha16 };
   const libraryID = Number(match[2]);
   if (!Number.isSafeInteger(libraryID) || libraryID < 1) return null;
   const scope = { kind: "attachment", libraryType: match[1], libraryID, attachmentKey: match[3] };
@@ -9475,7 +9720,7 @@ function locateBatch(pages, quotes, attachment) {
 }
 
 // src/agent/actions.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 var MAX_CITES_FILES = 2e3;
 var AGENT_ACTIONS = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate"];
 var ACTION_API_VERSION = {
@@ -9580,13 +9825,15 @@ async function identityAction(host, request) {
   const style = request.style ?? host.settings.bibliographyStyle;
   let bibliography = null;
   let bibliographyReason = request.noBibliography ? "disabled" : host.bibliographyReason ?? void 0;
+  let bbtError = null;
   if (!request.noBibliography && entry && host.bibliography) {
     try {
       const text3 = await host.bibliography(entry, style);
       if (text3) bibliography = { style, text: text3 };
       else bibliographyReason = "style-error";
-    } catch {
+    } catch (error) {
       bibliographyReason = "bbt-unreachable";
+      bbtError = bbtErrorPayload(error);
     }
   }
   const unavailableReason = withheld ? "stale-index" : outcome.status === "unavailable" ? outcome.message : void 0;
@@ -9613,6 +9860,7 @@ async function identityAction(host, request) {
     callout: callout(status, frontmatter.citekey ?? "", frontmatter.zoteroCheckedAt, citekeyCheck?.pinInstruction ?? null, { citekeyCurrent, candidateCount: outcome.status === "ambiguous" ? outcome.candidates.length : void 0, unavailableReason }),
     bibliography,
     ...bibliographyReason && !bibliography ? { bibliographyReason } : {},
+    ...bibliographyReason && !bibliography && bbtError ? { bbtError } : {},
     pdf,
     citekeyCheck,
     identityKeys: [...HUB_IDENTITY_KEYS],
@@ -9623,13 +9871,20 @@ function emptyEntry() {
   return { id: "0:AAAAAAAA", libraryID: 1, libraryType: "user", itemKey: "AAAAAAAA", citekey: "", citekeyHistory: [], title: "", authors: [], year: "", doi: "", url: "", collections: [], tags: [], attachmentPath: "", zoteroSelectURI: "", attachments: [], attachmentStatus: "unavailable", contentHash: "", metadata: {} };
 }
 function toRefMaps(indexes, vault) {
-  const convert = (source) => new Map([...source].map(([key, records]) => [key, records.map((record2) => ({ path: record2.path, basename: record2.basename, uri: `obsidian://open?${new URLSearchParams({ vault, file: record2.path }).toString()}` }))]));
+  const convert = (source) => new Map([...source].map(([key, records]) => [key, records.map((record2) => noteRef(vault, record2.path))]));
   return { hubByCitekey: convert(indexes.hubByCitekey), rawByCitekey: convert(indexes.rawByCitekey), hubByDoi: convert(indexes.hubByDoi), rawByDoi: convert(indexes.rawByDoi), skipped: indexes.skipped };
 }
-async function notesUnder(host, path, recursive) {
+function findNote(notes, path) {
   const clean = path.replace(/^\/+|\/+$/g, "");
-  const all = await host.reader.listNotes();
-  const exact = all.find((note) => note.path === clean || note.path === `${clean}.md`);
+  return notes.find((note) => note.path === clean || note.path === `${clean}.md`) ?? null;
+}
+function outsideVault(path) {
+  return /^[a-z]+:/i.test(path) || path.includes("\\") || path.includes("\0") || path.split("/").some((part) => part === "..");
+}
+async function notesUnder(host, path, recursive, listed) {
+  const clean = path.replace(/^\/+|\/+$/g, "");
+  const all = listed ?? await host.reader.listNotes();
+  const exact = findNote(all, clean);
   if (exact) return { notes: [exact], truncated: false, isFile: true };
   const prefix = clean ? `${clean}/` : "";
   const inside = all.filter((note) => note.path.startsWith(prefix) && (recursive || !note.path.slice(prefix.length).includes("/")));
@@ -9642,9 +9897,9 @@ async function citesAction(host, request) {
   const forcedEvidenceGate = host.connection.index.complete !== true || host.connection.index.stale === null;
   const stale = forcedEvidenceGate || host.connection.index.stale === true;
   const allowStaleNegative = request.allowStale === true && !forcedEvidenceGate;
-  const { notes: targets, truncated, isFile } = await notesUnder(host, request.path, request.recursive === true);
-  if (!targets.length && !isFile) return { ...envelope(host, "cites", 2, { reason: "path-outside-vault", message: `No Markdown notes found at ${request.path}.` }) };
   const all = await host.reader.listNotes();
+  const { notes: targets, truncated, isFile } = await notesUnder(host, request.path, request.recursive === true, all);
+  if (!targets.length && !isFile) return { ...envelope(host, "cites", 2, { reason: "path-outside-vault", message: `No Markdown notes found at ${request.path}.` }) };
   const indexes = buildNoteIndexes(all);
   const lookups = toRefMaps(indexes, host.vault);
   const scan = scanOf(host);
@@ -9657,22 +9912,26 @@ async function citesAction(host, request) {
   const keys = keysForFiles(files);
   let references = null;
   let referencesReason;
+  let bbtError = null;
   if (request.bibliography) {
     const bibliography = /* @__PURE__ */ new Map();
     const hubFull = /* @__PURE__ */ new Map();
     const style = request.style ?? host.settings.bibliographyStyle;
     const byId = new Map(view.index.entries.map((entry) => [entry.id, entry]));
+    let bbtDown = false;
     for (const key of allKeys) {
       const verdict2 = verdicts.get(key);
       if (!verdict2) continue;
-      if (verdict2.citeStatus === "resolved" && verdict2.entryId && host.bibliography) {
+      if (verdict2.citeStatus === "resolved" && verdict2.entryId && host.bibliography && !bbtDown) {
         const entry = byId.get(verdict2.entryId);
         if (entry) {
           try {
             const text3 = await host.bibliography(entry, style);
             if (text3) bibliography.set(key, text3);
-          } catch {
+          } catch (error) {
             referencesReason = "bbt-unreachable";
+            bbtError = bbtErrorPayload(error) ?? bbtError;
+            if (bbtError && ["connection-refused", "timeout", "http-404"].includes(bbtError.reason)) bbtDown = true;
           }
         }
       } else if (verdict2.citeStatus === "resolved" && !host.bibliography) referencesReason = host.bibliographyReason ?? "offline";
@@ -9684,12 +9943,12 @@ async function citesAction(host, request) {
     references = referencesPayload(allKeys, verdicts, bibliography, hubFull);
   }
   const diagnostics = citesDiagnostics(files);
-  return { ...envelope(host, "cites", 2), files, keys, references, ...referencesReason ? { referencesReason } : {}, summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
+  return { ...envelope(host, "cites", 2), files, keys, references, ...referencesReason ? { referencesReason } : {}, ...referencesReason && bbtError ? { bbtError } : {}, summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
 }
-async function reconcileDryRun(host, request) {
+async function reconcileDryRun(host, request, listedNotes) {
   const view = host.indexView;
   const stale = view ? host.connection.index.complete !== true || host.connection.index.stale !== false : true;
-  const listed = await host.reader.listNotes();
+  const listed = listedNotes ?? await host.reader.listNotes();
   const notes = [];
   for (const note of listed) {
     const kind = noteKind(note);
@@ -9701,7 +9960,7 @@ async function reconcileDryRun(host, request) {
   const sourceByPath = new Map(notes.filter((note) => note.body !== void 0).map((note) => [note.path, note.body]));
   for (const note of result.notes) {
     const source = sourceByPath.get(note.path);
-    if (source !== void 0) note.sourceHash = createHash2("sha256").update(source).digest("hex");
+    if (source !== void 0) note.sourceHash = createHash3("sha256").update(source).digest("hex");
   }
   return { result, view, stale };
 }
@@ -9766,7 +10025,7 @@ async function diagnosticsAction(host, request) {
   const diagnostics = [...view.index.diagnostics];
   const listed = await host.reader.listNotes();
   for (const note of listed) if (note.frontmatter?.citekeyProvisional === true) diagnostics.push({ code: "provisional-citekey", severity: "warning", message: `Provisional citekey: ${note.path}. Pin it in Zotero; do not rename the note automatically.`, path: note.path });
-  const { result } = await reconcileDryRun(host, { allowStale: request.allowStale });
+  const { result } = await reconcileDryRun(host, { allowStale: request.allowStale }, listed);
   diagnostics.push(...result.diagnostics);
   const citing = listed.filter((note) => typeof note.frontmatter?.type === "string" && ["research-question", "synthesis"].includes(note.frontmatter.type));
   if (citing.length) {
@@ -9791,7 +10050,7 @@ async function locateTarget(host, request, citekeyFromNote) {
   if (request.file) {
     const hash = await host.pdfCache.fileHash(request.file);
     if (!hash) return { failure: { reason: "path-outside-vault", message: `PDF not found inside the vault: ${request.file}` } };
-    const prefix2 = cachePrefix({ kind: "file" });
+    const prefix2 = cachePrefix({ kind: "file", path: request.file });
     return { target: { item: null, attachment: { key: null, openURI: null, path: request.file }, prefix: prefix2, exactName: `${prefix2}-${hash.sha256.slice(0, 16)}.json`, localPath: hash.absolutePath } };
   }
   if (!host.indexView) return { failure: host.indexFailure ?? { reason: "index-missing", message: "No validated Zotero index is available." } };
@@ -9850,10 +10109,12 @@ async function locateAction(host, request) {
   let quotes = [];
   let citekeyFromNote = null;
   if (request.path) {
-    const body = await host.reader.readNote(request.path);
-    const notes = await host.reader.listNotes();
-    const note = notes.find((candidate2) => candidate2.path === request.path || candidate2.path === `${request.path}.md`);
-    const fmKey = typeof note?.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;
+    const cleanPath = request.path.replace(/^\/+|\/+$/g, "");
+    if (outsideVault(cleanPath)) return { ...envelope(host, "locate", 2, { reason: "path-outside-vault", message: `Note path is outside the vault: ${request.path}` }) };
+    const note = findNote(await host.reader.listNotes(), cleanPath);
+    if (!note) return { ...envelope(host, "locate", 2, { reason: "invalid-request", message: `Note not found: ${request.path}` }) };
+    const body = await host.reader.readNote(note.path);
+    const fmKey = typeof note.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;
     if (request.citekey && fmKey && request.citekey !== fmKey) throw new Error(`--citekey ${request.citekey} disagrees with the note's citekey ${fmKey}.`);
     citekeyFromNote = fmKey;
     quotes = extractQuoteCallouts(body).map((item) => ({ line: item.line, quote: item.quote }));
@@ -9939,7 +10200,14 @@ async function connectionAction(host) {
 }
 async function refreshAction(host, request) {
   if (!host.refresh) return { ...envelope(host, "refresh", 1, { reason: "requires-obsidian", message: "refresh requires the live Obsidian host." }), status: "unavailable" };
-  const outcome = await host.refresh(request);
+  let outcome;
+  try {
+    outcome = await host.refresh(request);
+  } catch (error) {
+    if (!(error instanceof IndexRefusalError)) throw error;
+    const bbtError = bbtErrorPayload(error.cause);
+    return { ...envelope(host, "refresh", 1, { reason: error.reason, message: error.message }), ...bbtError ? { bbtError } : {}, status: "unavailable" };
+  }
   const view = outcome.host.indexView;
   if (!view) {
     const checked = requireIndex(outcome.host, "refresh", 1);
@@ -9986,47 +10254,6 @@ async function runAction(host, action, request = {}) {
     case "locate":
       return locateAction(host, request);
   }
-}
-
-// src/api/transport.ts
-import * as http from "http";
-import * as https from "https";
-import * as timers from "timers";
-function httpRequest(rawURL, timeoutMs, body, signal) {
-  return new Promise((resolve3, reject) => {
-    const url = new URL(rawURL);
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid BBT endpoint");
-    if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 3e5) throw new Error("Invalid request timeout");
-    const transport = url.protocol === "https:" ? https : http;
-    const request = transport.request(url, { signal, method: body === void 0 ? "GET" : "POST", headers: body === void 0 ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, (response) => {
-      const chunks = [];
-      let size = 0;
-      response.on("data", (chunk) => {
-        size += chunk.length;
-        if (size > 64 * 1024 * 1024) {
-          request.destroy(new Error("BBT response exceeds 64 MiB limit"));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      response.on("error", reject);
-      response.on("aborted", () => reject(new Error("BBT response aborted")));
-      response.on("end", () => resolve3({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
-    });
-    const timer = timers.setTimeout(() => request.destroy(new Error("BBT request timed out")), timeoutMs);
-    request.on("close", () => timers.clearTimeout(timer));
-    request.on("error", reject);
-    request.end(body);
-  });
-}
-async function rpc(endpoint, method, params, timeoutMs, signal) {
-  const response = await httpRequest(`${endpoint.replace(/\/$/, "")}/json-rpc`, timeoutMs, JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal);
-  if (response.status !== 200) throw new Error(`BBT HTTP ${response.status} for ${method}`);
-  const parsed = JSON.parse(response.text);
-  if (!record(parsed) || parsed.jsonrpc !== "2.0" || parsed.id !== 1) throw new Error(`Invalid BBT RPC envelope for ${method}`);
-  if ("error" in parsed) throw new Error(`BBT RPC error for ${method}`);
-  if (!("result" in parsed)) throw new Error(`Missing BBT RPC result for ${method}`);
-  return parsed.result;
 }
 
 // src/types.ts
@@ -10393,7 +10620,28 @@ async function probeGit(root, indexPath) {
   return result;
 }
 
+// src/pdf/file-hash.ts
+import { createHash as createHash4 } from "node:crypto";
+var MAX_LOCAL_PDF_BYTES = 64 * 1024 * 1024;
+var PDF_MAGIC = ["255044462d"];
+async function hashLocalPdf(absolutePath, maxBytes = MAX_LOCAL_PDF_BYTES) {
+  try {
+    const bytes = (await readLocalFile(absolutePath, { maxBytes, minBytes: 5, magic: PDF_MAGIC, label: "PDF" })).bytes;
+    return { sha256: createHash4("sha256").update(bytes).digest("hex"), absolutePath };
+  } catch (error) {
+    if (error instanceof LocalFileError && (error.code === "too-large" || error.code === "bad-magic")) throw error;
+    return null;
+  }
+}
+
 // src/cli/core.ts
+function pluginApiVersionsFor(version) {
+  const match = version ? /^(\d+)\.(\d+)(?:\.|$|-|\+)/.exec(version.trim()) : null;
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 0 || minor >= 4 ? [1, 2] : [1];
+}
 async function readIndex(root, path) {
   let full;
   try {
@@ -10432,15 +10680,13 @@ function cacheReader(reader) {
       }
     },
     fileHash: async (path) => {
+      let full;
       try {
-        const full = await reader.resolveInside(path);
-        const stat = await fs4.lstat(full);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 * 1024) return null;
-        const bytes = (await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 5, magic: ["255044462d"], label: "PDF" })).bytes;
-        return { sha256: createHash3("sha256").update(bytes).digest("hex"), absolutePath: full };
+        full = await reader.resolveInside(path);
       } catch {
         return null;
       }
+      return hashLocalPdf(full);
     }
   };
 }
@@ -10483,7 +10729,7 @@ async function offlineHost(input, action) {
     obsidian: "unavailable",
     ...input.obsidianError ? { obsidianError: input.obsidianError } : {},
     pluginVersion: version,
-    pluginApiVersions: version === "0.4.0" ? [1, 2] : version && /^0\.[0-3]\./.test(version) ? [1] : null,
+    pluginApiVersions: pluginApiVersionsFor(version),
     pluginEnabled: enabled === null ? settingsPresent ? null : false : enabled.includes("cmds-zotero"),
     bbt,
     index: { source: loaded.index ? "offline-file" : "none", path: settings.zoteroIndexPath, generatedAt: loaded.index?.generatedAt ?? null, count: loaded.index?.count ?? null, complete: loaded.index?.complete ?? null, schemaVersion: loaded.index?.schemaVersion ?? null },
@@ -10517,10 +10763,11 @@ async function runAction2(input) {
     return await runAction(host, action, input.request ?? {});
   } catch (error) {
     const message = error instanceof Error ? error.message : "Offline action failed.";
-    const reason = /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
+    const reason = error instanceof LocalFileError ? error.code === "too-large" ? "pdf-too-large" : "pdf-invalid" : /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
     return { ...buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, host.now, { reason, message }), ...ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {} };
   }
 }
 export {
+  pluginApiVersionsFor,
   runAction2 as runAction
 };
