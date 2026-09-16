@@ -49,6 +49,12 @@ with `refusedMessage` (`bbt-unreachable` only for a typed transport error); a st
 The plugin's human status line derives freshness from the same `ageMinutes`/`stale` math and reports the last real BBT
 call, so the UI and the CLI agree on freshness; its wording is UI copy, not part of this contract.
 
+Bibliography text in `identity` and `cites` payloads may be served from the live plugin's write-through sidecar
+(`.cmds-zotero/bibliography.json`, keyed by style, entry id, entry `contentHash` and Better BibTeX version) without a BBT
+call (0.5); such text is byte-identical to what BBT rendered for that content hash and style, and the payload does not
+distinguish it. `bibliographyReason: bbt-unreachable` with `bbtError` therefore means neither a live answer nor a cached
+rendering existed. The sidecar is never filled at refresh time and the offline CLI never reads it.
+
 Existing implicit refresh in read-only legacy operations is intentionally removed.
 The read-only wrapper must not call an old host that might refresh on a read.
 New CLI clients may use the offline core for old-host read-only capabilities; unsupported live writes fail explicitly.

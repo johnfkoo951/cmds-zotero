@@ -146,3 +146,11 @@ mark.cmds-zotero-hl-magenta { background: rgba(229, 110, 238, 0.45); }
 mark.cmds-zotero-hl-orange { background: rgba(241, 152, 55, 0.45); }
 mark.cmds-zotero-hl-gray { background: rgba(170, 170, 170, 0.45); }
 mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius: 2px; }
+
+/* 0.5 R12: provenance tag on a reference row whose text is cached or an offline fallback. */
+.cmds-zotero-reference-tag {
+	margin-left: 0.4em;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+}

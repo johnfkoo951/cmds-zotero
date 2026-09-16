@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { privateIgnoreCoversAll } from "./agent/git-ignore";
 import type { IndexStorage } from "./types";
+import { BIBLIOGRAPHY_SIDECAR, type BibliographyStorage } from "./bibliography-store"; // 0.5 R12
 
 export function relativePath(value: string): string {
 	if (!value || value.includes("\\") || value.includes("\0") || /^[a-z]+:/i.test(value) || value.startsWith("/")) {
@@ -140,4 +141,23 @@ export class VaultIndexStorage implements IndexStorage {
 			console.debug("CMDS Zotero: could not prune index backups", error);
 		}
 	}
+}
+
+// 0.5 R12: the bibliography sidecar lives in the plugin's private directory; reads never write, writes keep the private ignore.
+/** Text storage for `.cmds-zotero/bibliography.json`; `canWrite` guards a late write after the host was reconfigured. */
+export function bibliographySidecarStorage(app: App, canWrite: () => boolean = () => true): BibliographyStorage {
+	const adapter = app.vault.adapter;
+	return {
+		read: async () => {
+			await assertVaultBoundary(app, BIBLIOGRAPHY_SIDECAR);
+			return (await adapter.exists(BIBLIOGRAPHY_SIDECAR)) ? adapter.read(BIBLIOGRAPHY_SIDECAR) : null;
+		},
+		write: async text => {
+			if (!canWrite()) return;
+			await assertVaultBoundary(app, BIBLIOGRAPHY_SIDECAR);
+			await ensureCmdsIgnore(app);
+			if (!canWrite()) return;
+			await adapter.write(BIBLIOGRAPHY_SIDECAR, text);
+		},
+	};
 }

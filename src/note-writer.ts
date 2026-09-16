@@ -8,6 +8,8 @@ export const hashText = (text: string): string => createHash("sha256").update(te
 export const ownerMarker = (id: string): string => `<!-- cmds-zotero-owner:${hashText(id)} -->`;
 export interface ImagePlan { source: string; path: string }
 export interface RenderedNote { content: string; conflicts: string[]; images: ImagePlan[] }
+/** 0.5 R12: a first import needs live bibliography text; the placeholder `Bibliography unavailable.` is no longer written. */
+export const BIBLIOGRAPHY_REQUIRED_MESSAGE = "Zotero must be running for the first import of this item (no bibliography text is available offline).";
 export interface RenderContext {
 	/** Citekeys of related Zotero items that are present in the index. */
 	related?: string[];
@@ -257,7 +259,11 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 
 	const abstract = textFromHTML(entry.metadata.abstractNote);
 	sections.set("overview", [`# ${inline(entry.title)}`, abstract ? quoted(`[!Abstract]\nabstract:: ${abstract}`) : ""].filter(Boolean).join("\n\n"));
-	sections.set("citation", quoted(`[!Cite]\n${bibliographyText(bibliography) || "Bibliography unavailable."}`));
+	// 0.5 R12: without bibliography text an owned note keeps its `citation` section byte-identical (the section is simply
+	// not re-rendered); a new note is refused rather than written with a placeholder.
+	const citation = bibliographyText(bibliography);
+	if (citation) sections.set("citation", quoted(`[!Cite]\n${citation}`));
+	else if (previous === null) throw new Error(BIBLIOGRAPHY_REQUIRED_MESSAGE);
 
 	const fields: [string, string][] = [];
 	for (const creator of creators) fields.push([creator.role.charAt(0).toUpperCase() + creator.role.slice(1), inline(creator.name)]);

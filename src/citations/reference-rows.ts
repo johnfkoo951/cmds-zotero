@@ -1,6 +1,7 @@
 import type { ZoteroIndexEntry } from "../types";
 import { scanCitations } from "./scan";
 import { formatIndexAge } from "../index-service";
+import type { BibliographyDetail } from "../bibliography-store"; // 0.5 R12
 
 /** `unchecked`: no index snapshot is loaded, so the row makes no claim about the citekey. */
 export type ReferenceStatus = "resolved" | "ambiguous" | "not-found" | "unchecked";
@@ -51,4 +52,38 @@ export function referenceRowText(row: ReferenceRow, state: SnapshotState): strin
 	if (row.status === "not-found" && state.stale) return `@${row.citekey} is not in the saved index (${formatIndexAge(state.ageMinutes)} old); refresh to confirm.`;
 	if (row.status === "not-found") return `@${row.citekey} is not in the literature index. Refresh the index or check the key.`;
 	return `@${row.citekey}`;
+}
+
+// 0.5 R12: offline bibliography — where a row's text came from, and the copy Notice that says so.
+
+/** Short row tag for a text that did not come from a live BBT call; null for live text. */
+export function bibliographySourceTag(detail: Pick<BibliographyDetail, "source" | "renderedAt">): string | null {
+	if (detail.source === "cached") {
+		const day = detail.renderedAt && Number.isFinite(Date.parse(detail.renderedAt)) ? ` ${detail.renderedAt.slice(0, 10)}` : "";
+		return `cached${day}`;
+	}
+	if (detail.source === "fallback") return "offline: author-year fallback";
+	return null;
+}
+
+/** Author-year line used when no bibliography text is available (also the row text before BBT answers). */
+export function fallbackCitation(entry: Pick<ZoteroIndexEntry, "authors" | "year" | "title">): string {
+	return `${entry.authors.slice(0, 3).join(", ")}${entry.authors.length > 3 ? " et al." : ""} (${entry.year || "n.d."}). ${entry.title}`;
+}
+
+export interface BibliographySourceCounts { live: number; cached: number; fallback: number }
+
+export function countBibliographySources(details: Pick<BibliographyDetail, "source">[]): BibliographySourceCounts {
+	const counts: BibliographySourceCounts = { live: 0, cached: 0, fallback: 0 };
+	for (const detail of details) counts[detail.source] += 1;
+	return counts;
+}
+
+/** `Copied 3 entries.` / `Copied 3 entries (2 from cache, 1 fallback; Zotero offline).` */
+export function copyBibliographyNotice(counts: BibliographySourceCounts): string {
+	const total = counts.live + counts.cached + counts.fallback;
+	const label = `Copied ${total} entr${total === 1 ? "y" : "ies"}`;
+	if (!counts.cached && !counts.fallback) return `${label}.`;
+	const parts = [counts.cached ? `${counts.cached} from cache` : "", counts.fallback ? `${counts.fallback} fallback` : ""].filter(Boolean).join(", ");
+	return `${label} (${parts}; Zotero offline).`;
 }
