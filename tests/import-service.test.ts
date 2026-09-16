@@ -10,6 +10,7 @@ import { hashBytes } from "../src/import/images";
 
 // Bundle a synthetic public-API facade; never launch or write into a real vault.
 const facade = `export function parseYaml(input) { return Object.fromEntries(input.split('\\n').map(line => { const i = line.indexOf(':'); return [line.slice(0,i),JSON.parse(line.slice(i+1))]; })); }
+export function normalizePath(p) { return p; }
 export class App {};
 export class TFile { constructor(path) { this.path = path; this.stat = {size: 0}; } }
 export class TFolder { constructor(path) { this.path = path; } }

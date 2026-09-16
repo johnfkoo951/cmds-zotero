@@ -158,6 +158,18 @@ A literature note created by the plugin carries exactly `type: zotero` followed 
 - Duplicate matches never select the first candidate. Multiple hubs return null plus a warning.
 - Malformed YAML, unreadable notes and truncated discovery must be exposed, not silently treated as absent.
 
+### Literature-note managed sections (0.5)
+
+Generated sections of a literature note are delimited by `<!-- cmds-zotero:<id>:<sha256 of body> -->` and
+`<!-- /cmds-zotero:<id> -->` (IDs: `overview`, `citation`, `metadata`, `notes`, `annotation-<attachment>-<annotation>`;
+the set is closed). The variant `<!-- cmds-zotero:<id>:detached -->` … `<!-- /cmds-zotero:<id> -->` marks a block the
+user has detached: agents must treat a detached block as user-owned text — never re-render, edit, re-hash or re-own
+it, and never report it as edited or missing; only an explicit Reset chosen by the user replaces it (after the plugin
+backs the note up under `.cmds-zotero/backups/notes/`). A managed block whose body no longer matches its hash is a
+soft conflict (preserved verbatim; the rest of the note is still written); a missing, duplicate or damaged marker is a
+hard conflict reported per ID with a line number, and the note is not written. Text after an opening marker on the
+same line is moved below the block on the next update. Frontmatter stays outside the marker grammar and user-owned.
+
 ## Evidence availability
 
 Absent, invalid, incomplete or unknown-age/future-dated indexes cannot establish absence.
