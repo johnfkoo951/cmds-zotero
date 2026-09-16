@@ -56,6 +56,12 @@ test("classifyTransportError maps Node codes, abort signals and timeouts; plain 
 	assert.equal(transportReasonOf("not an error"), null);
 	const unknown = classifyTransportError(new Error("BBT export must return a JSON string"), "http://x/json-rpc", 20000);
 	assert.equal(unknown.reason, "invalid-response", "an unrecognised fault of a BBT request is an unusable answer, never a fabricated connection failure");
+	const tls = classifyTransportError(Object.assign(new Error("write EPROTO wrong version number"), { code: "EPROTO" }), "https://x/json-rpc", 20000, "connection-refused");
+	assert.equal(tls.reason, "connection-refused", "a socket-level fault without a listed code takes the socket fallback");
+	assert.equal(tls.code, "EPROTO");
+	assert.equal(bbtObservation(tls), "Zotero/Better BibTeX did not answer at https://x/json-rpc (EPROTO)");
+	const codeless = new BbtTransportError("connection-refused", "http://x/json-rpc", "socket hang up");
+	assert.equal(bbtObservation(codeless), "Zotero/Better BibTeX did not answer at http://x/json-rpc (connection failed)", "no Node code means no claim of a refused connection");
 	const typed = new BbtTransportError("http-404", "http://x/json-rpc", "BBT HTTP 404 for api.ready", { status: 404 });
 	assert.equal(classifyTransportError(typed, "elsewhere", 1), typed, "typed errors pass through unchanged");
 	assert.ok(isBbtTransportError(typed));
@@ -137,7 +143,46 @@ test("httpRequest and rpc throw typed errors for a closed port, a hung server, H
 		assert.equal(abortedError.reason, "aborted");
 		assert.equal(abortedError.endpoint, `${api.endpoint}/slow/json-rpc`, "the query string is not part of the reported endpoint");
 		assert.deepEqual(await rpc(api.endpoint, "api.ready", [], 1000), { zotero: "7", betterbibtex: "7" });
+		// TLS against a plain HTTP listener fails in the socket before any response: a connection fault, not an unusable answer.
+		const tls = await rejection(httpRequest(`https://127.0.0.1:${api.port}/json-rpc`, 1000));
+		assert.ok(isBbtTransportError(tls));
+		assert.equal(tls.reason, "connection-refused");
+		assert.equal(classifyRefreshError(tls), "bbt-unreachable");
 	} finally { await api.close(); }
+	// Zotero closing the connection mid-response is an observation about Zotero, never the plugin's cancellation.
+	const truncating = await serve((_request, response) => { response.writeHead(200, { "Content-Length": "100" }); response.write("{\"partial\":"); response.socket?.destroy(); });
+	try {
+		const cut = await rejection(httpRequest(`${truncating.endpoint}/json-rpc`, 1000));
+		assert.ok(isBbtTransportError(cut));
+		assert.equal(cut.reason, "connection-refused");
+		assert.notEqual(classifyRefreshError(cut), "cancelled");
+		assert.doesNotMatch(cut.message, /aborted by the plugin/);
+	} finally { await truncating.close(); }
+});
+
+test("BbtService observes the whole call: an HTTP 404 picker answer or an unusable readiness answer is a failed outcome", async () => {
+	let readiness: unknown = { zotero: "7", betterbibtex: "7" };
+	const api = await serve((request, response) => {
+		if (request.url?.startsWith("/cayw")) { response.statusCode = 404; response.end("not here"); return; }
+		response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: readiness }));
+	});
+	const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, requestTimeoutMs: 1000 });
+	try {
+		await service.capabilities();
+		assert.equal(service.lastOutcome?.ok, true);
+		await assert.rejects(service.cayw(), (error: unknown) => isBbtTransportError(error) && error.reason === "http-404");
+		assert.equal(service.lastOutcome?.ok, false, "a 404 from the picker is never recorded as ok");
+		assert.equal(service.lastOutcome?.reason, "http-404");
+		assert.equal(service.lastOutcome?.status, 404);
+		readiness = { hello: "world" };
+		await assert.rejects(service.capabilities(), (error: unknown) => isBbtTransportError(error) && error.reason === "invalid-response");
+		assert.equal(service.lastOutcome?.ok, false);
+		assert.equal(service.lastOutcome?.reason, "invalid-response");
+		assert.equal(await service.isReachable(), false);
+		readiness = { zotero: "7", betterbibtex: "7" };
+		assert.equal(await service.isReachable(), true);
+		assert.equal(service.lastOutcome?.ok, true);
+	} finally { service.dispose(); await api.close(); }
 });
 
 test("classifyRefreshError and describeRefreshFailure delegate to the transport classification", () => {

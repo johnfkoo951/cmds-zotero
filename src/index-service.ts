@@ -21,7 +21,11 @@ export type RefreshReason = "forced" | "stale" | "fresh" | "stale-fallback";
  * `failure` classifies a `stale-fallback` cause when it maps to a contract reason (`legacy-plugin-enabled`,
  * `bbt-unreachable`, `timeout`). A collection cancelled by the plugin's own abort carries no `failure`.
  */
-export interface RefreshOutcome { index: ZoteroIndex; refreshed: boolean; reason: RefreshReason; ageMinutesBefore: number | null; error?: string; failure?: FailureReason }
+export interface RefreshOutcome {
+	index: ZoteroIndex; refreshed: boolean; reason: RefreshReason; ageMinutesBefore: number | null; error?: string; failure?: FailureReason;
+	/** 0.5 R4: the raw collection error behind a `stale-fallback` (a typed `BbtTransportError` for transport faults), so hosts rebuild the same refusal a forced request throws. */
+	cause?: unknown;
+}
 
 /** Host-injected precondition consulted before every BBT collection; a refusal is structured so callers can map it. */
 export type CollectPrecondition = () => { ok: true } | { ok: false; reason: "legacy-plugin-enabled"; message: string };
@@ -49,6 +53,16 @@ export function classifyRefreshError(error: unknown): RefreshFailureKind | null 
 		case "connection-refused": case "http-404": return "bbt-unreachable";
 		default: return null;
 	}
+}
+
+/**
+ * 0.5 R4: the error a host raises for a `stale-fallback` outcome — the same `IndexRefusalError` (reason, message and
+ * typed cause) a forced request throws, so the forced and non-forced refresh paths report one payload for one fault.
+ */
+export function refreshRefusal(outcome: RefreshOutcome): Error {
+	const message = outcome.error ?? "The index could not be refreshed.";
+	if (outcome.cause instanceof IndexRefusalError) return outcome.cause;
+	return outcome.failure ? new IndexRefusalError(outcome.failure, message, outcome.cause) : new Error(message);
 }
 
 /** The typed transport error an error is or wraps (as an `IndexRefusalError` cause), or null. */
@@ -143,7 +157,7 @@ export class IndexService {
 				const failure = kind !== null && kind !== "cancelled" ? kind : undefined;
 				// A forced request reports transport faults with the same structured reason a non-forced fallback carries.
 				if (!fallback) throw failure !== undefined && !(error instanceof IndexRefusalError) ? new IndexRefusalError(failure, message, error) : error;
-				return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: message, ...(failure !== undefined ? { failure } : {}) };
+				return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: message, ...(failure !== undefined ? { failure } : {}), cause: error };
 			}
 			if (!validateIndex(candidate)) throw new Error("Refusing to save invalid Zotero index");
 			await this.storage.writeValidated(JSON.stringify(candidate, null, 2));

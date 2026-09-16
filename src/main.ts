@@ -1,6 +1,6 @@
 import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TFile, parseYaml, stringifyYaml } from "obsidian";
 import { BbtService } from "./bbt";
-import { IndexRefusalError, IndexService, describeRefreshFailure, formatIndexAge, type CollectPrecondition } from "./index-service";
+import { IndexService, describeRefreshFailure, formatIndexAge, refreshRefusal, type CollectPrecondition } from "./index-service";
 import { ImportService } from "./importer";
 import { IngestAPI } from "./ingest-api";
 import type { ActionHost, AgentAction, PdfTextRequest, RefreshRequest } from "./agent/actions";
@@ -14,7 +14,7 @@ import { promises as fs } from "node:fs";
 import * as nodePath from "node:path";
 import { readLocalFile } from "./local-file";
 import { validateIndex } from "./identity";
-import { describeBbtError, rpc, transportReasonOf } from "./api/transport";
+import { describeBbtError, transportReasonOf } from "./api/transport";
 import { VaultLinks } from "./vault-links";
 import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
@@ -54,6 +54,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	private pdfText!: PdfTextService;
 	// 0.5 R4: shared status line (index age/staleness, legacy plugin, last BBT observation).
 	private statusBar: HTMLElement | null = null;
+	/** Last rendered status text/state; a re-render with the same key is skipped. */
+	private renderedStatus: string | null = null;
 
 	async onload(): Promise<void> {
 		const stored: unknown = await this.loadData();
@@ -112,7 +114,6 @@ export default class CMDSZoteroPlugin extends Plugin {
 		// 0.5 R4: status-bar item; click probes BBT once (no refresh); the minute tick only re-renders the age text.
 		this.statusBar = this.addStatusBarItem();
 		this.statusBar.addClass("cmds-zotero-status-bar", "mod-clickable");
-		this.statusBar.setAttr("aria-label", "Zotero index and Better BibTeX status; click to test the connection");
 		this.registerDomEvent(this.statusBar, "click", () => { void this.testConnection(); });
 		this.registerInterval(window.setInterval(() => this.renderStatus(), 60_000));
 		this.renderStatus();
@@ -190,10 +191,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			const outcome = await indexToken.refresh({ force: refresh.ifOlderThanMinutes === undefined, ...(refresh.ifOlderThanMinutes ? { ifOlderThanMs: refresh.ifOlderThanMinutes * 60000 } : {}) });
 			const { reason } = outcome;
 			// The agent refresh action is an explicit publication: a snapshot that could not be revalidated is a failure, not a result.
-			if (reason === "stale-fallback") {
-				const message = outcome.error ?? "The index could not be refreshed.";
-				throw outcome.failure ? new IndexRefusalError(outcome.failure, message) : new Error(message);
-			}
+			if (reason === "stale-fallback") throw refreshRefusal(outcome); // 0.5 R4: carries the typed cause
 			await onIndex(outcome.index);
 			return { host: await this.agentHost("info", {}, new Date(), onIndex, indexToken, pdfToken), refreshed: outcome.refreshed, reason, ageMinutesBefore: outcome.ageMinutesBefore };
 		};
@@ -252,6 +250,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.warmFailedUntil = 0;
 		this.noticedGeneration = null;
 		this.warming = null;
+		this.renderedStatus = null; // 0.5 R4
 		this.configure();
 		await this.peekPublished().catch(() => null);
 		this.refreshViews();
@@ -319,8 +318,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			// against the new configuration or start its backoff.
 			if (!this.active || this.service !== service) return;
 			if (outcome.reason !== "stale-fallback") return;
-			const message = outcome.error ?? "The index could not be refreshed.";
-			this.reportWarmFailure(outcome.failure ? new IndexRefusalError(outcome.failure, message) : new Error(message), outcome.index, force);
+			this.reportWarmFailure(refreshRefusal(outcome), outcome.index, force); // 0.5 R4: the Notice gets the observation wording
 		} catch (error) {
 			if (!this.active || this.service !== service) return;
 			this.reportWarmFailure(error, this.lastIndex, force);
@@ -371,13 +369,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 		if (cached !== undefined) return Promise.resolve(cached);
 		const flight = this.bibliographyFlights.get(key);
 		if (flight) return flight;
-		const rendered = style === this.settings.bibliographyStyle
-			? this.bbt.bibliography(entry)
-			: rpc(this.settings.bbtEndpoint, "item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID], this.settings.requestTimeoutMs).then(value => {
-				if (typeof value !== "string") throw new Error("Invalid BBT bibliography response");
-				return value;
-			});
-		const request = rendered.then(text => { const trimmed = text.trim(); this.bibliographyCache.set(key, trimmed); return trimmed; }).finally(() => { this.bibliographyFlights.delete(key); });
+		// 0.5 R4: every style goes through BbtService so the call is observed (status line) and typed uniformly.
+		const request = this.bbt.bibliography(entry, style).then(text => { const trimmed = text.trim(); this.bibliographyCache.set(key, trimmed); return trimmed; }).finally(() => { this.bibliographyFlights.delete(key); });
 		this.bibliographyFlights.set(key, request);
 		return request;
 	}
@@ -560,7 +553,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	}
 
 	// 0.5 R4: one status line for the status bar, both sidebar headers and the diagnostics report.
-	statusLine(now = new Date()): string {
+	statusLine(now = new Date(), compact = false): string {
 		const outcome = this.bbt.lastOutcome;
 		return formatStatus({
 			count: this.lastIndex?.count ?? null,
@@ -568,17 +561,28 @@ export default class CMDSZoteroPlugin extends Plugin {
 			stale: this.index.isStale(this.lastIndex, now.getTime()),
 			legacyPluginEnabled: this.legacyPluginEnabled(),
 			bbt: outcome ? { state: outcome.ok ? "ok" : "failed", at: outcome.at.toISOString(), ...(outcome.reason ? { reason: outcome.reason } : {}), ...(outcome.status !== undefined ? { status: outcome.status } : {}) } : { state: "untested" },
-		}, now);
+		}, now, compact);
 	}
 
-	/** Re-renders the status line everywhere it is shown; clock-only, never contacts BBT. */
+	/**
+	 * Re-renders the status line everywhere it is shown; clock-only, never contacts BBT. Coalesced: a burst of BBT
+	 * outcomes during a collection (one per attachment call) re-renders only when the rendered text or state changed.
+	 */
 	renderStatus(): void {
 		if (!this.active) return;
-		const line = this.statusLine();
+		const now = new Date();
+		const line = this.statusLine(now);
+		const stale = this.cachedIndexStale();
+		const failed = this.bbt.lastOutcome?.ok === false;
+		const key = `${line}|${stale}|${failed}`;
+		if (key === this.renderedStatus) return;
+		this.renderedStatus = key;
 		if (this.statusBar) {
-			this.statusBar.setText(line);
-			this.statusBar.toggleClass("is-stale", this.cachedIndexStale());
-			this.statusBar.toggleClass("is-failed", this.bbt.lastOutcome?.ok === false);
+			this.statusBar.setText(this.statusLine(now, true));
+			this.statusBar.setAttr("title", line);
+			this.statusBar.setAttr("aria-label", `${line}. Click to test the Better BibTeX connection.`);
+			this.statusBar.toggleClass("is-stale", stale);
+			this.statusBar.toggleClass("is-failed", failed);
 		}
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REFERENCES)) if (leaf.view instanceof ReferencesView) leaf.view.renderStatus(line);
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS)) if (leaf.view instanceof AnnotationsView) leaf.view.renderStatus(line);

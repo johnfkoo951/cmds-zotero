@@ -16,7 +16,10 @@ const REASON_ORDER: readonly BbtTransportReason[] = ["connection-refused", "time
 const NETWORK_CODES = /\b(ECONNREFUSED|ECONNRESET|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN|ECONNABORTED|EPIPE|ENETUNREACH)\b/;
 const NETWORK_TEXT = /socket hang up|fetch failed/i;
 const TIMED_OUT = /\bETIMEDOUT\b|timed out/i;
-/** The plugin's own abort (`bbt.dispose()`), Node's AbortError text, or the collector's cancellation check. */
+/**
+ * The plugin's own abort (`bbt.dispose()`), Node's AbortError text, or the collector's cancellation check. Tested only
+ * after the Node code: a remote socket drop raises `ECONNRESET` with the message `aborted`, which is Zotero going away.
+ */
 const CANCELLED = /\baborted\b|cancelled/i;
 
 /** A classified BBT request failure. `message` is already human wording; `cause` keeps the raw error for diagnostics. */
@@ -64,19 +67,23 @@ export function transportReasonOf(error: unknown): BbtTransportReason | null {
 	if (isBbtTransportError(error)) return error.reason;
 	const code = codeOf(error) ?? "";
 	const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-	if ((error instanceof Error && error.name === "AbortError") || code === "ABORT_ERR" || CANCELLED.test(message)) return "aborted";
-	if (NETWORK_CODES.test(code) || NETWORK_CODES.test(message) || NETWORK_TEXT.test(message)) return "connection-refused";
+	if ((error instanceof Error && error.name === "AbortError") || code === "ABORT_ERR") return "aborted";
+	if (NETWORK_CODES.test(code)) return "connection-refused";
+	if (CANCELLED.test(message)) return "aborted";
+	if (NETWORK_CODES.test(message) || NETWORK_TEXT.test(message)) return "connection-refused";
 	if (TIMED_OUT.test(code) || TIMED_OUT.test(message)) return "timeout";
 	return null;
 }
 
 /**
  * Wraps any failure of a BBT request in a {@link BbtTransportError}. An already typed error is returned unchanged;
- * a fault without a recognised network signature is `invalid-response` (BBT was contacted but did not answer usably).
+ * a fault without a recognised network signature takes `fallback`: `invalid-response` by default (BBT was contacted but
+ * did not answer usably), or `connection-refused` for an error raised by the socket before any response arrived
+ * (TLS faults such as `EPROTO`, unlisted `ECONN*` variants).
  */
-export function classifyTransportError(error: unknown, endpoint: string, timeoutMs: number): BbtTransportError {
+export function classifyTransportError(error: unknown, endpoint: string, timeoutMs: number, fallback: BbtTransportReason = "invalid-response"): BbtTransportError {
 	if (isBbtTransportError(error)) return error;
-	const reason = transportReasonOf(error) ?? "invalid-response";
+	const reason = transportReasonOf(error) ?? fallback;
 	const detail = error instanceof Error ? error.message : String(error);
 	return new BbtTransportError(reason, endpoint, detail, { cause: error, code: codeOf(error), ...(reason === "timeout" ? { timeoutMs } : {}) });
 }
@@ -99,7 +106,7 @@ export function bbtReasonLabel(reason: string, status?: number): string {
 export function bbtObservation(error: BbtTransportError): string {
 	const at = error.endpoint;
 	switch (error.reason) {
-		case "connection-refused": return `Zotero/Better BibTeX did not answer at ${at} (${error.code === "ECONNREFUSED" || error.code === undefined ? "connection refused" : error.code})`;
+		case "connection-refused": return `Zotero/Better BibTeX did not answer at ${at} (${error.code === "ECONNREFUSED" ? "connection refused" : error.code ?? "connection failed"})`;
 		case "timeout": return `Zotero/Better BibTeX at ${at} did not respond within ${error.timeoutMs !== undefined ? `${Math.max(1, Math.round(error.timeoutMs / 1000))} s` : "the request timeout"} (request timed out)`;
 		case "http-404": return `Zotero answered at ${at} but the Better BibTeX endpoint was not found (HTTP 404)`;
 		case "http-other": return `Zotero answered at ${at} with HTTP ${error.status ?? "error"}`;
@@ -135,7 +142,11 @@ function endpointLabel(rawURL: string): string {
 
 export function httpRequest(rawURL: string, timeoutMs: number, body?: string, signal?: AbortSignal): Promise<HttpResult> {
 	const endpoint = endpointLabel(rawURL);
-	const fail = (reject: (reason: unknown) => void) => (error: unknown): void => { reject(classifyTransportError(error, endpoint, timeoutMs)); };
+	// A socket-level `error` event is a transport fault even without a recognised Node code (`connection-refused`),
+	// unless the plugin's own signal fired: then whatever Node raised while tearing down is the plugin's `aborted`.
+	const fail = (reject: (reason: unknown) => void) => (error: unknown): void => {
+		reject(signal?.aborted ? new BbtTransportError("aborted", endpoint, error instanceof Error ? error.message : String(error), { cause: error, code: codeOf(error) }) : classifyTransportError(error, endpoint, timeoutMs, "connection-refused"));
+	};
 	return new Promise((resolve, reject) => {
 		const url = new URL(rawURL);
 		if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid BBT endpoint");
@@ -150,7 +161,11 @@ export function httpRequest(rawURL: string, timeoutMs: number, body?: string, si
 				chunks.push(chunk);
 			});
 			response.on("error", fail(reject));
-			response.on("aborted", () => reject(new BbtTransportError("aborted", endpoint, "BBT response aborted")));
+			// Zotero closed the connection mid-response: an observation about Zotero (`ECONNRESET`), not the plugin's own
+			// abort — unless the plugin's signal is what tore the socket down.
+			response.on("aborted", () => reject(signal?.aborted
+				? new BbtTransportError("aborted", endpoint, "BBT request aborted by the plugin")
+				: new BbtTransportError("connection-refused", endpoint, "BBT response aborted by the remote end before it completed", { code: "ECONNRESET" })));
 			response.on("end", () => resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
 		});
 		const timer = timers.setTimeout(() => request.destroy(new BbtTransportError("timeout", endpoint, "BBT request timed out", { timeoutMs })), timeoutMs);

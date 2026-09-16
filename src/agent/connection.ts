@@ -166,15 +166,18 @@ function agoLabel(iso: string, now: Date): string {
 
 /**
  * `Zotero index: 450 · 27 h old · stale · legacy plugin on · BBT ok 3 min ago`; a failure names the clock time and
- * the short reason (`BBT failed 14:05 (connection refused)`); `BBT untested` before any real call.
+ * the short reason (`BBT failed 14:05 (connection refused)`); `BBT untested` before any real call; an index whose
+ * timestamp is unusable reads `age unknown`. `compact` is the status-bar variant (`Zotero 450 · 27 h · stale · BBT failed`)
+ * for Obsidian's narrow strip; the full line belongs in its tooltip, the sidebar headers and the diagnostics report.
  */
-export function formatStatus(view: StatusView, now = new Date()): string {
-	const parts: string[] = [`Zotero index: ${view.count === null ? "none" : view.count}`];
-	if (view.count !== null) parts.push(`${formatIndexAge(view.ageMinutes)} old`);
+export function formatStatus(view: StatusView, now = new Date(), compact = false): string {
+	const parts: string[] = [compact ? `Zotero ${view.count === null ? "none" : view.count}` : `Zotero index: ${view.count === null ? "none" : view.count}`];
+	if (view.count !== null) parts.push(view.ageMinutes === null ? "age unknown" : compact ? formatIndexAge(view.ageMinutes) : `${formatIndexAge(view.ageMinutes)} old`);
 	if (view.stale === true) parts.push("stale");
-	if (view.legacyPluginEnabled === true) parts.push("legacy plugin on");
+	if (view.legacyPluginEnabled === true) parts.push(compact ? "legacy on" : "legacy plugin on");
 	const bbt = view.bbt;
-	if (bbt.state === "ok") parts.push(`BBT ok${bbt.at ? ` ${agoLabel(bbt.at, now)}` : ""}`);
+	if (compact) parts.push(bbt.state === "ok" ? "BBT ok" : bbt.state === "failed" ? "BBT failed" : "BBT untested");
+	else if (bbt.state === "ok") parts.push(`BBT ok${bbt.at ? ` ${agoLabel(bbt.at, now)}` : ""}`);
 	else if (bbt.state === "failed") parts.push(`BBT failed${bbt.at ? ` ${clockLabel(bbt.at)}` : ""}${bbt.reason ? ` (${bbtReasonLabel(bbt.reason, bbt.status)})` : ""}`);
 	else parts.push("BBT untested");
 	return parts.join(" · ");

@@ -3,6 +3,7 @@
  * Vocabulary source of truth: skills/cmds-zotero/references/cli-contract-v2.md (generated from these types and the docs).
  */
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
+import type { BbtTransportReason } from "../api/transport"; // 0.5 R4: type-only, keeps this module pure
 
 /** v1 resolution enum; the JSON name `status` is reserved for this enum only. */
 export type ResolutionStatus = "resolved" | "ambiguous" | "not-found" | "unavailable";
@@ -99,7 +100,7 @@ export interface VaultReader {
 }
 
 export interface PluginInfo { status: "ok" | "off" | "too-old" | "unknown"; version: string | null; apiVersions: number[] | null }
-export interface BbtInfo { reachable: boolean | null; zotero?: string; betterbibtex?: string; error?: string; /** 0.5 R4: typed transport reason beside `error`. */ reason?: string }
+export interface BbtInfo { reachable: boolean | null; zotero?: string; betterbibtex?: string; error?: string; /** 0.5 R4: typed transport reason beside `error`. */ reason?: BbtTransportReason }
 export interface IndexInfo {
 	source: "plugin" | "offline-file" | "none";
 	path: string;

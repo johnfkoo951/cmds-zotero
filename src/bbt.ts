@@ -34,11 +34,18 @@ export class BbtService {
 		for (const listener of this.outcomeListeners) listener(outcome);
 	}
 
-	/** Records the outcome of one transport call: success, or a typed failure other than the plugin's own abort. */
-	private async observed<T>(request: Promise<T>): Promise<T> {
+	/**
+	 * Records the outcome of one whole BBT operation (request plus the checks that decide whether the answer was usable):
+	 * success, or a typed failure other than the plugin's own abort. Wrapping only the raw request would record `ok` for
+	 * an HTTP 404 or an unusable readiness answer that the caller rejects a line later. A failure is sticky against
+	 * concurrent in-flight successes: during `collect` (up to 8 requests at once) a slower request that started before
+	 * the failure was observed must not overwrite it with `ok`, so the outcome compares start times, not completion.
+	 */
+	private async observed<T>(run: () => Promise<T>): Promise<T> {
+		const started = new Date();
 		try {
-			const result = await request;
-			this.recordOutcome({ ok: true, at: new Date() });
+			const result = await run();
+			if (!(this.outcome && !this.outcome.ok && started.getTime() < this.outcome.at.getTime())) this.recordOutcome({ ok: true, at: new Date() });
 			return result;
 		} catch (error) {
 			if (isBbtTransportError(error) && error.reason !== "aborted") this.recordOutcome({ ok: false, at: new Date(), reason: error.reason, ...(error.status !== undefined ? { status: error.status } : {}), message: error.message });
@@ -47,7 +54,7 @@ export class BbtService {
 	}
 
 	private call(method: string, params: unknown[] = [], timeout = this.settings.requestTimeoutMs): Promise<unknown> {
-		return this.observed(rpc(this.settings.bbtEndpoint, method, params, timeout, this.controller.signal));
+		return this.observed(() => rpc(this.settings.bbtEndpoint, method, params, timeout, this.controller.signal));
 	}
 
 	async capabilities(): Promise<Capabilities> {
@@ -55,9 +62,11 @@ export class BbtService {
 	}
 
 	private async readCapabilities(settings: CmdsZoteroSettings, signal = this.controller.signal): Promise<Capabilities> {
-		const ready = await this.observed(rpc(settings.bbtEndpoint, "api.ready", [], settings.requestTimeoutMs, signal));
-		if (!record(ready) || !text(ready.zotero) || !text(ready.betterbibtex)) throw new BbtTransportError("invalid-response", settings.bbtEndpoint, "Invalid BBT readiness response");
-		return { zotero: text(ready.zotero), betterbibtex: text(ready.betterbibtex), metadata: true, attachments: true, annotations: true, bibliography: true };
+		return this.observed(async () => {
+			const ready = await rpc(settings.bbtEndpoint, "api.ready", [], settings.requestTimeoutMs, signal);
+			if (!record(ready) || !text(ready.zotero) || !text(ready.betterbibtex)) throw new BbtTransportError("invalid-response", settings.bbtEndpoint, "Invalid BBT readiness response");
+			return { zotero: text(ready.zotero), betterbibtex: text(ready.betterbibtex), metadata: true, attachments: true, annotations: true, bibliography: true };
+		});
 	}
 
 	async isReachable(): Promise<boolean> {
@@ -66,15 +75,18 @@ export class BbtService {
 
 	async cayw(): Promise<string> {
 		const params = new URLSearchParams({ format: this.settings.caywFormat, brackets: "true" });
-		const response = await this.observed(httpRequest(`${this.settings.bbtEndpoint.replace(/\/$/, "")}/cayw?${params.toString()}`, this.settings.requestTimeoutMs, undefined, this.controller.signal));
-		if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", `${this.settings.bbtEndpoint.replace(/\/$/, "")}/cayw`, `BBT picker HTTP ${response.status}`, { status: response.status });
-		return response.text.trim();
+		const endpoint = `${this.settings.bbtEndpoint.replace(/\/$/, "")}/cayw`;
+		return this.observed(async () => {
+			const response = await httpRequest(`${endpoint}?${params.toString()}`, this.settings.requestTimeoutMs, undefined, this.controller.signal);
+			if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", endpoint, `BBT picker HTTP ${response.status}`, { status: response.status });
+			return response.text.trim();
+		});
 	}
 
 	async collect(previous?: ZoteroIndex): Promise<ZoteroIndex> {
 		const settings = { ...this.settings };
 		const signal = this.controller.signal;
-		const call = (method: string, params: unknown[], timeout = settings.requestTimeoutMs): Promise<unknown> => this.observed(rpc(settings.bbtEndpoint, method, params, timeout, signal));
+		const call = (method: string, params: unknown[], timeout = settings.requestTimeoutMs): Promise<unknown> => this.observed(() => rpc(settings.bbtEndpoint, method, params, timeout, signal));
 		const capabilities = await this.readCapabilities(settings, signal);
 		const result = await call("item.search", [[["itemType", "isNot", "attachment"], ["itemType", "isNot", "annotation"], ["itemType", "isNot", "note"]], "*"]);
 		if (!Array.isArray(result)) throw new Error("Invalid BBT parent search response");
@@ -142,9 +154,10 @@ export class BbtService {
 		return index;
 	}
 
-	async bibliography(entry: ZoteroIndexEntry): Promise<string> {
+	/** CSL bibliography text for one entry; `style` defaults to the configured style (0.5 R4: every style is observed and typed). */
+	async bibliography(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle): Promise<string> {
 		if (!validateEntry(entry)) throw new Error("Bibliography requires a validated item");
-		const output = await this.call("item.bibliography", [[entry.citekey], { id: this.settings.bibliographyStyle, contentType: "text" }, entry.libraryID]);
+		const output = await this.call("item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID]);
 		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
 		return output;
 	}

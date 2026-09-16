@@ -289,12 +289,21 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 		const hubFull = new Map<string, string>();
 		const style = request.style ?? host.settings.bibliographyStyle;
 		const byId = new Map(view.index.entries.map(entry => [entry.id, entry]));
+		// 0.5 R4: after a typed unreachable/timeout/404 fault, BBT is not asked again for the remaining keys (one mapped failure, not N timeouts).
+		let bbtDown = false;
 		for (const key of allKeys) {
 			const verdict = verdicts.get(key);
 			if (!verdict) continue;
-			if (verdict.citeStatus === "resolved" && verdict.entryId && host.bibliography) {
+			if (verdict.citeStatus === "resolved" && verdict.entryId && host.bibliography && !bbtDown) {
 				const entry = byId.get(verdict.entryId);
-				if (entry) { try { const text = await host.bibliography(entry, style); if (text) bibliography.set(key, text); } catch (error) { referencesReason = "bbt-unreachable"; bbtError = bbtErrorPayload(error) ?? bbtError; } }
+				if (entry) {
+					try { const text = await host.bibliography(entry, style); if (text) bibliography.set(key, text); }
+					catch (error) {
+						referencesReason = "bbt-unreachable";
+						bbtError = bbtErrorPayload(error) ?? bbtError;
+						if (bbtError && ["connection-refused", "timeout", "http-404"].includes(bbtError.reason)) bbtDown = true;
+					}
+				}
 			} else if (verdict.citeStatus === "resolved" && !host.bibliography) referencesReason = host.bibliographyReason ?? "offline";
 			if (verdict.hub) { const line = hubFullCitationLine(await host.reader.readNote(verdict.hub.path)); if (line) hubFull.set(key, line); }
 		}

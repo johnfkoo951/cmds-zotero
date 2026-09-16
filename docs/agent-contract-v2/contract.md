@@ -40,11 +40,14 @@ BBT transport faults are classified once (0.5): `connection-refused` (any socket
 envelope) and `invalid-response`. When the `connection` probe fails, `connection.bbt` carries `error` (human wording that
 names the endpoint) and, when classified, `reason` from that vocabulary. `identity` and `cites` add
 `bbtError {reason, endpoint}` beside `bibliographyReason`/`referencesReason: bbt-unreachable`, and a refused `refresh`
-adds it beside its `reason`, only when the fault was a typed transport error; the legacy `bbt-unreachable` values are
-unchanged. A reconcile apply refused because the evidence snapshot threw reports `refusedReason: index-invalid` with
-`refusedMessage` (`bbt-unreachable` only for a typed transport error); a storage fault is never reported as a BBT outage.
-The human status line (`Zotero index: <count> · <age> old · stale · legacy plugin on · BBT ok <ago> | failed <time> (<reason>) | untested`)
-is derived from the same `ageMinutes`/`stale` math and the last real BBT call, so the UI and the CLI agree on freshness.
+(forced or `ifOlderThanMinutes`) adds it beside its `reason`, only when the fault was a typed transport error.
+`bibliographyReason`/`referencesReason: bbt-unreachable` remain the legacy coarse value for any failed BBT bibliography
+call; when `bbtError` is present its `reason` is authoritative (`rpc`, `http-other` and `invalid-response` mean BBT
+answered but the request failed). After a `connection-refused`, `timeout` or `http-404` fault, `cites` stops asking BBT
+for the remaining keys. A reconcile apply refused because the evidence snapshot threw reports `refusedReason: index-invalid`
+with `refusedMessage` (`bbt-unreachable` only for a typed transport error); a storage fault is never reported as a BBT outage.
+The plugin's human status line derives freshness from the same `ageMinutes`/`stale` math and reports the last real BBT
+call, so the UI and the CLI agree on freshness; its wording is UI copy, not part of this contract.
 
 Existing implicit refresh in read-only legacy operations is intentionally removed.
 The read-only wrapper must not call an old host that might refresh on a read.

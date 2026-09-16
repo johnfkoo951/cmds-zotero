@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import type { BbtService } from "./bbt";
-import { IndexRefusalError, resolveInIndex, type IndexService, type RefreshOutcome } from "./index-service";
+import { IndexRefusalError, refreshRefusal, resolveInIndex, type IndexService, type RefreshOutcome } from "./index-service";
 import type { ZoteroIndex } from "./types";
 import type { VaultLinks } from "./vault-links";
 import { ACTION_API_VERSION, AGENT_ACTIONS, runAction, validateActionRequest, type ActionHost, type AgentAction, type ResolveRequest } from "./agent/actions";
@@ -156,10 +156,7 @@ export class IngestAPI {
 				const options = request as { ifOlderThanMinutes?: number };
 				const outcome = await this.index.refresh({ force: options.ifOlderThanMinutes === undefined, ...(options.ifOlderThanMinutes ? { ifOlderThanMs: options.ifOlderThanMinutes * 60000 } : {}) });
 				// Like the live host, the refresh action is an explicit publication: a snapshot that could not be revalidated is a failure.
-				if (outcome.reason === "stale-fallback") {
-					const message = outcome.error ?? "The index could not be refreshed.";
-					throw outcome.failure ? new IndexRefusalError(outcome.failure, message) : new Error(message);
-				}
+				if (outcome.reason === "stale-fallback") throw refreshRefusal(outcome); // 0.5 R4
 				await this.onIndex(outcome.index);
 				return { apiVersion: 1, vault: this.app.vault.getName(), count: outcome.index.count, complete: outcome.index.complete, generatedAt: outcome.index.generatedAt, diagnostics: outcome.index.diagnostics, refreshed: outcome.refreshed };
 			}

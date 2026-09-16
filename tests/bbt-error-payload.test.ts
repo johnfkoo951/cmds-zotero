@@ -53,6 +53,29 @@ test("identity and cites add bbtError {reason, endpoint} beside the bbt-unreacha
 	assert.equal("bbtError" in disabled, false);
 });
 
+test("cites stops asking BBT after one unreachable/timeout/404 fault but keeps trying after an rpc fault", async () => {
+	const second: ZoteroIndexEntry = { ...entry, id: "1:ITEM0002", itemKey: "ITEM0002", citekey: "jones2021", title: "Second", zoteroSelectURI: "zotero://select/library/items/ITEM0002" };
+	const two: ZoteroIndex = { ...index, count: 2, entries: [entry, second] };
+	bodies.set("Questions/Two.md", "[@smith2020] and [@jones2021]");
+	notes.push({ path: "Questions/Two.md", basename: "Two", frontmatter: { type: "research-question" }, frontmatterParse: "ok" });
+	try {
+		for (const [reason, expectedCalls] of [["connection-refused", 1], ["timeout", 1], ["http-404", 1], ["rpc", 2], ["http-other", 2]] as const) {
+			let calls = 0;
+			const value = host(async () => { calls++; throw new BbtTransportError(reason, ENDPOINT, `synthetic ${reason}`, reason === "http-404" ? { status: 404 } : reason === "http-other" ? { status: 500 } : {}); });
+			value.indexView = { index: two, stale: false, ageMinutes: 0 };
+			const result = await runAction(value, "cites", { path: "Questions/Two.md", bibliography: true }) as Record<string, unknown>;
+			assert.equal(calls, expectedCalls, reason);
+			assert.equal(result.referencesReason, "bbt-unreachable", reason);
+			assert.deepEqual(result.bbtError, { reason, endpoint: ENDPOINT }, reason);
+		}
+		let plainCalls = 0;
+		const plain = host(async () => { plainCalls++; throw new Error("connect ECONNREFUSED 127.0.0.1:23119"); });
+		plain.indexView = { index: two, stale: false, ageMinutes: 0 };
+		await runAction(plain, "cites", { path: "Questions/Two.md", bibliography: true });
+		assert.equal(plainCalls, 2, "an untyped error does not prove BBT is down, so every key is still attempted");
+	} finally { bodies.delete("Questions/Two.md"); notes.pop(); }
+});
+
 test("a refresh refused by the host keeps its contract reason and adds bbtError from the typed cause", async () => {
 	const value = host(async () => null);
 	value.refresh = async () => { throw new IndexRefusalError("bbt-unreachable", refused().message, refused()); };

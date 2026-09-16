@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { parse, stringify } from "yaml";
 import { applyReconcile, type ReconcileWriteHost } from "../src/reconcile-apply";
 import { reconcileNotes, type ReconcileResult } from "../src/agent/reconcile-core";
+import { BbtTransportError } from "../src/api/transport";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../src/types";
 
 const now = new Date("2026-09-14T10:00:00.000Z");
@@ -170,8 +171,6 @@ test("same-path concurrent applies serialize and reject the superseded source", 
 });
 
 // 0.5 R4 (F16): a throwing snapshot is unusable evidence, not a BBT outage.
-import { BbtTransportError } from "../src/api/transport";
-
 test("snapshot exceptions refuse as index-invalid with the message; only a typed transport error is bbt-unreachable", async () => {
 	const storage = fakeHost();
 	storage.snapshot = async () => { throw new Error("Index file could not be read: EACCES"); };
