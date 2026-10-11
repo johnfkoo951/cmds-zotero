@@ -44,7 +44,7 @@ const PDF_EXTRACT_REASON: Readonly<Record<PdfExtractErrorCode, FailureReason>> =
 
 export const JOB_TIMEOUT_MS: Readonly<Record<IngestAction, number>> = {
 	connection: 300_000, info: 300_000, refresh: 300_000, resolve: 300_000, identity: 300_000, cites: 300_000, reconcile: 300_000, diagnostics: 300_000, locate: 300_000,
-	"pdf-text": 900_000,
+	"pdf-text": 900_000, recent: 300_000, import: 300_000,
 };
 /** Process-level Node timers (desktop-only plugin; tests run under Node), unref'd so an idle pending job never holds a process open. */
 const defaultTimers: JobTimers = {
@@ -58,6 +58,8 @@ const TERMINAL_TTL_MS = 10 * 60 * 1000;
 export class IngestAPI {
 	readonly apiVersion = 2;
 	readonly apiVersions = [1, 2] as const;
+	/** Actions this host accepts; the CLI refuses a newer action with plugin-too-old instead of submitting it to an older host. */
+	readonly actions: readonly IngestAction[] = AGENT_ACTIONS;
 	private jobs = new Map<string, IngestJob>();
 	private sequence = 0;
 	private activeRequests = 0;
@@ -92,7 +94,7 @@ export class IngestAPI {
 	private static writes(action: IngestAction, request: unknown): boolean {
 		if (action === "refresh" || action === "pdf-text") return true;
 		if (action === "cites" && (request as { out?: unknown }).out !== undefined) return true; // 0.5 R10: sidecar write
-		return action === "reconcile" && (request as { apply?: unknown }).apply === true;
+		return (action === "reconcile" || action === "import") && (request as { apply?: unknown }).apply === true;
 	}
 
 	private prune(now = Date.now()): void {
@@ -257,7 +259,7 @@ export class IngestAPI {
 			if (/64 MiB|too large/i.test(message)) return "pdf-too-large";
 			if (/PDF|pdf\.js|extraction/i.test(message)) return "pdf-invalid";
 		}
-		return IngestAPI.writes(action, request) && action === "reconcile" ? "apply-failed" : "invalid-request";
+		return IngestAPI.writes(action, request) && (action === "reconcile" || action === "import") ? "apply-failed" : "invalid-request";
 	}
 
 	private async connectionLegacy(): Promise<unknown> {

@@ -1,9 +1,9 @@
 import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, parseYaml, stringifyYaml } from "obsidian";
 import { BbtService } from "./bbt";
-import { IndexService, describeRefreshFailure, formatIndexAge, refreshRefusal, type CollectPrecondition } from "./index-service";
+import { IndexService, describeRefreshFailure, formatIndexAge, refreshRefusal, resolveInIndex, type CollectPrecondition } from "./index-service";
 import { ImportService } from "./importer";
 import { IngestAPI } from "./ingest-api";
-import type { ActionHost, AgentAction, PdfTextRequest, RefreshRequest } from "./agent/actions";
+import type { ActionHost, AgentAction, ImportRequest, PdfTextRequest, RefreshRequest } from "./agent/actions";
 import { buildConnection, formatStatus } from "./agent/connection";
 import { ObsidianVaultReader } from "./obsidian-vault";
 import { PdfTextService } from "./pdf/extract";
@@ -14,7 +14,7 @@ import * as nodePath from "node:path";
 import { readLocalFile } from "./local-file";
 import { hashLocalPdf } from "./pdf/file-hash";
 import { validateIndex } from "./identity";
-import { describeBbtError, mapBounded, transportReasonOf } from "./api/transport";
+import { bbtErrorPayload, describeBbtError, mapBounded, transportReasonOf } from "./api/transport";
 import { BibliographyStore, type BibliographyDetail } from "./bibliography-store"; // 0.5 R12
 import { VaultLinks } from "./vault-links";
 import { ownershipSummary, partitionOwnedNotes } from "./note-ownership"; // 0.5 R14
@@ -31,7 +31,7 @@ import { scanCitations } from "./citations/scan";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "./views/references-view";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "./views/annotations-view";
 import { RecentReadsModal } from "./views/recent-reads-modal";
-import { freshTargetOf, freshTargetOfRead, indexEntryFor, localDay, readLabel, type RecentRead, type SendOutcome } from "./recent/recent-reads";
+import { freshTargetOf, freshTargetOfRead, indexEntryFor, literatureNoteStatus, localDay, readLabel, type ImportNoteResult, type RecentRead, type RecentReport, type SendOutcome } from "./recent/recent-reads";
 import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
@@ -250,6 +250,17 @@ export default class CMDSZoteroPlugin extends Plugin {
 			await onIndex(outcome.index);
 			return { host: await this.agentHost("info", {}, new Date(), onIndex, indexToken, pdfToken), refreshed: outcome.refreshed, reason, ageMinutesBefore: outcome.ageMinutesBefore };
 		};
+		host.recentReads = async (days: number): Promise<RecentReport[]> => {
+			const reads = await this.recentReads(days);
+			const notes = this.literatureNoteFiles();
+			return mapBounded(reads, 2, async read => {
+				const found = await this.entryForRecent(read, index);
+				const files = found.entry ? notes.get(found.entry.id) ?? [] : [];
+				const note = found.entry ? literatureNoteStatus(found.entry, await Promise.all(files.map(async file => ({ path: file.path, text: await this.app.vault.cachedRead(file) })))) : null;
+				return { read, id: found.entry?.id ?? null, inIndex: !!(index && indexEntryFor(read, index.entries)), fresh: found.fresh, note, ...(found.entry ? {} : { problem: `${describeBbtError(found.error)} Not in the saved index and not readable from Zotero.` }) };
+			});
+		};
+		host.importNote = (importRequest: ImportRequest) => this.importForAgent(importRequest, index);
 		host.extractPdf = async (target, pdfRequest: PdfTextRequest) => {
 			if (!target.localPath) throw new Error("The PDF file is unavailable.");
 			if (target.item && target.attachment.key) {
@@ -578,6 +589,53 @@ export default class CMDSZoteroPlugin extends Plugin {
 		if (result.conflicts.length) return { status: "refused", path: result.path, preserved: [], message: result.conflicts.join("; ") };
 		this.scheduleMap();
 		return { status: !preview.exists ? "created" : result.changed ? "updated" : "unchanged", path: result.path, preserved: result.preserved };
+	}
+
+	/** An item the saved index does not know yet, found in Zotero by its exact citekey and read fresh. */
+	private async entryByCitekey(citekey: string, index: ZoteroIndex | null): Promise<{ entry: ZoteroIndexEntry | null; fresh: boolean; error?: unknown; ambiguous?: string[] }> {
+		try {
+			const rows = await this.bbt.findByCitekey(citekey);
+			if (rows.length > 1) return { entry: null, fresh: false, ambiguous: rows.map(row => `${row.library}: ${row.itemKey}`) };
+			if (!rows.length) return { entry: null, fresh: false, error: new Error(`Zotero has no item with citekey @${citekey}.`) };
+			return { entry: await this.bbt.collectEntry(freshTargetOfRead({ ...rows[0], readOn: null }, index?.entries ?? [])), fresh: true };
+		} catch (error) { return { entry: null, fresh: false, error }; }
+	}
+
+	/**
+	 * Agent `import`: the same preview/apply path as the UI. Writes only with `apply`; without a fresh Zotero read the
+	 * request is refused unless `allowStale` (then the saved index is used and the payload warns).
+	 */
+	private async importForAgent(request: ImportRequest, index: ZoteroIndex | null): Promise<ImportNoteResult> {
+		let entry: ZoteroIndexEntry | null = null;
+		if (index) {
+			const resolution = resolveInIndex(index, request.itemKey ?? request.citekey ?? "", request.itemKey ? { itemKey: request.itemKey, libraryID: request.libraryID } : undefined);
+			if (resolution.status === "ambiguous") return { failure: { reason: "invalid-request", message: "More than one item matches; pass --item-key with --library.", candidates: resolution.candidates.map(candidate => ({ id: candidate.id, citekey: candidate.citekey, title: candidate.title, libraryID: candidate.libraryID })) } };
+			if (resolution.status === "resolved") entry = resolution.entry;
+		}
+		let found: { entry: ZoteroIndexEntry | null; fresh: boolean; error?: unknown; ambiguous?: string[] };
+		if (entry) found = await this.freshEntry(entry);
+		else if (request.citekey) found = await this.entryByCitekey(request.citekey, index);
+		else return { failure: { reason: "invalid-request", message: `Item ${request.itemKey ?? ""} in library ${request.libraryID ?? ""} is not in the saved index; run refresh, or import by citekey.` } };
+		if (found.ambiguous) return { failure: { reason: "invalid-request", message: `Several Zotero libraries use @${request.citekey ?? ""} (${found.ambiguous.join("; ")}); refresh the index and pass --item-key with --library.` } };
+		const bbtError = bbtErrorPayload(found.error);
+		if (!found.entry) return { failure: { reason: bbtError ? "bbt-unreachable" : "invalid-request", message: `${describeBbtError(found.error)} The item is not in the saved index and could not be read from Zotero.`, ...(bbtError ? { bbtError } : {}) } };
+		if (!found.fresh && request.allowStale !== true) return { failure: { reason: bbtError ? "bbt-unreachable" : "invalid-request", message: `${describeBbtError(found.error)} The item could not be read fresh from Zotero; pass --allow-stale to import from the saved index (annotations made since it was saved are missing).`, ...(bbtError ? { bbtError } : {}) } };
+		const target = found.entry;
+		const files = this.literatureNoteFiles().get(target.id) ?? [];
+		const before = literatureNoteStatus(target, await Promise.all(files.map(async file => ({ path: file.path, text: await this.app.vault.read(file) }))));
+		const preview = await this.importer.preview(target, index ?? undefined, found.fresh || !this.isOfflineError(found.error) ? {} : { offline: true });
+		const existing = this.app.vault.getAbstractFileByPath(preview.path);
+		const original = existing instanceof TFile ? await this.app.vault.read(existing) : null;
+		const report = { path: preview.path, exists: preview.exists, conflicts: [...preview.conflicts], softConflicts: [...preview.softConflicts], sections: preview.sections.map(section => ({ id: section.id, state: section.state })), changes: original !== preview.content };
+		const item = { id: target.id, citekey: target.citekey, title: target.title, year: target.year, libraryID: target.libraryID, itemKey: target.itemKey };
+		const warnings = found.fresh ? [] : [`${describeBbtError(found.error)} Imported from the saved index (${formatIndexAge(this.index.ageMinutes(index))} old); annotations made since then are missing.`];
+		if (request.apply !== true || preview.conflicts.length) return { item, fresh: found.fresh, before, preview: report, outcome: null, warnings };
+		const result = await this.importer.apply(preview);
+		const outcome: SendOutcome = result.conflicts.length ? { status: "refused", path: result.path, preserved: [], message: result.conflicts.join("; ") } : { status: !preview.exists ? "created" : result.changed ? "updated" : "unchanged", path: result.path, preserved: result.preserved };
+		if (outcome.status !== "refused") this.scheduleMap();
+		const written = this.app.vault.getAbstractFileByPath(result.path);
+		const after = outcome.status !== "refused" && written instanceof TFile ? literatureNoteStatus(target, [{ path: written.path, text: await this.app.vault.read(written) }]) : undefined;
+		return { item, fresh: found.fresh, before, preview: report, outcome, ...(after ? { after } : {}), warnings };
 	}
 
 	async previewImport(entry: ZoteroIndexEntry): Promise<void> {

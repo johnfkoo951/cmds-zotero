@@ -207,3 +207,32 @@ export function freshTargetOfRead(read: RecentRead, entries: readonly ZoteroInde
 	const sibling = entries.find(entry => entry.libraryType === "group" && entry.groupID === read.groupID);
 	return sibling ? { ...base, libraryID: sibling.libraryID } : { ...base, library: read.library };
 }
+
+/** One recently read paper as the live host reports it to the agent `recent` action. */
+export interface RecentReport {
+	read: RecentRead;
+	/** `libraryID:itemKey` when the paper could be read (fresh or from the saved index), else null. */
+	id: string | null;
+	/** The saved index already has this paper. */
+	inIndex: boolean;
+	/** The entry came straight from Zotero (current annotations), not from the saved index. */
+	fresh: boolean;
+	note: NoteStatus | null;
+	/** Why the paper could not be read at all. */
+	problem?: string;
+}
+
+/** What the live host did for one agent `import` request (the action turns it into the contract payload). */
+export interface ImportNoteResult {
+	/** Set when no single item matched or the request was refused before rendering. */
+	failure?: { reason: string; message: string; candidates?: unknown[]; bbtError?: { reason: string; endpoint: string } };
+	item?: { id: string; citekey: string; title: string; year: string; libraryID: number; itemKey: string };
+	fresh?: boolean;
+	/** Note state before the import, and after it when `apply` wrote. */
+	before?: NoteStatus;
+	after?: NoteStatus;
+	preview?: { path: string; exists: boolean; conflicts: string[]; softConflicts: string[]; sections: { id: string; state: string }[]; changes: boolean };
+	/** Null on a dry run. */
+	outcome?: SendOutcome | null;
+	warnings?: string[];
+}

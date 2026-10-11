@@ -22,11 +22,13 @@ globalThis.require ??= createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE = join(HERE, 'ingest-core.mjs');
 
-const ACTION_API_VERSION = { connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, 'pdf-text': 2, locate: 2 };
+const ACTION_API_VERSION = { connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, 'pdf-text': 2, locate: 2, recent: 2, import: 2 };
+// Actions added after the first contract-2 host (0.4.0): an older host does not list them and is refused before submission.
+const LATER_ACTIONS = new Set(['recent', 'import']);
 const V1_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 1);
 const V2_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 2);
 const OFFLINE_CAPABLE = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'locate']);
-const LIVE_ONLY = new Set(['refresh', 'pdf-text']);
+const LIVE_ONLY = new Set(['refresh', 'pdf-text', 'recent', 'import']);
 
 // name → { type, actions (null = all), help }
 const FLAGS = {
@@ -34,13 +36,13 @@ const FLAGS = {
 	'--vault-path': { type: 'string', actions: null, help: 'Absolute vault path for offline mode (else resolved from obsidian.json)' },
 	'--action': { type: 'string', actions: null, help: V1_ACTIONS.concat(V2_ACTIONS).join('|') },
 	'--offline': { type: 'boolean', actions: null, help: 'Skip the Obsidian bridge and answer from the index file' },
-	'--allow-stale': { type: 'boolean', actions: ['resolve', 'identity', 'cites', 'reconcile', 'diagnostics'], help: 'Accept negative verdicts from a stale index' },
+	'--allow-stale': { type: 'boolean', actions: ['resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'import'], help: 'Accept negative verdicts from a stale index; import: use the saved index when Zotero cannot be read fresh' },
 	'--refresh': { type: 'boolean', actions: ['resolve', 'identity'], help: 'Force an index refresh first (live only)' },
 	'--timeout': { type: 'integer', actions: null, min: 30, max: 3600, help: 'Seconds to wait for the plugin job (default 300; pdf-text 900)' },
 	'--strict': { type: 'boolean', actions: ['cites', 'reconcile'], help: 'Exit 1 when any error-severity diagnostic is reported' },
-	'--citekey': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate'], help: 'Citation key selector' },
-	'--item-key': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate'], help: 'Eight-character Zotero item key (requires --library)' },
-	'--library': { type: 'integer', actions: ['resolve', 'identity', 'pdf-text', 'locate'], min: 1, max: 1e9, help: 'Local library ID' },
+	'--citekey': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import'], help: 'Citation key selector' },
+	'--item-key': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import'], help: 'Eight-character Zotero item key (requires --library)' },
+	'--library': { type: 'integer', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import'], min: 1, max: 1e9, help: 'Local library ID' },
 	'--doi': { type: 'string', actions: ['resolve', 'identity'], help: 'DOI selector' },
 	'--arxiv': { type: 'string', actions: ['resolve', 'identity'], help: 'arXiv id selector' },
 	'--title': { type: 'string', actions: ['resolve', 'identity'], help: 'Exact title selector' },
@@ -55,7 +57,8 @@ const FLAGS = {
 	'--recursive': { type: 'boolean', actions: ['cites'], help: 'Recurse into folders' },
 	'--bibliography': { type: 'boolean', actions: ['cites'], help: 'Emit a ## References block' },
 	'--folders': { type: 'string', actions: ['reconcile'], help: 'Narrow reconcile to these folders (comma-separated)' },
-	'--apply': { type: 'boolean', actions: ['reconcile'], help: 'Write allow-listed hub frontmatter keys (live only)' },
+	'--apply': { type: 'boolean', actions: ['reconcile', 'import'], help: 'reconcile: write allow-listed hub frontmatter keys; import: write the literature note (live only; default is a dry run)' },
+	'--days': { type: 'integer', actions: ['recent'], min: 1, max: 365, help: "Zotero reading-history window in days (default: the plugin's setting, 30)" },
 	'--file': { type: 'string', actions: ['pdf-text', 'locate'], help: 'Vault-relative PDF instead of a Zotero attachment' },
 	'--pages': { type: 'string', actions: ['pdf-text'], help: 'Page range to inline, e.g. 1-5,9' },
 	'--force': { type: 'boolean', actions: ['pdf-text', 'cites'], help: 'pdf-text: re-extract even when a cache exists; cites: overwrite an unmarked --out file (never a note)' },
@@ -129,13 +132,18 @@ if (['pdf-text', 'locate'].includes(action)) {
 	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
 }
 if (action === 'cites' && !('--path' in parsed.values)) fail('cites needs --path.');
+if (action === 'import') {
+	const given = ['--citekey', '--item-key'].filter(name => name in parsed.values);
+	if (given.length !== 1) fail('import needs exactly one selector: --citekey | --item-key --library.');
+	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
+}
 // 0.5 R10
 const BIBLIOGRAPHY_FORMATS = ['text', 'markdown', 'csl-json', 'bibtex', 'biblatex'];
 if (action === 'cites' && '--format' in parsed.values && !BIBLIOGRAPHY_FORMATS.includes(parsed.values['--format'])) fail(`--format must be one of ${BIBLIOGRAPHY_FORMATS.join(', ')}.`);
 if (action === 'cites' && ('--format' in parsed.values || '--out' in parsed.values || '--force' in parsed.values) && !('--bibliography' in parsed.values)) fail('--format, --out and --force need --bibliography.');
 
 const request = {};
-const map = { '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict' };
+const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict' };
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
 const pollOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
@@ -183,9 +191,11 @@ async function evaluateBeforeSubmission(expression) {
 }
 
 async function runLive() {
-	const versions = await evaluateBeforeSubmission(`{apiVersion:p.service.apiVersion,apiVersions:p.service.apiVersions||[p.service.apiVersion]}`);
+	const versions = await evaluateBeforeSubmission(`{apiVersion:p.service.apiVersion,apiVersions:p.service.apiVersions||[p.service.apiVersion],actions:Array.isArray(p.service.actions)?p.service.actions:null}`);
 	if (versions.kind !== 'result') return { bridge: versions, phase: 'discovery' };
 	const apiVersions = Array.isArray(versions.value.apiVersions) ? versions.value.apiVersions : [versions.value.apiVersion];
+	// A host that predates an action (no action list, or one without it) would reject it as unsupported: say why instead.
+	if (LATER_ACTIONS.has(action) && !(Array.isArray(versions.value.actions) && versions.value.actions.includes(action))) return { bridge: { kind: 'too-old-action', apiVersions }, phase: 'discovery' };
 	if (!apiVersions.includes(2)) {
 		if (V2_ACTIONS.includes(action)) return { bridge: { kind: 'too-old', apiVersions }, phase: 'discovery' };
 		if (action === 'resolve' || action === 'diagnostics') return { bridge: { kind: 'too-old-read', apiVersions }, phase: 'discovery' };
@@ -279,6 +289,7 @@ async function main() {
 		}
 		if (bridge.kind === 'invalid-request') { await emit(structuredFailure('invalid-request', bridge.message, true, presentPluginConnection(bridge.apiVersions))); return; }
 		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') { await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message)); return; }
+		if (bridge.kind === 'too-old-action') { await emit(structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not provide the ${action} action; install CMDS Zotero 0.5 or later and reload it.`, true, presentPluginConnection(bridge.apiVersions))); return; }
 		if (bridge.kind === 'too-old' || bridge.kind === 'too-old-read') {
 			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !liveWrite) { await emit(await runOffline(`Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`)); return; }
 			await emit(structuredFailure('plugin-too-old', `The loaded plugin supports API versions ${bridge.apiVersions.join(',')}; ${action} needs contract 2.`, true)); return;
@@ -286,7 +297,7 @@ async function main() {
 		if (liveWrite) { await emit(structuredFailure('requires-obsidian', bridge.message)); return; }
 		await emit(await runOffline(bridge.message)); return;
 	}
-	if (liveWrite) { await emit(structuredFailure('requires-obsidian', `${action}${request.apply ? ' --apply' : request.out !== undefined ? ' --out' : ''} requires the live host.`, true)); return; }
+	if (liveWrite) { await emit(structuredFailure('requires-obsidian', `${action}${request.apply ? ' --apply' : request.out !== undefined ? ' --out' : ''} requires the live host${action === 'recent' ? ' and a running Zotero' : ''}.`, true)); return; }
 	if (!OFFLINE_CAPABLE.has(action)) fail(`${action} is not available offline.`);
 	await emit(await runOffline(null));
 }

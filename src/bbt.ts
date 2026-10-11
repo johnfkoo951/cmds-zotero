@@ -222,6 +222,13 @@ export class BbtService {
 		return orderRecent([...rows.values()]);
 	}
 
+	/** Parent items whose citekey is exactly `citekey`, in every library (a citekey is unique only within one library). */
+	async findByCitekey(citekey: string, signal?: AbortSignal): Promise<Omit<RecentRead, "readOn">[]> {
+		const result = await this.call("item.search", [[["citationKey", "is", citekey]]], this.settings.requestTimeoutMs, signal);
+		if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+		return result.map(parseRecentItem).filter((row): row is Omit<RecentRead, "readOn"> => row !== null && row.citekey === citekey);
+	}
+
 	/** The item's current citekey in its library (local ID or BBT library name), or null when Zotero no longer has the item. */
 	async currentCitekey(itemKey: string, library: number | string, signal?: AbortSignal): Promise<string | null> {
 		const result = await this.call("item.search", [[["key", "is", itemKey], ["libraryID", "is", library]]], this.settings.requestTimeoutMs, signal);

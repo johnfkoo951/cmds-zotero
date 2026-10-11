@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const READ_ONLY = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'locate', 'diagnostics', 'reconcile']);
+// recent and import (a dry run here, since --apply is refused) only read Zotero and the vault.
+const READ_ONLY = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'locate', 'diagnostics', 'reconcile', 'recent', 'import']);
 const FORBIDDEN = new Set(['--apply', '--refresh', '--force', '--out']); // 0.5 R10: --out writes a sidecar
 const args = process.argv.slice(2);
 const actionIndex = args.indexOf('--action');

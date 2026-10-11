@@ -1000,14 +1000,14 @@ var require_foldFlowLines = __commonJS({
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
     var FOLD_QUOTED = "quoted";
-    function foldFlowLines(text3, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
+    function foldFlowLines(text4, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
       if (!lineWidth || lineWidth < 0)
-        return text3;
+        return text4;
       if (lineWidth < minContentWidth)
         minContentWidth = 0;
       const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
-      if (text3.length <= endStep)
-        return text3;
+      if (text4.length <= endStep)
+        return text4;
       const folds = [];
       const escapedFolds = {};
       let end = lineWidth - indent.length;
@@ -1024,14 +1024,14 @@ var require_foldFlowLines = __commonJS({
       let escStart = -1;
       let escEnd = -1;
       if (mode === FOLD_BLOCK) {
-        i = consumeMoreIndentedLines(text3, i, indent.length);
+        i = consumeMoreIndentedLines(text4, i, indent.length);
         if (i !== -1)
           end = i + endStep;
       }
-      for (let ch; ch = text3[i += 1]; ) {
+      for (let ch; ch = text4[i += 1]; ) {
         if (mode === FOLD_QUOTED && ch === "\\") {
           escStart = i;
-          switch (text3[i + 1]) {
+          switch (text4[i + 1]) {
             case "x":
               i += 3;
               break;
@@ -1048,12 +1048,12 @@ var require_foldFlowLines = __commonJS({
         }
         if (ch === "\n") {
           if (mode === FOLD_BLOCK)
-            i = consumeMoreIndentedLines(text3, i, indent.length);
+            i = consumeMoreIndentedLines(text4, i, indent.length);
           end = i + indent.length + endStep;
           split = void 0;
         } else {
           if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
-            const next = text3[i + 1];
+            const next = text4[i + 1];
             if (next && next !== " " && next !== "\n" && next !== "	")
               split = i;
           }
@@ -1065,12 +1065,12 @@ var require_foldFlowLines = __commonJS({
             } else if (mode === FOLD_QUOTED) {
               while (prev === " " || prev === "	") {
                 prev = ch;
-                ch = text3[i += 1];
+                ch = text4[i += 1];
                 overflow = true;
               }
               const j = i > escEnd + 1 ? i - 2 : escStart - 1;
               if (escapedFolds[j])
-                return text3;
+                return text4;
               folds.push(j);
               escapedFolds[j] = true;
               end = j + endStep;
@@ -1085,39 +1085,39 @@ var require_foldFlowLines = __commonJS({
       if (overflow && onOverflow)
         onOverflow();
       if (folds.length === 0)
-        return text3;
+        return text4;
       if (onFold)
         onFold();
-      let res = text3.slice(0, folds[0]);
+      let res = text4.slice(0, folds[0]);
       for (let i2 = 0; i2 < folds.length; ++i2) {
         const fold = folds[i2];
-        const end2 = folds[i2 + 1] || text3.length;
+        const end2 = folds[i2 + 1] || text4.length;
         if (fold === 0)
           res = `
-${indent}${text3.slice(0, end2)}`;
+${indent}${text4.slice(0, end2)}`;
         else {
           if (mode === FOLD_QUOTED && escapedFolds[fold])
-            res += `${text3[fold]}\\`;
+            res += `${text4[fold]}\\`;
           res += `
-${indent}${text3.slice(fold + 1, end2)}`;
+${indent}${text4.slice(fold + 1, end2)}`;
         }
       }
       return res;
     }
-    function consumeMoreIndentedLines(text3, i, indent) {
+    function consumeMoreIndentedLines(text4, i, indent) {
       let end = i;
       let start = i + 1;
-      let ch = text3[start];
+      let ch = text4[start];
       while (ch === " " || ch === "	") {
         if (i < start + indent) {
-          ch = text3[++i];
+          ch = text4[++i];
         } else {
           do {
-            ch = text3[++i];
+            ch = text4[++i];
           } while (ch && ch !== "\n");
           end = i;
           start = i + 1;
-          ch = text3[start];
+          ch = text4[start];
         }
       }
       return end;
@@ -7427,7 +7427,7 @@ function validateEntry(value) {
   if (!record(value) || !validateIdentity(value)) return false;
   const item = value;
   if (item.id !== identityKey(item) || item.zoteroSelectURI !== selectURI(item)) return false;
-  if (!item.citekey || [item.citekey, item.title, item.year, item.doi, item.url, item.attachmentPath, item.contentHash].some((text3) => typeof text3 !== "string")) return false;
+  if (!item.citekey || [item.citekey, item.title, item.year, item.doi, item.url, item.attachmentPath, item.contentHash].some((text4) => typeof text4 !== "string")) return false;
   if (![item.authors, item.collections, item.tags, item.citekeyHistory].every(strings) || !record(item.metadata)) return false;
   if (!["complete", "unavailable"].includes(item.attachmentStatus) || !Array.isArray(item.attachments)) return false;
   try {
@@ -7439,7 +7439,7 @@ function validateEntry(value) {
       keys.add(attachment.key);
       for (const annotation of attachment.annotations) {
         if (!record(annotation) || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachment.key || !positiveInteger(annotation.page) || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags)) return false;
-        if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text3) => typeof text3 !== "string") || annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string") return false;
+        if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text4) => typeof text4 !== "string") || annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string") return false;
         const location = parseZoteroURI(annotation.uri);
         if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
       }
@@ -7460,8 +7460,8 @@ function validateIndex(value) {
 
 // src/agent/git-ignore.ts
 var CACHE_DIR = ".cmds-zotero";
-function escapeRegex(text3) {
-  return text3.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+function escapeRegex(text4) {
+  return text4.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 function stripTrailingSpaces(line) {
   let end = line.length;
@@ -7532,9 +7532,9 @@ function patternToRegex(pattern, anchored) {
   });
   return new RegExp(`^${anchored ? "" : "(?:.*/)?"}${body}$`);
 }
-function parseGitignore(text3) {
+function parseGitignore(text4) {
   const rules = [];
-  for (const rawLine of text3.split(/\r?\n/)) {
+  for (const rawLine of text4.split(/\r?\n/)) {
     const line = stripTrailingSpaces(rawLine);
     if (line === "" || line.startsWith("#")) continue;
     const negated = line.startsWith("!");
@@ -7588,8 +7588,8 @@ function gitCoverage(gitignoreText, indexPath, cacheDir, privateIgnore = null) {
     cacheIgnored: isDirectoryCovered(gitignoreText, cacheDir) || privateIgnoreCoversAll(privateIgnore)
   };
 }
-function privateIgnoreCoversAll(text3) {
-  const last = parseGitignore(text3 ?? "").at(-1);
+function privateIgnoreCoversAll(text4) {
+  const last = parseGitignore(text4 ?? "").at(-1);
   return last !== void 0 && !last.negated && !last.dirOnly && !last.anchored && last.pattern === "*";
 }
 
@@ -7624,11 +7624,11 @@ function emitDoi(value) {
   return DOI_PATTERN.test(doi.toLowerCase()) ? doi : "";
 }
 function normalizeArxiv(value) {
-  const text3 = value.trim();
+  const text4 = value.trim();
   const id = "((?:\\d{4}\\.\\d{4,5})|(?:[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}))";
-  const bare = new RegExp(`^${id}(?:v\\d+)?$`, "i").exec(text3);
-  const labeled = new RegExp(`^arxiv\\s*:\\s*${id}(?:v\\d+)?$`, "i").exec(text3);
-  const url = new RegExp(`^https?://(?:www\\.)?arxiv\\.org/(?:abs|pdf)/${id}(?:v\\d+)?(?:\\.pdf)?(?:[?#].*)?$`, "i").exec(text3);
+  const bare = new RegExp(`^${id}(?:v\\d+)?$`, "i").exec(text4);
+  const labeled = new RegExp(`^arxiv\\s*:\\s*${id}(?:v\\d+)?$`, "i").exec(text4);
+  const url = new RegExp(`^https?://(?:www\\.)?arxiv\\.org/(?:abs|pdf)/${id}(?:v\\d+)?(?:\\.pdf)?(?:[?#].*)?$`, "i").exec(text4);
   const match = bare ?? labeled ?? url;
   return match ? match[1].toLowerCase() : "";
 }
@@ -8397,8 +8397,8 @@ function pickPdf(entry, attachmentKey) {
   if (unknown.length) return { ...none, pdfStatus: "unknown-type", candidates: unknown.map(candidate) };
   return none;
 }
-function singleLine(text3) {
-  return text3.replace(/\s*[\r\n]+\s*/g, " ").trim();
+function singleLine(text4) {
+  return text4.replace(/\s*[\r\n]+\s*/g, " ").trim();
 }
 function wikilink(target) {
   return `[[${target.trim().replace(/^\[\[/, "").replace(/\]\]$/, "").trim()}]]`;
@@ -8584,8 +8584,8 @@ var DEFAULT_SETTINGS = {
 // src/citations/scan.ts
 var KEY = "[A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*[A-Za-z0-9_]|[A-Za-z0-9_]";
 var CITATION = new RegExp(`\\[\\[@(${KEY})(?:[|#][^\\]]*)?\\]\\]|(^|[\\s\\[;(,\\-])-?@(${KEY})`, "g");
-function scanCitations(text3) {
-  const lines2 = text3.split(/\r?\n/);
+function scanCitations(text4) {
+  const lines2 = text4.split(/\r?\n/);
   const occurrences = [];
   let fenced = false;
   let frontmatter = lines2[0]?.trim() === "---";
@@ -8680,12 +8680,12 @@ function groupResolvedByLibrary(keys, classified, byId) {
   return { groups: groupEntriesByLibrary(entries), renamed };
 }
 var BIBTEX_ENTRY = /^\s*@[A-Za-z]+\s*\{\s*([^,\s}]+)\s*,/gm;
-function bibtexKeys(text3) {
-  return uniqueInOrder([...text3.matchAll(BIBTEX_ENTRY)].map((match) => match[1]));
+function bibtexKeys(text4) {
+  return uniqueInOrder([...text4.matchAll(BIBTEX_ENTRY)].map((match) => match[1]));
 }
 function mergeExports(format, outputs) {
   if (format !== "csl-json") {
-    const content = outputs.map((text3) => text3.trim()).filter(Boolean).join("\n\n");
+    const content = outputs.map((text4) => text4.trim()).filter(Boolean).join("\n\n");
     return { content: content ? `${content}
 ` : "", exported: bibtexKeys(content), stripped: [] };
   }
@@ -8781,8 +8781,8 @@ function hintFor(status, reason) {
 function uncheckedCause(reason) {
   return UNCHECKED_CAUSES[reason ?? "stale-index"];
 }
-function escapeRegex2(text3) {
-  return text3.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+function escapeRegex2(text4) {
+  return text4.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 function referencesHeadingPattern(headings = DEFAULT_REFERENCES_HEADINGS) {
   const titles = uniqueInOrder(headings.map((title) => title.trim()).filter(Boolean)).map((title) => escapeRegex2(title).replace(/\s+/g, "\\s*"));
@@ -9019,23 +9019,23 @@ function summarize(files, truncated = false) {
   }
   return summary;
 }
-function hubFullCitationLine(text3) {
-  const value = FULL_CITATION_LINE.exec(text3)?.[1]?.trim() ?? "";
+function hubFullCitationLine(text4) {
+  const value = FULL_CITATION_LINE.exec(text4)?.[1]?.trim() ?? "";
   return value && !PLACEHOLDER.test(value) ? value : null;
 }
-function oneLine(text3) {
-  return text3.replace(/\s*\r?\n\s*/g, " ").trim();
+function oneLine(text4) {
+  return text4.replace(/\s*\r?\n\s*/g, " ").trim();
 }
 function referencesLine(citekey, verdict2, bibliography, hubFullCitation) {
   const prefix = `- [@${citekey}]`;
   switch (verdict2?.citeStatus) {
     case "resolved": {
-      const text3 = oneLine(bibliography.get(citekey) ?? "");
-      return text3 ? `${prefix} ${text3}` : `${prefix} (bibliography unavailable)`;
+      const text4 = oneLine(bibliography.get(citekey) ?? "");
+      return text4 ? `${prefix} ${text4}` : `${prefix} (bibliography unavailable)`;
     }
     case "hub-only": {
-      const text3 = oneLine(hubFullCitation.get(citekey) ?? "");
-      if (text3) return `${prefix} ${text3} (provisional)`;
+      const text4 = oneLine(hubFullCitation.get(citekey) ?? "");
+      if (text4) return `${prefix} ${text4} (provisional)`;
       return verdict2.hub ? `${prefix} [[${verdict2.hub.basename}]] (provisional)` : `${prefix} (provisional)`;
     }
     case "raw-only":
@@ -9156,8 +9156,8 @@ var S01_DOI = /^- \*\*DOI\*\*:\s*(.+)$/im;
 var CALLOUT_CONFIRMED = /\[!check\][+-]?\s*zotero citekey confirmed/i;
 var CALLOUT_PROVISIONAL = /\[!warning\][+-]?\s*provisional citekey/i;
 var CALLOUT_PINNED = /\[!info\][+-]?\s*citekey pinned/i;
-function classifyMarkerText(text3) {
-  const lower = text3.toLowerCase();
+function classifyMarkerText(text4) {
+  const lower = text4.toLowerCase();
   if (!lower) return null;
   if (/not\s+registered|unregistered/.test(lower)) return "not-registered";
   if (lower.includes("provisional")) return "provisional";
@@ -9745,19 +9745,19 @@ function normalizeForMatch(value) {
 function tokenize(value) {
   return normalizeForMatch(value).split(" ").filter(Boolean);
 }
-function snippetAround(text3, index, length) {
+function snippetAround(text4, index, length) {
   const start = Math.max(0, index - 60);
-  const end = Math.min(text3.length, index + length + 60);
-  return `${start > 0 ? "\u2026" : ""}${text3.slice(start, end)}${end < text3.length ? "\u2026" : ""}`;
+  const end = Math.min(text4.length, index + length + 60);
+  return `${start > 0 ? "\u2026" : ""}${text4.slice(start, end)}${end < text4.length ? "\u2026" : ""}`;
 }
 function locateQuote(pages, quote, minScore = 0.6) {
   const needle = normalizeForMatch(quote);
   if (needle.length < 8) throw new Error("Quote must be at least 8 characters after normalization");
   const exact = [];
   const normalized = pages.map((page) => ({ page, text: normalizeForMatch(page.text) }));
-  for (const { page, text: text3 } of normalized) {
-    const index = text3.indexOf(needle);
-    if (index >= 0) exact.push({ page: page.page, pageLabel: page.pageLabel, score: 1, snippet: snippetAround(text3, index, needle.length), method: "exact" });
+  for (const { page, text: text4 } of normalized) {
+    const index = text4.indexOf(needle);
+    if (index >= 0) exact.push({ page: page.page, pageLabel: page.pageLabel, score: 1, snippet: snippetAround(text4, index, needle.length), method: "exact" });
   }
   if (exact.length) return exact;
   for (let i = 0; i + 1 < normalized.length; i++) {
@@ -9768,8 +9768,8 @@ function locateQuote(pages, quote, minScore = 0.6) {
   if (exact.length) return exact;
   const want = tokenize(quote);
   const results = [];
-  for (const { page, text: text3 } of normalized) {
-    const have = text3.split(" ");
+  for (const { page, text: text4 } of normalized) {
+    const have = text4.split(" ");
     if (!have.length) continue;
     const window = Math.min(have.length, Math.max(want.length * 2, 12));
     let best = 0;
@@ -9800,7 +9800,7 @@ function locateQuote(pages, quote, minScore = 0.6) {
     const score = want.length ? best / new Set(want).size : 0;
     if (score >= minScore) {
       const charIndex = have.slice(0, bestAt).join(" ").length;
-      results.push({ page: page.page, pageLabel: page.pageLabel, score: Math.round(score * 100) / 100, snippet: snippetAround(text3, charIndex, Math.min(text3.length - charIndex, needle.length)), method: "tokens" });
+      results.push({ page: page.page, pageLabel: page.pageLabel, score: Math.round(score * 100) / 100, snippet: snippetAround(text4, charIndex, Math.min(text4.length - charIndex, needle.length)), method: "tokens" });
     }
   }
   return results.sort((a, b) => b.score - a.score || a.page - b.page).slice(0, 5);
@@ -9819,14 +9819,14 @@ var CALLOUT_HEAD = /^ {0,3}>[ \t]*\[![A-Za-z][A-Za-z0-9_-]*\]/;
 var QUOTE_LINE = /^ {0,3}>[ \t]?(.*)$/;
 var WRAPPING_QUOTES = [['"', '"'], ["\u201C", "\u201D"], ["'", "'"], ["\u2018", "\u2019"], ["\u300C", "\u300D"], ["\u300E", "\u300F"], ["\xAB", "\xBB"]];
 function stripWrappingQuotes(value) {
-  let text3 = value.trim();
+  let text4 = value.trim();
   for (const [open, close] of WRAPPING_QUOTES) {
-    if (text3.length >= 2 && text3.startsWith(open) && text3.endsWith(close)) {
-      text3 = text3.slice(open.length, text3.length - close.length).trim();
+    if (text4.length >= 2 && text4.startsWith(open) && text4.endsWith(close)) {
+      text4 = text4.slice(open.length, text4.length - close.length).trim();
       break;
     }
   }
-  return text3;
+  return text4;
 }
 function extractQuoteCallouts(markdown) {
   const lines2 = markdown.split(/\r?\n/);
@@ -9879,12 +9879,12 @@ function locateBatch(pages, quotes, attachment) {
 }
 
 // src/agent/actions.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 
 // src/pdf/text-layer.ts
 var MIN_PAGE_BODY_CHARS = 20;
-function lines(text3) {
-  return text3.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+function lines(text4) {
+  return text4.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
 }
 function visibleLength(line) {
   return line.replace(/\s/g, "").length;
@@ -9906,9 +9906,73 @@ function textLayerWarning(report, pageCount) {
   return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (scanned pages). Run OCR for those pages before relying on the text.`;
 }
 
+// src/note-writer.ts
+import { createHash as createHash3 } from "crypto";
+
+// src/annotations/colors.ts
+var ANNOTATION_COLORS = ["yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray"];
+function isAnnotationColor(value) {
+  return ANNOTATION_COLORS.includes(value);
+}
+
+// src/recent/recent-reads.ts
+function pad(value) {
+  return String(value).padStart(2, "0");
+}
+function noon(day) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) throw new Error("Invalid calendar day");
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12);
+}
+function localDay(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function daysBetween(later, earlier) {
+  return Math.round((noon(later).getTime() - noon(earlier).getTime()) / 864e5);
+}
+function readLabel(readOn, today) {
+  if (!readOn) return "read recently";
+  const days = daysBetween(today, readOn);
+  if (days <= 0) return "read today";
+  if (days === 1) return "read yesterday";
+  if (days < 14) return `read ${days} days ago`;
+  return `read on ${readOn}`;
+}
+function describeNoteStatus(status) {
+  const kept = status.orphaned ? `; ${status.orphaned} block${status.orphaned === 1 ? "" : "s"} for annotations deleted in Zotero kept` : "";
+  switch (status.state) {
+    case "none":
+      return status.annotations ? `No literature note yet \xB7 ${status.annotations} annotation${status.annotations === 1 ? "" : "s"} in Zotero` : "No literature note yet";
+    case "behind":
+      return `${status.missing} new annotation${status.missing === 1 ? "" : "s"} not in the note${kept}`;
+    case "current":
+      return `Note is up to date${kept}`;
+    case "foreign":
+      return "A note with this Zotero identity exists but was not created by CMDS Zotero; it is never overwritten";
+    case "duplicate":
+      return "Several notes claim this Zotero identity; resolve the duplicate first";
+  }
+}
+function needsSending(status) {
+  return status.state === "none" || status.state === "behind";
+}
+function describeSendOutcome(outcome) {
+  const kept = outcome.preserved.length ? `; your edits kept in ${outcome.preserved.length} section${outcome.preserved.length === 1 ? "" : "s"}` : "";
+  switch (outcome.status) {
+    case "created":
+      return `Created ${outcome.path}`;
+    case "updated":
+      return `Updated ${outcome.path}${kept}`;
+    case "unchanged":
+      return `Already up to date${kept}`;
+    case "refused":
+      return `Not written: ${outcome.message ?? "conflict"}`;
+  }
+}
+
 // src/agent/actions.ts
 var MAX_CITES_FILES = 2e3;
-var AGENT_ACTIONS = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate"];
+var AGENT_ACTIONS = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate", "recent", "import"];
 var ACTION_API_VERSION = {
   connection: 1,
   info: 2,
@@ -9919,7 +9983,9 @@ var ACTION_API_VERSION = {
   reconcile: 2,
   diagnostics: 1,
   "pdf-text": 2,
-  locate: 2
+  locate: 2,
+  recent: 2,
+  import: 2
 };
 function envelope(host, action, apiVersion, failure) {
   return buildEnvelope(action, host.vault, apiVersion, host.connection, host.now, failure);
@@ -10014,8 +10080,8 @@ async function identityAction(host, request) {
   let bbtError = null;
   if (!request.noBibliography && entry && host.bibliography) {
     try {
-      const text3 = await host.bibliography(entry, style);
-      if (text3) bibliography = { style, text: text3 };
+      const text4 = await host.bibliography(entry, style);
+      if (text4) bibliography = { style, text: text4 };
       else bibliographyReason = "style-error";
     } catch (error) {
       bibliographyReason = "bbt-unreachable";
@@ -10132,8 +10198,8 @@ async function citesAction(host, request) {
         const entry = byId.get(verdict2.entryId);
         if (entry) {
           try {
-            const text3 = await host.bibliography(entry, style);
-            if (text3) bibliography.set(key, text3);
+            const text4 = await host.bibliography(entry, style);
+            if (text4) bibliography.set(key, text4);
           } catch (error) {
             referencesReason = "bbt-unreachable";
             bbtError = bbtErrorPayload(error) ?? bbtError;
@@ -10181,7 +10247,7 @@ async function reconcileDryRun(host, request, listedNotes) {
   const sourceByPath = new Map(notes.filter((note) => note.body !== void 0).map((note) => [note.path, note.body]));
   for (const note of result.notes) {
     const source = sourceByPath.get(note.path);
-    if (source !== void 0) note.sourceHash = createHash3("sha256").update(source).digest("hex");
+    if (source !== void 0) note.sourceHash = createHash4("sha256").update(source).digest("hex");
   }
   return { result, view, stale };
 }
@@ -10378,7 +10444,9 @@ function validateActionRequest(action, value) {
     diagnostics: ["allowStale"],
     // 0.5 R10: format/out/force
     "pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"],
-    locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"]
+    locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
+    recent: ["days"],
+    import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"]
   };
   for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
   for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
@@ -10401,6 +10469,8 @@ function validateActionRequest(action, value) {
   if (action === "cites" && request.out !== void 0 && request.out !== true && (typeof request.out !== "string" || !request.out.trim() || request.out.length > 4096)) throw new Error("out must be true (default sidecar path) or a non-empty vault-relative path.");
   if (action === "cites" && (request.format !== void 0 || request.out !== void 0 || request.force !== void 0) && request.bibliography !== true) throw new Error("format, out and force need bibliography.");
   if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter((key) => request[key] !== void 0).length !== 1) throw new Error("pdf-text requires exactly one target.");
+  if (action === "recent" && request.days !== void 0 && (!Number.isSafeInteger(request.days) || request.days < 1 || request.days > 365)) throw new Error("days must be an integer between 1 and 365.");
+  if (action === "import" && ["citekey", "itemKey"].filter((key) => request[key] !== void 0).length !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID.");
   if (action === "locate") {
     const targets = ["citekey", "itemKey", "file"].filter((key) => request[key] !== void 0);
     if (request.path === void 0 && (targets.length !== 1 || request.quote === void 0)) throw new Error("locate requires path, or one target with quote.");
@@ -10452,6 +10522,66 @@ async function pdfTextAction(host, request) {
   const layerWarning = textLayerWarning(textLayer, extraction.extracted.pageCount);
   return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, textLayer, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: layerWarning ? [...extraction.warnings, layerWarning] : extraction.warnings };
 }
+async function recentAction(host, request) {
+  if (!host.recentReads) return { ...envelope(host, "recent", 2, { reason: "requires-obsidian", message: "recent requires the live Obsidian host and a running Zotero." }) };
+  const days = request.days ?? host.settings.recentReadsDays;
+  let reports;
+  try {
+    reports = await host.recentReads(days);
+  } catch (error) {
+    const bbtError = bbtErrorPayload(error);
+    const message = error instanceof Error ? error.message : "Zotero's reading history could not be read.";
+    return { ...envelope(host, "recent", 2, { reason: bbtError ? "bbt-unreachable" : "invalid-request", message }), ...bbtError ? { bbtError } : {} };
+  }
+  const today = localDay(host.now);
+  return {
+    ...envelope(host, "recent", 2),
+    days,
+    today,
+    count: reports.length,
+    items: reports.map((report) => ({
+      citekey: report.read.citekey,
+      id: report.id,
+      itemKey: report.read.itemKey,
+      libraryType: report.read.libraryType,
+      ...report.read.groupID !== void 0 ? { groupID: report.read.groupID } : {},
+      library: report.read.library,
+      title: report.read.title,
+      year: report.read.year,
+      authors: report.read.authors,
+      readOn: report.read.readOn,
+      readLabel: readLabel(report.read.readOn, today),
+      inIndex: report.inIndex,
+      fresh: report.fresh,
+      note: report.note ? { ...report.note, summary: describeNoteStatus(report.note), needsImport: needsSending(report.note) } : null,
+      ...report.problem ? { problem: report.problem } : {}
+    }))
+  };
+}
+async function importAction(host, request) {
+  if (!host.importNote) return { ...envelope(host, "import", 2, { reason: "requires-obsidian", message: "import requires the live Obsidian host." }) };
+  const result = await host.importNote(request);
+  if (result.failure) {
+    const { reason, message, candidates, bbtError } = result.failure;
+    return { ...envelope(host, "import", 2, { reason, message }), ...candidates ? { candidates } : {}, ...bbtError ? { bbtError } : {} };
+  }
+  const preview = result.preview;
+  const outcome = result.outcome ?? null;
+  const counts = {};
+  for (const section of preview?.sections ?? []) counts[section.state] = (counts[section.state] ?? 0) + 1;
+  const body = {
+    dryRun: request.apply !== true,
+    item: result.item ?? null,
+    fresh: result.fresh === true,
+    note: { path: preview?.path ?? outcome?.path ?? null, existed: preview?.exists ?? false, before: result.before ?? null, ...result.after ? { after: result.after } : {} },
+    preview: preview ? { conflicts: preview.conflicts, softConflicts: preview.softConflicts, sections: counts, changes: preview.changes } : null,
+    outcome: outcome ? { ...outcome, summary: describeSendOutcome(outcome) } : null,
+    warnings: result.warnings ?? []
+  };
+  const refused = (preview?.conflicts.length ?? 0) > 0 || outcome?.status === "refused";
+  if (refused) return { ...envelope(host, "import", 2, { reason: "note-conflict", message: outcome?.message ?? preview?.conflicts.join("; ") ?? "The literature note cannot be written." }), ...body };
+  return { ...envelope(host, "import", 2), ...body };
+}
 async function runAction(host, action, request = {}) {
   validateActionRequest(action, request);
   let effectiveHost = host;
@@ -10480,35 +10610,33 @@ async function runAction(host, action, request = {}) {
       return pdfTextAction(host, request);
     case "locate":
       return locateAction(host, request);
+    case "recent":
+      return recentAction(host, request);
+    case "import":
+      return importAction(host, request);
   }
-}
-
-// src/annotations/colors.ts
-var ANNOTATION_COLORS = ["yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray"];
-function isAnnotationColor(value) {
-  return ANNOTATION_COLORS.includes(value);
 }
 
 // src/settings-data.ts
 function integer(value, fallback, min, max) {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
-function text2(value, fallback) {
+function text3(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 function normalizeSettings(raw) {
   const data = raw && typeof raw === "object" ? raw : {};
   return {
-    bbtEndpoint: text2(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
-    zoteroIndexPath: text2(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
-    caywFormat: text2(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
+    bbtEndpoint: text3(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
+    zoteroIndexPath: text3(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
+    caywFormat: text3(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
     requestTimeoutMs: integer(data.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs, 1e3, 18e4),
     attachmentTimeoutMs: integer(data.attachmentTimeoutMs, DEFAULT_SETTINGS.attachmentTimeoutMs, 1e3, 18e4),
     concurrency: integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8),
     indexMaxAgeMinutes: integer(data.indexMaxAgeMinutes, DEFAULT_SETTINGS.indexMaxAgeMinutes, 1, 10080),
-    outputFolder: text2(data.outputFolder, DEFAULT_SETTINGS.outputFolder),
-    imageFolder: text2(data.imageFolder, DEFAULT_SETTINGS.imageFolder),
-    bibliographyStyle: text2(data.bibliographyStyle, DEFAULT_SETTINGS.bibliographyStyle),
+    outputFolder: text3(data.outputFolder, DEFAULT_SETTINGS.outputFolder),
+    imageFolder: text3(data.imageFolder, DEFAULT_SETTINGS.imageFolder),
+    bibliographyStyle: text3(data.bibliographyStyle, DEFAULT_SETTINGS.bibliographyStyle),
     peerVaults: Array.isArray(data.peerVaults) ? data.peerVaults.filter((v) => {
       if (!v || typeof v !== "object") return false;
       const peer = v;
@@ -10606,8 +10734,8 @@ async function readLocalFile(path, opts) {
 }
 
 // src/frontmatter-read.ts
-function parseNoteText(text3, parse) {
-  const source = text3.charCodeAt(0) === 65279 ? text3.slice(1) : text3;
+function parseNoteText(text4, parse) {
+  const source = text4.charCodeAt(0) === 65279 ? text4.slice(1) : text4;
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source);
   if (!match) return { frontmatter: null, frontmatterParse: /^---(?:\r?\n|$)/.test(source) ? "error" : "ok", body: source };
   const body = source.slice(match[0].length);
@@ -10648,8 +10776,8 @@ async function locateVault(name, explicitPath, home = homedir()) {
   if (candidates.length !== 1) return { location: null, ambiguous: candidates.length > 1, candidates };
   return { location: { name, path: await fs2.realpath(candidates[0]) }, ambiguous: false, candidates };
 }
-function parseFrontmatter(text3) {
-  return parseNoteText(text3, import_yaml.parse);
+function parseFrontmatter(text4) {
+  return parseNoteText(text4, import_yaml.parse);
 }
 var FsVaultReader = class {
   constructor(root, name) {
@@ -10704,14 +10832,14 @@ var FsVaultReader = class {
         }
         if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
         const relPath = relative(this.root, full).split(sep).join("/");
-        let text3;
+        let text4;
         try {
-          text3 = await this.readNote(relPath);
+          text4 = await this.readNote(relPath);
         } catch {
           this.report.skipped.push(relPath);
           continue;
         }
-        const parsed = parseFrontmatter(text3);
+        const parsed = parseFrontmatter(text4);
         if (parsed.frontmatterParse === "error") this.report.skipped.push(relPath);
         notes.push({ path: relPath, basename: entry.name.replace(/\.md$/, ""), frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse });
       }
@@ -10836,13 +10964,13 @@ async function probeGit(root, indexPath) {
 }
 
 // src/pdf/file-hash.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 var MAX_LOCAL_PDF_BYTES = 64 * 1024 * 1024;
 var PDF_MAGIC = ["255044462d"];
 async function hashLocalPdf(absolutePath, maxBytes = MAX_LOCAL_PDF_BYTES) {
   try {
     const bytes = (await readLocalFile(absolutePath, { maxBytes, minBytes: 5, magic: PDF_MAGIC, label: "PDF" })).bytes;
-    return { sha256: createHash4("sha256").update(bytes).digest("hex"), absolutePath };
+    return { sha256: createHash5("sha256").update(bytes).digest("hex"), absolutePath };
   } catch (error) {
     if (error instanceof LocalFileError && (error.code === "too-large" || error.code === "bad-magic")) throw error;
     return null;
@@ -10866,15 +10994,15 @@ async function readIndex(root, path) {
     const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
     return { index: null, present: false, failure: { reason: missing ? "index-missing" : "path-outside-vault", message: missing ? `Index file is absent: ${path}` : error instanceof Error ? error.message : "Invalid index path." } };
   }
-  let text3;
+  let text4;
   try {
-    text3 = Buffer.from((await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 1, magic: () => true })).bytes).toString("utf8");
+    text4 = Buffer.from((await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 1, magic: () => true })).bytes).toString("utf8");
   } catch (error) {
     const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
     return { index: null, present: code !== "ENOENT", failure: { reason: code === "ENOENT" ? "index-missing" : "index-invalid", message: code === "ENOENT" ? `Index file is absent: ${path}` : error instanceof Error ? error.message : "Index cannot be read." } };
   }
   try {
-    const value = JSON.parse(text3);
+    const value = JSON.parse(text4);
     if (!validateIndex(value)) return { index: null, present: true, failure: { reason: "index-invalid", message: `Index file is present but invalid: ${path}` } };
     return { index: value, present: true, failure: null };
   } catch {

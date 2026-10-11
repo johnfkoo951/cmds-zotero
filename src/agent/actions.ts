@@ -30,6 +30,7 @@ import { createHash } from "node:crypto";
 import { bbtErrorPayload } from "../api/transport";
 import { IndexRefusalError } from "../index-service";
 import { textLayerReport, textLayerWarning } from "../pdf/text-layer";
+import { describeNoteStatus, describeSendOutcome, localDay, needsSending, readLabel, type ImportNoteResult, type RecentReport } from "../recent/recent-reads";
 
 export const MAX_CITES_FILES = 2000;
 
@@ -49,10 +50,10 @@ export interface PdfCacheReader {
 	fileHash(vaultRelativePath: string): Promise<{ sha256: string; absolutePath: string } | null>;
 }
 
-export type AgentAction = "connection" | "info" | "refresh" | "resolve" | "identity" | "cites" | "reconcile" | "diagnostics" | "pdf-text" | "locate";
-export const AGENT_ACTIONS: readonly AgentAction[] = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate"];
+export type AgentAction = "connection" | "info" | "refresh" | "resolve" | "identity" | "cites" | "reconcile" | "diagnostics" | "pdf-text" | "locate" | "recent" | "import";
+export const AGENT_ACTIONS: readonly AgentAction[] = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate", "recent", "import"];
 export const ACTION_API_VERSION: Readonly<Record<AgentAction, 1 | 2>> = {
-	connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, "pdf-text": 2, locate: 2,
+	connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, "pdf-text": 2, locate: 2, recent: 2, import: 2
 };
 
 export interface ActionHost {
@@ -76,6 +77,10 @@ export interface ActionHost {
 	// 0.5 R10: live host only. `exportBibliography` runs one BBT `item.export` per library; `sidecar` reads/writes the bibliography file.
 	exportBibliography?: BibliographyExporter;
 	sidecar?: SidecarStore;
+	/** Live host only: Zotero's reading history with each paper's literature-note state (Zotero must be running). */
+	recentReads?: (days: number) => Promise<RecentReport[]>;
+	/** Live host only: the literature-note import the plugin UI uses; writes only when `request.apply` is true. */
+	importNote?: (request: ImportRequest) => Promise<ImportNoteResult>;
 }
 
 /** 0.5 R10: vault-relative sidecar access; `read` returns null when absent, `write` ensures the private ignore file and folders and returns the byte count. */
@@ -92,7 +97,9 @@ export interface ReconcileRequest extends CommonRequest { folders?: string[]; ap
 export interface LocateRequestArgs { path?: string; citekey?: string; itemKey?: string; libraryID?: number; file?: string; quote?: string; attachment?: string }
 export interface RefreshRequest { ifOlderThanMinutes?: number }
 export interface PdfTextRequest { citekey?: string; itemKey?: string; libraryID?: number; file?: string; attachment?: string; pages?: string; force?: boolean }
-export type ActionRequest = ResolveRequest | IdentityRequest | CitesRequest | ReconcileRequest | LocateRequestArgs | RefreshRequest | PdfTextRequest | CommonRequest | Record<string, never>;
+export interface RecentRequest { days?: number }
+export interface ImportRequest { citekey?: string; itemKey?: string; libraryID?: number; apply?: boolean; allowStale?: boolean }
+export type ActionRequest = ResolveRequest | IdentityRequest | CitesRequest | ReconcileRequest | LocateRequestArgs | RefreshRequest | PdfTextRequest | RecentRequest | ImportRequest | CommonRequest | Record<string, never>;
 
 type Payload = Envelope & Record<string, unknown>;
 
@@ -587,6 +594,7 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 		identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
 		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale"], // 0.5 R10: format/out/force
 		"pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"], locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
+		recent: ["days"], import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"],
 	};
 	for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
 	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
@@ -607,6 +615,8 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 	if (action === "cites" && request.out !== undefined && request.out !== true && (typeof request.out !== "string" || !request.out.trim() || request.out.length > 4096)) throw new Error("out must be true (default sidecar path) or a non-empty vault-relative path.");
 	if (action === "cites" && (request.format !== undefined || request.out !== undefined || request.force !== undefined) && request.bibliography !== true) throw new Error("format, out and force need bibliography.");
 	if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined).length !== 1) throw new Error("pdf-text requires exactly one target.");
+	if (action === "recent" && request.days !== undefined && (!Number.isSafeInteger(request.days) || (request.days as number) < 1 || (request.days as number) > 365)) throw new Error("days must be an integer between 1 and 365.");
+	if (action === "import" && ["citekey", "itemKey"].filter(key => request[key] !== undefined).length !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID.");
 	if (action === "locate") {
 		const targets = ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined);
 		if (request.path === undefined && (targets.length !== 1 || request.quote === undefined)) throw new Error("locate requires path, or one target with quote.");
@@ -661,6 +671,59 @@ export async function pdfTextAction(host: ActionHost, request: PdfTextRequest): 
 	return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, textLayer, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: layerWarning ? [...extraction.warnings, layerWarning] : extraction.warnings };
 }
 
+/** `recent`: papers whose PDF Zotero opened within `days` (default from settings), newest first, with note states. */
+export async function recentAction(host: ActionHost, request: RecentRequest): Promise<Payload> {
+	if (!host.recentReads) return { ...envelope(host, "recent", 2, { reason: "requires-obsidian", message: "recent requires the live Obsidian host and a running Zotero." }) };
+	const days = request.days ?? host.settings.recentReadsDays;
+	let reports: RecentReport[];
+	try { reports = await host.recentReads(days); }
+	catch (error) {
+		const bbtError = bbtErrorPayload(error);
+		const message = error instanceof Error ? error.message : "Zotero's reading history could not be read.";
+		return { ...envelope(host, "recent", 2, { reason: bbtError ? "bbt-unreachable" : "invalid-request", message }), ...(bbtError ? { bbtError } : {}) };
+	}
+	const today = localDay(host.now);
+	return {
+		...envelope(host, "recent", 2), days, today, count: reports.length,
+		items: reports.map(report => ({
+			citekey: report.read.citekey, id: report.id, itemKey: report.read.itemKey, libraryType: report.read.libraryType,
+			...(report.read.groupID !== undefined ? { groupID: report.read.groupID } : {}), library: report.read.library,
+			title: report.read.title, year: report.read.year, authors: report.read.authors,
+			readOn: report.read.readOn, readLabel: readLabel(report.read.readOn, today), inIndex: report.inIndex, fresh: report.fresh,
+			note: report.note ? { ...report.note, summary: describeNoteStatus(report.note), needsImport: needsSending(report.note) } : null,
+			...(report.problem ? { problem: report.problem } : {}),
+		})),
+	};
+}
+
+/**
+ * `import`: creates the literature note or refreshes its managed sections from the item as Zotero has it now; a dry run
+ * unless `apply`. Edited generated sections are kept (soft conflicts); an unowned note, damaged markers or several notes
+ * with one identity refuse (`note-conflict`). Without a fresh Zotero read it refuses unless `allowStale`.
+ */
+export async function importAction(host: ActionHost, request: ImportRequest): Promise<Payload> {
+	if (!host.importNote) return { ...envelope(host, "import", 2, { reason: "requires-obsidian", message: "import requires the live Obsidian host." }) };
+	const result = await host.importNote(request);
+	if (result.failure) {
+		const { reason, message, candidates, bbtError } = result.failure;
+		return { ...envelope(host, "import", 2, { reason: reason as FailureReason, message }), ...(candidates ? { candidates } : {}), ...(bbtError ? { bbtError } : {}) };
+	}
+	const preview = result.preview;
+	const outcome = result.outcome ?? null;
+	const counts: Record<string, number> = {};
+	for (const section of preview?.sections ?? []) counts[section.state] = (counts[section.state] ?? 0) + 1;
+	const body = {
+		dryRun: request.apply !== true, item: result.item ?? null, fresh: result.fresh === true,
+		note: { path: preview?.path ?? outcome?.path ?? null, existed: preview?.exists ?? false, before: result.before ?? null, ...(result.after ? { after: result.after } : {}) },
+		preview: preview ? { conflicts: preview.conflicts, softConflicts: preview.softConflicts, sections: counts, changes: preview.changes } : null,
+		outcome: outcome ? { ...outcome, summary: describeSendOutcome(outcome) } : null,
+		warnings: result.warnings ?? [],
+	};
+	const refused = (preview?.conflicts.length ?? 0) > 0 || outcome?.status === "refused";
+	if (refused) return { ...envelope(host, "import", 2, { reason: "note-conflict", message: outcome?.message ?? preview?.conflicts.join("; ") ?? "The literature note cannot be written." }), ...body };
+	return { ...envelope(host, "import", 2), ...body };
+}
+
 export async function runAction(host: ActionHost, action: AgentAction, request: unknown = {}): Promise<Payload> {
 	validateActionRequest(action, request);
 	let effectiveHost = host;
@@ -679,5 +742,7 @@ export async function runAction(host: ActionHost, action: AgentAction, request: 
 		case "diagnostics": return diagnosticsAction(host, request as CommonRequest);
 		case "pdf-text": return pdfTextAction(host, request as PdfTextRequest);
 		case "locate": return locateAction(host, request as LocateRequestArgs);
+		case "recent": return recentAction(host, request as RecentRequest);
+		case "import": return importAction(host, request as ImportRequest);
 	}
 }
