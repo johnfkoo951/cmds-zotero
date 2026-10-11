@@ -7,9 +7,11 @@ Implementation status and test evidence belong in the plan, not in claims that e
 
 ## Scope
 
-Ten CLI actions, no new UI. Zotero remains read-only through documented Better BibTeX RPCs.
+Twelve CLI actions (`recent` and `import` since 0.5). Zotero remains read-only through documented Better BibTeX RPCs.
 No database access, companion add-on, HTTP listener, telemetry, or automatic citekey changes.
-The only write to non-plugin-owned notes is explicitly requested `reconcile --apply`.
+The only write to non-plugin-owned notes is explicitly requested `reconcile --apply`; `import --apply` writes only
+plugin-owned literature notes (new files, or managed sections of notes carrying this item's owner marker) and their
+annotation images, through the same preview/apply path as the plugin UI.
 Neither `identity` nor `cites` nor `locate` applies the Markdown it returns.
 Non-note writes are enumerated: (1) the private PDF text cache of `pdf-text`; (2) the bibliography sidecar of
 `cites --bibliography --out` (0.5), by default `.cmds-zotero/bibliography/<slug>.<ext>` inside the plugin-owned
@@ -29,6 +31,8 @@ private folder, elsewhere only under the overwrite rule in "Bibliography formats
 | diagnostics | 1 | Yes | None |
 | pdf-text | 2 | No | Private PDF text cache |
 | locate | 2 | Yes | None |
+| recent | 2 | No | None (Better BibTeX searches only) |
+| import | 2 | No | Plugin-owned literature note and annotation images, only with `--apply` |
 
 Every structured response has `apiVersion`, `contract: 2`, `apiVersions: [1,2]`, `action`, `vault`,
 `ok`, `checkedAt` (UTC ISO timestamp), and `connection`. Failures add `reason` and `message`.
@@ -278,9 +282,51 @@ Do not claim complete atomicity or automatically roll back over concurrent edits
 A verification mismatch is an integrity failure with actual-write/churn accounting, not a successful skip.
 Stop further writes after integrity failure and let the user inspect current state.
 
+## Recently read papers and literature-note import (0.5)
+
+`recent` lists the papers whose PDF Zotero opened in its reader within `--days` (1–365; default the plugin setting
+`recentReadsDays`, 30), newest first. Zotero 10 records `attachmentLastRead` (local calendar day granularity in search);
+Better BibTeX `item.search` with `[["resultLevel","item"],["lastRead","isInTheLast","N days"]]` maps the attachment-level
+condition to the parent item, and exact-day probes `["lastRead","is","YYYY-MM-DD"]` (local date) date each paper. Neither
+the BetterBibTeX JSON export nor `item.attachments` carries `lastRead`. Rows without a citekey (standalone PDFs) are omitted.
+Each item reports `citekey`, `id` (`libraryID:itemKey`, null when unreadable), `itemKey`, `libraryType`, `groupID`,
+`library`, `title`, `year`, `authors`, `readOn` (local day or null), `readLabel`, `inIndex`, `fresh` (read from Zotero now,
+not the saved index), `note` and optional `problem`. `note` is `{state, path, missing, orphaned, annotations, summary,
+needsImport}` with `state` one of `none`, `behind` (Zotero has annotations without a block in the note), `current`,
+`foreign` (a note has the identity but not this plugin's owner marker; never written) and `duplicate`. It compares the
+note's `annotation-<attachment>-<annotation>` markers (detached blocks included) with the item's annotations; `orphaned`
+counts blocks whose annotation was deleted in Zotero, which are kept, never removed. Zotero unreachable is `ok:false,
+reason: bbt-unreachable` with `bbtError`.
+
+`import` takes exactly one selector (`--citekey`, or `--item-key` with `--library`) and is a dry run unless `--apply`.
+It renders from the item as Zotero has it now (one `item.export` plus `item.attachments`; the saved index is not
+rewritten), so annotations made since the last refresh are included; a citekey renamed in Zotero is followed by item key
+and an export that resolves to another item is refused. A citekey the saved index does not know yet is looked up with an
+exact `citationKey` search (several libraries using it is `invalid-request`). When the item cannot be read fresh the
+request is refused (`bbt-unreachable` or `invalid-request`) unless `--allow-stale`, which renders from the saved index and
+adds a warning; a first import still needs bibliography text (0.5 R12). The payload carries `dryRun`, `item`, `fresh`,
+`note {path, existed, before, after?}` (note states as in `recent`), `preview {conflicts, softConflicts, sections (counts by
+state), changes}`, `outcome {status: created|updated|unchanged|refused, path, preserved, message?, summary}` (null on a dry
+run) and `warnings`. Edited generated sections are soft conflicts: kept verbatim and listed in `preserved` while the rest of
+the note is written. Hard conflicts (unowned note, damaged or duplicate markers, several notes with one identity, a note
+changed between preview and write) are `ok:false, reason: note-conflict`, in a dry run as well as on apply. A failure while
+writing maps to `apply-failed`. The user-owned regions of a literature note are the frontmatter (initialised once), the
+`## Synthesis` callout, `## Notes`, any text outside managed markers and detached blocks; an agent records its own synthesis
+there, never inside `<!-- cmds-zotero:<id>:<hash> -->` blocks.
+
+The live host advertises its action list (`service.actions`); the CLI refuses `recent`/`import` against a host that does
+not list them with `plugin-too-old` before submitting anything. Both are live-only; offline they answer `requires-obsidian`.
+`ingest-ro.mjs` allows `recent` and `import` dry runs and still rejects `--apply`.
+
 ## PDF evidence and private caches
 
-Use the bundled public `loadPdfJs()` API and guarded local reads, not a new PDF service.
+Use the bundled public `loadPdfJs()` API and guarded local reads, not a new PDF service. Pass Obsidian's bundled
+pdf.js resources (`cMapUrl: "/lib/pdfjs/cmaps/"`, `cMapPacked: true`, `standardFontDataUrl: "/lib/pdfjs/standard_fonts/"`,
+the URLs its own viewer uses) so CID-keyed CJK fonts and non-embedded standard fonts extract.
+`pdf-text` adds `textLayer {textLayer: full|partial|none, emptyPages, bodyChars, ocrRecommended}`: lines repeated on at
+least half of the pages (three or more pages) are watermarks or running heads, not body text, and a page under 20 body
+characters has none. `none` or `partial` adds a warning to run OCR (not part of this plugin); `locate` cannot verify
+quotes in such pages.
 Capture the input byte length before passing a transferable buffer to pdf.js.
 Page is one-based physical position; pageLabel is printed text. Empty/dash-only labels fall back to position.
 `p.-` must never appear. Fuzzy/ambiguous/unverified matches must not masquerade as confirmed quote locations.

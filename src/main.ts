@@ -1,4 +1,4 @@
-import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, parseYaml, stringifyYaml } from "obsidian";
+import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin, TAbstractFile, TFile, TFolder, htmlToMarkdown, parseYaml, stringifyYaml } from "obsidian";
 import { BbtService } from "./bbt";
 import { IndexService, describeRefreshFailure, formatIndexAge, refreshRefusal, resolveInIndex, type CollectPrecondition } from "./index-service";
 import { ImportService } from "./importer";
@@ -164,7 +164,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 		// 0.5 R12: the sidecar is loaded lazily on the first bibliography read; the importer receives text through the same path.
 		const store: BibliographyStore = new BibliographyStore(bibliographySidecarStorage(this.app, () => this.active && this.bibliographyStore === store));
 		this.bibliographyStore = store;
-		this.importer = new ImportService(this.app, this.bbt, () => this.settings, (entry, options) => this.bibliographyDetail(entry, this.settings.bibliographyStyle, { offline: options?.offline === true }).then(detail => detail.text));
+		// Zotero child notes are HTML: Obsidian's converter keeps their headings, lists and links (made marker-safe in note-writer).
+		this.importer = new ImportService(this.app, this.bbt, () => this.settings, (entry, options) => this.bibliographyDetail(entry, this.settings.bibliographyStyle, { offline: options?.offline === true }).then(detail => detail.text), html => htmlToMarkdown(html));
 		const pdfText: PdfTextService = new PdfTextService(this.app, undefined, (): boolean => this.active && this.index === indexService && this.pdfText === pdfText);
 		this.pdfText = pdfText;
 		const onIndex = async (index: ZoteroIndex): Promise<void> => {

@@ -44,7 +44,7 @@ export class ImportService {
 	private snapshots = new WeakMap<ImportPreview, Snapshot>();
 	private applying = false;
 	private readonly bibliography: BibliographyProvider;
-	constructor(private app: App, private bbt: BbtService, private settings: () => CmdsZoteroSettings, bibliography?: BibliographyProvider) {
+	constructor(private app: App, private bbt: BbtService, private settings: () => CmdsZoteroSettings, bibliography?: BibliographyProvider, private noteMarkdown?: (html: string) => string) {
 		this.bibliography = bibliography ?? (entry => this.bbt.bibliography(entry));
 	}
 
@@ -70,7 +70,7 @@ export class ImportService {
 			if (annotation.imagePath && !imageHashes.has(annotation.imagePath)) imageHashes.set(annotation.imagePath, hashBytes(await readAnnotationImage(annotation.imagePath)));
 		}
 		const related = index ? relatedCitekeys(entry, index) : [];
-		const rendered = renderLiterature(entry, bibliography, settings, original, imageHashes, { related });
+		const rendered = renderLiterature(entry, bibliography, settings, original, imageHashes, { related, noteMarkdown: this.noteMarkdown });
 		const images: Snapshot["images"] = [];
 		for (const image of rendered.images) {
 			await this.checkPath(image.path);
@@ -101,7 +101,7 @@ export class ImportService {
 		const choices = { detach: [...new Set(options.detach ?? [])], reset: [...new Set(options.reset ?? [])] };
 		if ((choices.detach.length || choices.reset.length) && snapshot.render) {
 			const { entry, bibliography, settings, imageHashes, related } = snapshot.render;
-			rendered = renderLiterature(entry, bibliography, settings, snapshot.original, imageHashes, { related, ...choices });
+			rendered = renderLiterature(entry, bibliography, settings, snapshot.original, imageHashes, { related, noteMarkdown: this.noteMarkdown, ...choices });
 			if (rendered.conflicts.length) return { ...refuse(""), conflicts: [...rendered.conflicts] };
 			content = rendered.content;
 		}

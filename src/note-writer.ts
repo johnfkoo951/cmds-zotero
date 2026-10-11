@@ -40,6 +40,11 @@ export interface RenderContext {
 	detach?: readonly string[];
 	/** 0.5 R5: edited or detached section IDs to replace with the fresh render. */
 	reset?: readonly string[];
+	/**
+	 * HTML-to-Markdown converter for Zotero child notes (the plugin passes Obsidian's `htmlToMarkdown`). Without one, notes
+	 * are flattened to escaped plain text. Either way the result is made safe for a managed block (see `noteBody`).
+	 */
+	noteMarkdown?: (html: string) => string;
 }
 
 export function safeVaultPath(path: string): string {
@@ -74,6 +79,37 @@ export function textFromHTML(value: unknown): string {
 			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
 		})
 		.replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (_, name: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " }[name.toLowerCase()] ?? "")));
+}
+
+/** Markdown from a converter, made safe inside a managed block under `## Zotero notes`. */
+export function safeNoteMarkdown(markdown: string): string {
+	return stripControl(markdown)
+		// A converted note must never open or close a managed marker.
+		.replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;")
+		// Nest the note's own headings under "## Zotero notes".
+		.replace(/^(#{1,6})(?=[ \t])/gm, hashes => "#".repeat(Math.min(6, hashes.length + 2)))
+		// Images embedded in a Zotero note have no vault file; say so instead of leaving a broken embed.
+		.replace(/!\[([^\]\n]*)\]\((?!https?:)[^)\n]*\)/g, (_, alt: string) => `*(image in the Zotero note${alt.trim() ? `: ${alt.trim()}` : ""})*`)
+		// Links keep only web, Zotero, Obsidian and mail targets; any other scheme or relative target becomes plain text.
+		.replace(/\[([^\]\n]*)\]\((?!(?:https?|zotero|obsidian|mailto):)[^)\n]*\)/gi, "$1")
+		.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** One Zotero child note (HTML) as note-section text: structured Markdown with a converter, escaped plain text without. */
+export function noteBody(html: string, convert?: (html: string) => string): string {
+	if (!convert) return textFromHTML(html);
+	const cleaned = html.replace(/<(script|style|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<(script|style|iframe|object|embed)\b[^>]*\/?>/gi, "");
+	let markdown: string;
+	try { markdown = convert(cleaned); } catch { return textFromHTML(html); }
+	return typeof markdown === "string" ? safeNoteMarkdown(markdown) : textFromHTML(html);
+}
+
+/** Zotero reading order: attachments as listed, annotations by `annotationSortIndex` (stable when it is absent). */
+export function readingOrder(entry: ZoteroIndexEntry): { attachment: ZoteroIndexEntry["attachments"][number]; annotation: Annotation }[] {
+	return entry.attachments.flatMap(attachment => attachment.annotations
+		.map((annotation, position) => ({ annotation, position }))
+		.sort((a, b) => (a.annotation.sortIndex && b.annotation.sortIndex && a.annotation.sortIndex !== b.annotation.sortIndex ? (a.annotation.sortIndex < b.annotation.sortIndex ? -1 : 1) : a.position - b.position))
+		.map(({ annotation }) => ({ attachment, annotation })));
 }
 
 /** Single-line text for callout titles and inline fields. */
@@ -222,6 +258,26 @@ export function resetSections(text: string, ids: Iterable<string>, bodies: Reado
  * New annotation blocks go after the last existing `annotation-*` closing marker, else after the `## Annotations` heading,
  * else at the end of the file — never after user prose written below the annotation list.
  */
+const ANNOTATION_OPENING = /<!-- cmds-zotero:(annotation-[A-Za-z0-9]+-[A-Za-z0-9]+):(?:[a-f0-9]{64}|detached) -->/g;
+/**
+ * New annotation blocks in Zotero's reading order: each goes right before the first existing annotation block that Zotero
+ * orders after it (detached blocks included); a block with no later neighbour is appended as before. `order` lists every
+ * annotation section ID in reading order; `blocks` arrive in that order.
+ */
+function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: string }[], order: readonly string[]): string {
+	const rank = new Map(order.map((id, position) => [id, position]));
+	let result = content;
+	for (const block of blocks) {
+		const position = rank.get(block.id);
+		let before: number | null = null;
+		if (position !== undefined) for (const match of result.matchAll(ANNOTATION_OPENING)) {
+			const other = rank.get(match[1]);
+			if (other !== undefined && other > position) { before = match.index; break; }
+		}
+		result = before === null ? spliceAnnotations(result, [block.text]) : `${result.slice(0, before)}${block.text}\n\n${result.slice(before)}`;
+	}
+	return result;
+}
 function spliceAnnotations(content: string, blocks: string[]): string {
 	const joined = blocks.join("\n\n");
 	let at = -1;
@@ -285,6 +341,10 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 		const title = `[!Image] ${color ? `${color} · ` : ""}p. ${label}`;
 		return quoted([title, `![Annotation image](${encodedPath(image)}) ${link}`, comment, tags].filter(Boolean).join("\n"));
 	}
+	if (type === "ink") {
+		// A freehand drawing has no text and BBT renders no image for it: name it and link to it.
+		return quoted([`[!Note] ink · ${color ? `${color} · ` : ""}p. ${label}`, `${inline(a.comment) || "*Drawing; open it in Zotero.*"} ${link}`, tags].filter(Boolean).join("\n"));
+	}
 	if (type === "note" || (!a.text && a.comment)) {
 		const body = inline(a.comment) || "*(empty note)*";
 		return quoted([`[!Note] p. ${label}`, `${body} ${link}`, tags].filter(Boolean).join("\n"));
@@ -346,11 +406,14 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	sections.set("metadata", `${quoted(`[!md]\n${fields.map(([label, value]) => `**${label}**:: ${value}`).join("\n")}`)}\n\n${quoted(`[!LINK]\n${links.join(" · ")}`)}`);
 
 	const notes: unknown[] = Array.isArray(entry.metadata.notes) ? entry.metadata.notes : [];
-	const noteText = notes.map(n => textFromHTML(typeof n === "string" ? n : n && typeof n === "object" && "note" in n ? (n as Record<string, unknown>).note : "")).filter(Boolean).join("\n\n---\n\n");
+	const noteText = notes.map(n => {
+		const html: unknown = typeof n === "string" ? n : n && typeof n === "object" && "note" in n ? (n as Record<string, unknown>).note : "";
+		return typeof html === "string" ? noteBody(html, context.noteMarkdown) : "";
+	}).filter(Boolean).join("\n\n---\n\n");
 	sections.set("notes", `## Zotero notes\n\n${noteText || "*No Zotero notes.*"}`);
 
 	const seen = new Set<string>();
-	for (const attachment of entry.attachments) for (const a of attachment.annotations) {
+	for (const { attachment, annotation: a } of readingOrder(entry)) {
 		const id = `annotation-${key(attachment.key)}-${key(a.key)}`;
 		if (a.attachmentKey !== attachment.key) throw new Error("Annotation attachment identity mismatch");
 		if (seen.has(id)) continue;
@@ -450,16 +513,16 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	}
 	const rawCount = (previous.match(/<!-- \/?cmds-zotero:/g) ?? []).length;
 	if (rawCount !== strayCount) conflicts.push("Malformed managed markers without a section ID");
-	const additions: string[] = [];
+	const additions: { id: string; text: string }[] = [];
 	for (const [id, body] of sections) if (!matched.has(id) && !malformed.has(id)) {
 		if (id.startsWith("annotation-") && !previous.includes(`cmds-zotero:${id}:`)) {
-			additions.push(block(id, body));
+			additions.push({ id, text: block(id, body) });
 			report.push({ id, state: "fresh", reason: "new annotation", body });
 		} else {
 			conflicts.push(`Missing managed section: ${id}`);
 			report.push({ id, state: "missing", reason: "managed block not found", body: "" });
 		}
 	}
-	if (additions.length) content = spliceAnnotations(content, additions);
+	if (additions.length) content = spliceAnnotationsInOrder(content, additions, [...sections.keys()].filter(id => id.startsWith("annotation-")));
 	return { content, conflicts, softConflicts, detached, reset, sections: report, images };
 }

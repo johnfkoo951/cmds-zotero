@@ -46,7 +46,7 @@ function normalizeAnnotation(raw: Record<string, unknown>, attachment: Attachmen
 	const version = raw.version === undefined ? 0 : raw.version;
 	if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) throw new Error("Invalid annotation version");
 	const imagePath = raw.annotationImagePath ?? raw.image;
-	return { key, attachmentKey: attachment.key, type: text(raw.annotationType ?? raw.type), text: text(raw.annotationText ?? raw.text), comment: text(raw.annotationComment ?? raw.comment), color: text(raw.annotationColor ?? raw.color), page, pageLabel: text(raw.annotationPageLabel ?? raw.pageLabel), version, uri: pdfURI(attachment.openURI, page, key), ...(typeof imagePath === "string" && imagePath ? { imagePath } : {}), tags: tags(raw.tags), dateModified: text(raw.dateModified) };
+	return { key, attachmentKey: attachment.key, type: text(raw.annotationType ?? raw.type), text: text(raw.annotationText ?? raw.text), comment: text(raw.annotationComment ?? raw.comment), color: text(raw.annotationColor ?? raw.color), page, pageLabel: text(raw.annotationPageLabel ?? raw.pageLabel), version, uri: pdfURI(attachment.openURI, page, key), ...(typeof imagePath === "string" && imagePath ? { imagePath } : {}), tags: tags(raw.tags), dateModified: text(raw.dateModified), ...(/^[0-9|]{1,64}$/.test(text(raw.annotationSortIndex)) ? { sortIndex: text(raw.annotationSortIndex) } : {}) };
 }
 
 export function normalizeAttachments(raw: unknown, entry: ZoteroIndexEntry): Attachment[] {

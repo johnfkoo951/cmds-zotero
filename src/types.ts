@@ -71,6 +71,8 @@ export interface Annotation {
 	imagePath?: string;
 	tags: string[];
 	dateModified: string;
+	/** Zotero's `annotationSortIndex` (page|offset|top), when Better BibTeX reports it; orders blocks for reading. */
+	sortIndex?: string;
 }
 
 export interface Attachment {

@@ -1,6 +1,6 @@
 ---
 name: cmds-zotero
-description: Agent CLI for CMDS Zotero (contract 2). Resolve papers by citekey, DOI, arXiv or title; produce hub identity and S01 text; validate citations and generate References; extract PDF text and locate quotes; reconcile provisional citekeys. Use for paper ingest, Zotero identity, DOI lookup, page locators, quote pages, References 생성, or provisional citekey diagnostics. NOT for editing Zotero items or driving ZotLit UI.
+description: Agent CLI for CMDS Zotero (contract 2). List papers recently read in Zotero and send them to their literature (metadata) notes; resolve papers by citekey, DOI, arXiv or title; produce hub identity and S01 text; validate citations and generate References; extract PDF text and locate quotes; reconcile provisional citekeys. Use for "최근 읽은 논문", "문헌노트로 보내기", paper ingest, Zotero identity, DOI lookup, page locators, quote pages, References 생성, or provisional citekey diagnostics. NOT for editing Zotero items or driving ZotLit UI.
 ---
 
 # CMDS Zotero agent CLI
@@ -22,6 +22,8 @@ Run `--help` for the complete action-specific flag list.
 
 | Need | Action | Example flags |
 | --- | --- | --- |
+| Papers recently read in Zotero (0.5) | recent | optional `--days 30` (1–365); each item says whether its literature note is missing (`none`), behind Zotero (`behind`, N new annotations) or current |
+| Create or update a literature note (0.5) | import | `--citekey KEY` or `--item-key KEY --library ID`; dry run by default, `--apply` writes the plugin-owned note; `--allow-stale` only when Zotero is closed and the saved index is acceptable |
 | Inspect index age/counts/libraries/settings | info | none; never refreshes |
 | Probe Obsidian/plugin/BBT | connection | optionally `--offline` |
 | Explicitly refresh | refresh | optionally `--if-older-than 60` |
@@ -42,6 +44,18 @@ Structured bibliography formats and `--out` are live-only (offline answers `refe
 The References section of a note is any `##`–`######` heading titled per the plugin's `referencesHeadings` setting
 (default `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료`); `referencesSection.heading` reports it and
 `--format markdown` reuses it. See `docs/pandoc-docx.md` in the repository for the DOCX recipe.
+
+## Recently read papers to literature notes (0.5)
+
+1. `recent --days 30` (Zotero must be running) lists what the user read, newest first, with `note.state`.
+2. For each item with `note.needsImport`, run `import --citekey KEY` (dry run), check `preview` and `ok`, then
+   `import --citekey KEY --apply`. Never hand-write or rewrite a literature note: the managed sections carry integrity
+   hashes, and hard conflicts (`reason: note-conflict`) mean a human must look first.
+3. To read the paper, run `pdf-text --citekey KEY`. If `textLayer.ocrRecommended` is true the PDF is scanned: run OCR
+   with another tool and say so; never present empty extraction as the paper's content.
+4. Write your own synthesis only in user-owned regions of the note: the `## Synthesis` callout (`**Contribution**::`,
+   `**Related**::`), `## Notes`, or text outside `<!-- cmds-zotero:... -->` blocks. Cite quotes with `locate` so page
+   links are verified. A later `import --apply` keeps all of that text.
 
 ## Response and exit interpretation
 
