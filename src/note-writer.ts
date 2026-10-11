@@ -272,7 +272,8 @@ function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: s
 		let before: number | null = null;
 		if (position !== undefined) for (const match of result.matchAll(ANNOTATION_OPENING)) {
 			const other = rank.get(match[1]);
-			if (other !== undefined && other > position) { before = match.index; break; }
+			// Insert at the start of the marker's line, so text a user wrote before the marker on that line stays intact.
+			if (other !== undefined && other > position) { before = result.lastIndexOf("\n", match.index - 1) + 1; break; }
 		}
 		result = before === null ? spliceAnnotations(result, [block.text]) : `${result.slice(0, before)}${block.text}\n\n${result.slice(before)}`;
 	}

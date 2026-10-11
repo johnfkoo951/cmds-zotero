@@ -9886,24 +9886,27 @@ var MIN_PAGE_BODY_CHARS = 20;
 function lines(text4) {
   return text4.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
 }
+function repeatKey(line) {
+  return line.replace(/\d+/g, "#").replace(/[^\p{L}#]+/gu, " ").trim().toLowerCase();
+}
 function visibleLength(line) {
   return line.replace(/\s/g, "").length;
 }
 function textLayerReport(pages) {
   const pageLines = pages.map((page) => lines(page.text));
   const occurrences = /* @__PURE__ */ new Map();
-  for (const set of pageLines.map((list) => new Set(list))) for (const line of set) occurrences.set(line, (occurrences.get(line) ?? 0) + 1);
-  const repeatedAt = pages.length >= 3 ? Math.max(3, Math.ceil(pages.length / 2)) : Infinity;
-  const bodies = pageLines.map((list) => list.filter((line) => (occurrences.get(line) ?? 0) < repeatedAt).reduce((sum, line) => sum + visibleLength(line), 0));
+  for (const keys of pageLines.map((list) => new Set(list.map(repeatKey)))) for (const key of keys) occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+  const repeatedAt = pages.length >= 3 ? Math.max(3, Math.ceil(pages.length / 2)) : pages.length === 2 ? 2 : Infinity;
+  const bodies = pageLines.map((list) => list.filter((line) => (occurrences.get(repeatKey(line)) ?? 0) < repeatedAt).reduce((sum, line) => sum + visibleLength(line), 0));
   const emptyPages = pages.filter((_, position) => bodies[position] < MIN_PAGE_BODY_CHARS).map((page) => page.page);
   const bodyChars = bodies.reduce((sum, chars) => sum + chars, 0);
   const textLayer = !pages.length || emptyPages.length === pages.length ? "none" : emptyPages.length > Math.max(2, pages.length * 0.2) ? "partial" : "full";
-  return { textLayer, emptyPages, bodyChars, ocrRecommended: textLayer !== "full" };
+  return { textLayer, emptyPages, bodyChars, ocrRecommended: textLayer === "none" || textLayer === "partial" && emptyPages.length * 2 >= pages.length };
 }
 function textLayerWarning(report, pageCount) {
   if (report.textLayer === "full") return null;
   if (report.textLayer === "none") return `No text layer: none of the ${pageCount} pages has extractable body text (a scanned PDF). Run OCR before reading or quoting it; locate cannot verify quotes in it.`;
-  return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (scanned pages). Run OCR for those pages before relying on the text.`;
+  return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (figure-only, blank or scanned pages)${report.ocrRecommended ? "; run OCR for them before relying on the text" : "; if those pages are scanned text, run OCR for them"}.`;
 }
 
 // src/note-writer.ts
@@ -10517,9 +10520,9 @@ async function pdfTextAction(host, request) {
   const extraction = await host.extractPdf(resolved.target, request);
   const selected = pagesRequested(request.pages, extraction.extracted.pageCount);
   const inlinePages = selected.map((page) => extraction.extracted.pages[page - 1]);
-  if (Buffer.byteLength(JSON.stringify(inlinePages)) > 200 * 1024) return { ...envelope(host, "pdf-text", 2, { reason: "inline-too-large", message: "Selected inline page text exceeds 200 KiB; request fewer pages." }), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache };
   const textLayer = textLayerReport(extraction.extracted.pages);
   const layerWarning = textLayerWarning(textLayer, extraction.extracted.pageCount);
+  if (Buffer.byteLength(JSON.stringify(inlinePages)) > 200 * 1024) return { ...envelope(host, "pdf-text", 2, { reason: "inline-too-large", message: "Selected inline page text exceeds 200 KiB; request fewer pages." }), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, textLayer, warnings: layerWarning ? [layerWarning] : [] };
   return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, textLayer, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: layerWarning ? [...extraction.warnings, layerWarning] : extraction.warnings };
 }
 async function recentAction(host, request) {

@@ -99,3 +99,19 @@ test("pdf.js receives Obsidian's bundled character maps and standard fonts so CJ
 	assert.equal(state.options.isEvalSupported, false, "resource options never re-enable eval");
 	assert.deepEqual(Object.keys(PDFJS_RESOURCE_OPTIONS).sort(), ["cMapPacked", "cMapUrl", "standardFontDataUrl"]);
 });
+
+test("a cache extracted before pdf.js received its character maps is re-extracted, not served", async () => {
+	const { PdfTextService, RESOURCE_TOOL_SUFFIX, state } = await moduleForTest();
+	state.text = "synthetic";
+	const fixture = storeFixture();
+	const service = new PdfTextService({}, fixture.store);
+	const first = await service.extract(scope);
+	assert.ok(first.extracted.tool.endsWith(RESOURCE_TOOL_SUFFIX));
+	const [path, content] = [...fixture.files.entries()][0];
+	fixture.files.set(path, content.replace(`"tool":"${first.extracted.tool}"`, '"tool":"pdfjs/test"'));
+	const loads = state.loads;
+	const again = await service.extract(scope);
+	assert.equal(again.cache.hit, false, "an older cache is rebuilt");
+	assert.equal(state.loads, loads + 1);
+	assert.equal((await service.extract(scope)).cache.hit, true, "the rebuilt cache is served");
+});

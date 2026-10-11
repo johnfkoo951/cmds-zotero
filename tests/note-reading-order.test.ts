@@ -85,3 +85,11 @@ test("the annotation sort index is kept from Better BibTeX when well formed", ()
 	assert.equal(attachments[0].annotations[0].sortIndex, "00000|000034|00125");
 	assert.equal(attachments[0].annotations[1].sortIndex, undefined, "a malformed sort index is dropped, not trusted");
 });
+
+test("a new block never splits text a user wrote before a later block's marker on the same line", () => {
+	const initial = render(entryWith([annotation("PAGE0009", 9, "00008|000010|00010")]), null).content;
+	const glued = initial.replace(/<!-- cmds-zotero:annotation-ATTACH01-PAGE0009:/, "My aside. <!-- cmds-zotero:annotation-ATTACH01-PAGE0009:");
+	const updated = render(entryWith([annotation("PAGE0001", 1, "00000|000010|00010"), annotation("PAGE0009", 9, "00008|000010|00010")]), glued);
+	assert.deepEqual(updated.conflicts, []);
+	assert.match(updated.content, /<!-- \/cmds-zotero:annotation-ATTACH01-PAGE0001 -->\n\nMy aside\. <!-- cmds-zotero:annotation-ATTACH01-PAGE0009:/);
+});

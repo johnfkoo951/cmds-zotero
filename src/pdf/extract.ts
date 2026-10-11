@@ -24,6 +24,11 @@ const PDF_MAGIC = ["255044462d"];
  * standard fonts extract as empty or wrong text.
  */
 export const PDFJS_RESOURCE_OPTIONS: Readonly<Record<string, string | boolean>> = { cMapUrl: "/lib/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/lib/pdfjs/standard_fonts/" };
+/**
+ * Marks caches extracted with those resources (`pdfjs/<version>+resources`). An older cache of a CJK paper may hold empty
+ * pages, so `pdf-text` re-extracts a cache without the marker instead of serving it; `locate` still reads such caches.
+ */
+export const RESOURCE_TOOL_SUFFIX = "+resources";
 
 export { PDF_TEXT_CACHE_DIR };
 export type ExtractedPdf = PdfTextCache;
@@ -178,6 +183,7 @@ export class PdfTextService {
 			if (Buffer.byteLength(content) > MAX_CACHE_BYTES) return null;
 			const parsed: unknown = JSON.parse(content);
 			if (!validateCache(parsed) || parsed.sha256 !== sha256 || parsed.bytes !== byteLength || parsed.path !== scope.path) return null;
+			if (!parsed.tool.endsWith(RESOURCE_TOOL_SUFFIX)) return null; // extracted before pdf.js received its character maps
 			if (scope.kind === "attachment" ? parsed.id !== scope.id || parsed.attachmentKey !== scope.attachmentKey : parsed.id !== null || parsed.attachmentKey !== null) return null;
 			if (parsed.mtimeMs !== mtimeMs) {
 				parsed.mtimeMs = mtimeMs;
@@ -232,7 +238,7 @@ export class PdfTextService {
 		let pdfjs: PdfJsModule;
 		try { pdfjs = await loadPdfJs() as PdfJsModule; }
 		catch (error) { throw new PdfExtractError("pdfjs-unavailable", `pdf.js could not be loaded: ${error instanceof Error ? error.message : String(error)}`); }
-		const tool = `pdfjs/${typeof pdfjs.version === "string" && pdfjs.version ? pdfjs.version : "unknown"}`;
+		const tool = `pdfjs/${typeof pdfjs.version === "string" && pdfjs.version ? pdfjs.version : "unknown"}${RESOURCE_TOOL_SUFFIX}`;
 		const task = pdfjs.getDocument({ data: bytes, disableFontFace: true, isEvalSupported: false, useSystemFonts: false, stopAtErrors: false, ...PDFJS_RESOURCE_OPTIONS });
 		let doc: PdfDocument | null = null;
 		try {
