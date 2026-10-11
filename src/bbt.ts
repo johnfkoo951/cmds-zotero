@@ -53,12 +53,29 @@ export class BbtService {
 		}
 	}
 
-	private call(method: string, params: unknown[] = [], timeout = this.settings.requestTimeoutMs): Promise<unknown> {
-		return this.observed(() => rpc(this.settings.bbtEndpoint, method, params, timeout, this.controller.signal));
+	private call(method: string, params: unknown[] = [], timeout = this.settings.requestTimeoutMs, signal?: AbortSignal): Promise<unknown> {
+		return this.withSignal(signal, joined => this.observed(() => rpc(this.settings.bbtEndpoint, method, params, timeout, joined)));
 	}
 
-	async capabilities(): Promise<Capabilities> {
-		return this.readCapabilities(this.settings);
+	/** 0.5 R12: an optional short `timeoutMs` and caller `signal` (a sidebar's per-render abort) for a pre-batch probe. */
+	async capabilities(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<Capabilities> {
+		const settings = options.timeoutMs ? { ...this.settings, requestTimeoutMs: options.timeoutMs } : this.settings;
+		return this.withSignal(options.signal, joined => this.readCapabilities(settings, joined));
+	}
+
+	/**
+	 * Runs one request under the service's own abort signal joined with a caller's signal; the listeners on the long-lived
+	 * service signal are removed when the request settles so repeated sidebar renders never accumulate them.
+	 */
+	private async withSignal<T>(extra: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+		const own = this.controller.signal;
+		if (!extra) return run(own);
+		const combined = new AbortController();
+		const abort = (): void => { combined.abort(); };
+		if (own.aborted || extra.aborted) combined.abort();
+		else { own.addEventListener("abort", abort); extra.addEventListener("abort", abort); }
+		try { return await run(combined.signal); }
+		finally { own.removeEventListener("abort", abort); extra.removeEventListener("abort", abort); }
 	}
 
 	private async readCapabilities(settings: CmdsZoteroSettings, signal = this.controller.signal): Promise<Capabilities> {
@@ -155,9 +172,10 @@ export class BbtService {
 	}
 
 	/** CSL bibliography text for one entry; `style` defaults to the configured style (0.5 R4: every style is observed and typed). */
-	async bibliography(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle): Promise<string> {
+	async bibliography(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle, signal?: AbortSignal): Promise<string> {
 		if (!validateEntry(entry)) throw new Error("Bibliography requires a validated item");
-		const output = await this.call("item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID]);
+		// 0.5 R12: a caller's signal (per-render abort) joins the service signal; the call stays observed.
+		const output = await this.call("item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID], this.settings.requestTimeoutMs, signal);
 		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
 		return output;
 	}

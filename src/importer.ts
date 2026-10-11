@@ -35,12 +35,20 @@ interface Snapshot {
 /** 0.5 R5: note backups written before a reset: `.cmds-zotero/backups/notes/<basename>-<epoch ms>.md`. */
 export const NOTE_BACKUP_DIR = `${BACKUP_DIR}/notes`;
 
+// 0.5 R12: bibliography text is injected (the plugin serves memory → sidecar → BBT); an empty string means "unavailable now".
+export type BibliographyProvider = (entry: ZoteroIndexEntry, options?: PreviewOptions) => Promise<string>;
+/** `offline`: the caller already knows BBT is down for this batch; the provider must not wait on a BBT request. */
+export interface PreviewOptions { offline?: boolean }
+
 export class ImportService {
 	private snapshots = new WeakMap<ImportPreview, Snapshot>();
 	private applying = false;
-	constructor(private app: App, private bbt: BbtService, private settings: () => CmdsZoteroSettings) {}
+	private readonly bibliography: BibliographyProvider;
+	constructor(private app: App, private bbt: BbtService, private settings: () => CmdsZoteroSettings, bibliography?: BibliographyProvider) {
+		this.bibliography = bibliography ?? (entry => this.bbt.bibliography(entry));
+	}
 
-	async preview(entry: ZoteroIndexEntry, index?: ZoteroIndex): Promise<ImportPreview> {
+	async preview(entry: ZoteroIndexEntry, index?: ZoteroIndex, options: PreviewOptions = {}): Promise<ImportPreview> {
 		if (!entry.citekey || /[\\/:*?"<>|]/.test(entry.citekey) || [...entry.citekey].some(c => c.charCodeAt(0) < 32) || entry.citekey.endsWith(".")) throw new Error("Unsafe citation key filename");
 		const settings = this.settings();
 		const defaultPath = safeVaultPath(`${settings.outputFolder}/@${entry.citekey}.md`);
@@ -56,7 +64,7 @@ export class ImportService {
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing && !(existing instanceof TFile)) throw new Error("Literature note path is not a file");
 		const original = existing instanceof TFile ? await this.app.vault.read(existing) : null;
-		const bibliography = await this.bbt.bibliography(entry);
+		const bibliography = await this.bibliography(entry, options); // 0.5 R12
 		const imageHashes = new Map<string, string>();
 		for (const attachment of entry.attachments) for (const annotation of attachment.annotations) {
 			if (annotation.imagePath && !imageHashes.has(annotation.imagePath)) imageHashes.set(annotation.imagePath, hashBytes(await readAnnotationImage(annotation.imagePath)));

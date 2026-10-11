@@ -14,10 +14,11 @@ import * as nodePath from "node:path";
 import { readLocalFile } from "./local-file";
 import { hashLocalPdf } from "./pdf/file-hash";
 import { validateIndex } from "./identity";
-import { describeBbtError, transportReasonOf } from "./api/transport";
+import { describeBbtError, mapBounded, transportReasonOf } from "./api/transport";
+import { BibliographyStore, type BibliographyDetail } from "./bibliography-store"; // 0.5 R12
 import { VaultLinks } from "./vault-links";
 import { ownershipSummary, partitionOwnedNotes } from "./note-ownership"; // 0.5 R14
-import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
+import { VaultIndexStorage, assertVaultBoundary, bibliographySidecarStorage, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
 import { citekeyAtCursor, classifyLink, parseProtocolRequest, resolveOpenPdfTarget } from "./protocol";
 import { pdfURI, noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "./uris";
@@ -33,6 +34,8 @@ const LEGACY_PLUGIN_ID = "cmds-link-zotero";
 const LEGACY_PLUGIN_MESSAGE = "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing.";
 /** After a failed background refresh, UI warm-ups return immediately for this long instead of re-hitting BBT. */
 const WARM_BACKOFF_MS = 60_000;
+// 0.5 R12: a sidebar render probes `api.ready` once with this bound before any live bibliography call of that generation.
+const BIBLIOGRAPHY_PROBE_MS = 2500;
 
 export default class CMDSZoteroPlugin extends Plugin {
 	settings!: CmdsZoteroSettings;
@@ -44,8 +47,12 @@ export default class CMDSZoteroPlugin extends Plugin {
 	private active = false;
 	private lastIndex: ZoteroIndex | null = null;
 	private mapTimer: number | undefined;
-	private bibliographyCache = new Map<string, string>();
-	private bibliographyFlights = new Map<string, Promise<string>>();
+	// 0.5 R12: memory holds live and sidecar-served details (never a fallback); flights carry the render generation that started them.
+	private bibliographyCache = new Map<string, BibliographyDetail>();
+	private bibliographyFlights = new Map<string, { generation: number; promise: Promise<BibliographyDetail> }>();
+	private bibliographyStore!: BibliographyStore;
+	private bibliographyGeneration = 0;
+	private bibliographyController: AbortController | null = null;
 	private warming: { promise: Promise<void>; force: boolean } | null = null;
 	private warmFailedUntil = 0;
 	/** Index generation (generatedAt, or "none") for which the offline Notice was already shown. */
@@ -83,7 +90,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.addCommand({ id: "import-literature-note", name: "Import literature note", callback: () => { void this.pick(entry => { void this.previewImport(entry); }); } });
 		this.addCommand({ id: "update-all-literature-notes", name: "Update all owned literature notes", callback: () => { void this.updateAllLiteratureNotes(); } });
 		this.addCommand({ id: "insert-bibliography", name: "Insert bibliography", editorCallback: (editor: Editor) => {
-			void this.pick(entry => { void this.run(async () => { editor.replaceSelection(await this.bbt.bibliography(entry)); }); });
+			void this.pick(entry => { void this.run(() => this.insertBibliography(editor, entry)); }); // 0.5 R12
 		} });
 		this.addCommand({ id: "open-references", name: "Open references sidebar", callback: () => { void this.activateView(VIEW_TYPE_REFERENCES); } });
 		this.addCommand({ id: "open-annotations", name: "Open annotations sidebar", callback: () => { void this.activateView(VIEW_TYPE_ANNOTATIONS); } });
@@ -138,7 +145,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.index = indexService;
 		const links: VaultLinks = new VaultLinks(this.app, () => this.settings, () => this.active && this.links === links);
 		this.links = links;
-		this.importer = new ImportService(this.app, this.bbt, () => this.settings);
+		// 0.5 R12: the sidecar is loaded lazily on the first bibliography read; the importer receives text through the same path.
+		const store: BibliographyStore = new BibliographyStore(bibliographySidecarStorage(this.app, () => this.active && this.bibliographyStore === store));
+		this.bibliographyStore = store;
+		this.importer = new ImportService(this.app, this.bbt, () => this.settings, (entry, options) => this.bibliographyDetail(entry, this.settings.bibliographyStyle, { offline: options?.offline === true }).then(detail => detail.text));
 		const pdfText: PdfTextService = new PdfTextService(this.app, undefined, (): boolean => this.active && this.index === indexService && this.pdfText === pdfText);
 		this.pdfText = pdfText;
 		const onIndex = async (index: ZoteroIndex): Promise<void> => {
@@ -253,6 +263,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		await this.saveData(settings);
 		this.service.dispose();
 		this.bbt.dispose();
+		await this.disposeBibliography(); // 0.5 R12: pending sidecar records land before the store is replaced
 		this.settings = settings;
 		this.lastIndex = null;
 		this.bibliographyCache.clear();
@@ -270,6 +281,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.active = false;
 		this.service?.dispose();
 		this.bbt?.dispose();
+		void this.disposeBibliography(); // 0.5 R12: `active` is already false, so at most the last debounce window of renderings is dropped
 		if (this.mapTimer !== undefined) window.clearTimeout(this.mapTimer);
 	}
 
@@ -372,16 +384,12 @@ export default class CMDSZoteroPlugin extends Plugin {
 	/** CSL bibliography text for one entry, cached per index generation and style; concurrent requests share one flight. */
 	bibliographyFor(entry: ZoteroIndexEntry): Promise<string> { return this.bibliographyForStyle(entry, this.settings.bibliographyStyle); }
 
+	/** String form for existing callers: live or sidecar text; a `fallback` answer rethrows the BBT fault so agents keep `bbtError`. */
 	private bibliographyForStyle(entry: ZoteroIndexEntry, style: string): Promise<string> {
-		const key = `${entry.id}|${style}`;
-		const cached = this.bibliographyCache.get(key);
-		if (cached !== undefined) return Promise.resolve(cached);
-		const flight = this.bibliographyFlights.get(key);
-		if (flight) return flight;
-		// 0.5 R4: every style goes through BbtService so the call is observed (status line) and typed uniformly.
-		const request = this.bbt.bibliography(entry, style).then(text => { const trimmed = text.trim(); this.bibliographyCache.set(key, trimmed); return trimmed; }).finally(() => { this.bibliographyFlights.delete(key); });
-		this.bibliographyFlights.set(key, request);
-		return request;
+		return this.bibliographyDetail(entry, style).then(detail => {
+			if (detail.source === "fallback") throw detail.error instanceof Error ? detail.error : new Error("Bibliography unavailable.");
+			return detail.text;
+		});
 	}
 
 	private refreshViews(): void {
@@ -480,9 +488,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 			});
 			const owned = partition.owned;
 			if (!owned.length && !partition.linkedNotOwned.length) throw new Error("No owned literature notes were found. Import a note first.");
-			// 0.5 R4: every update renders bibliography text through BBT; probe once and stop with one mapped line instead of N identical skips.
-			try { await this.bbt.capabilities(); }
-			catch (error) { throw new Error(`${describeBbtError(error)} Updating literature notes needs Better BibTeX for bibliography text; no note was changed.`); }
+			// 0.5 R4: probe BBT once before the loop. 0.5 R12: when it fails, owned notes are still updated from the index and the
+			// sidecar — a note whose bibliography is not cached keeps its `citation` section byte-identical, and no note waits on BBT.
+			const offline = await this.bbt.capabilities().then(() => null, (error: unknown) => error);
 			const notice = new Notice(`Updating ${owned.length} literature notes…`, 0);
 			const updated: string[] = [];
 			const partial: string[] = [];
@@ -491,7 +499,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			try {
 				for (const entry of owned) {
 					try {
-						const preview = await this.importer.preview(entry, index);
+						const preview = await this.importer.preview(entry, index, offline ? { offline: true } : {}); // 0.5 R12
 						if (preview.conflicts.length) { skipped.push(`@${entry.citekey}: ${preview.conflicts.join("; ")}`); continue; }
 						if (!preview.exists) { skipped.push(`@${entry.citekey}: note was not created by this plugin; use Import literature note`); continue; }
 						const result = await this.importer.apply(preview);
@@ -503,7 +511,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 				}
 			} finally { notice.hide(); }
 			this.scheduleMap();
-			new ReportModal(this.app, "Literature note batch update", [`Updated: ${updated.length}`, `Partial (edited sections preserved): ${partial.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`, ownershipSummary(partition), "", ...updated.map(path => `updated  ${path}`), ...partial.map(line => `partial  ${line}`), ...skipped.map(line => `skipped  ${line}`)].join("\n")).open();
+			new ReportModal(this.app, "Literature note batch update", [`Updated: ${updated.length}`, `Partial (edited sections preserved): ${partial.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`, ownershipSummary(partition), ...(offline ? [`Zotero offline: ${describeBbtError(offline)} Citation sections were kept as they are unless a cached rendering existed.`] : []), "", ...updated.map(path => `updated  ${path}`), ...partial.map(line => `partial  ${line}`), ...skipped.map(line => `skipped  ${line}`)].join("\n")).open(); // 0.5 R5 + R12
 		});
 	}
 
@@ -663,5 +671,94 @@ export default class CMDSZoteroPlugin extends Plugin {
 		const pending = this.service.pendingWrites();
 		if (!pending.length) return "Wait for index refresh to finish before changing configuration.";
 		return `Wait for the running agent request${pending.length === 1 ? "" : "s"} to finish before changing configuration: ${pending.map(job => `${job.action} (${job.id})`).join(", ")}. Each request times out on its own.`;
+	}
+
+	// 0.5 R12 — offline bibliography: memory → sidecar → BBT, write-through sidecar, per-render abort, one probe per batch.
+
+	/** Better BibTeX version the sidecar records are keyed against: the one the loaded index was collected with, else unknown. */
+	private knownBbtVersion(): string { return this.lastIndex?.capabilities.betterbibtex ?? ""; }
+
+	/**
+	 * Bibliography text with its provenance. Memory first, then a sidecar record whose content hash (and BBT version, when
+	 * known) matches, then one BBT call whose result is written through to the sidecar. A BBT fault never throws here: it
+	 * returns the sidecar text of an older BBT version when one exists, else a `fallback` carrying the fault. `offline`
+	 * skips the BBT call (the caller already probed). Concurrent requests for one item share a flight; a flight started by
+	 * an earlier render generation is not joined because that generation may be aborted.
+	 */
+	bibliographyDetail(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle, options: { offline?: boolean; offlineError?: unknown; signal?: AbortSignal; generation?: number } = {}): Promise<BibliographyDetail> {
+		const key = `${entry.id}|${style}`;
+		const cached = this.bibliographyCache.get(key);
+		if (cached) return Promise.resolve(cached);
+		const generation = options.generation ?? 0;
+		const flight = this.bibliographyFlights.get(key);
+		if (flight && (flight.generation === 0 || flight.generation === generation)) return flight.promise;
+		const store = this.bibliographyStore;
+		const promise = this.renderBibliography(entry, style, options, store)
+			.then(detail => { if (detail.source !== "fallback" && this.bibliographyStore === store) this.bibliographyCache.set(key, detail); return detail; })
+			.finally(() => { if (this.bibliographyFlights.get(key)?.promise === promise) this.bibliographyFlights.delete(key); });
+		this.bibliographyFlights.set(key, { generation, promise });
+		return promise;
+	}
+
+	private async renderBibliography(entry: ZoteroIndexEntry, style: string, options: { offline?: boolean; offlineError?: unknown; signal?: AbortSignal }, store: BibliographyStore): Promise<BibliographyDetail> {
+		await store.load();
+		const version = this.knownBbtVersion();
+		const hit = store.get(style, entry, version);
+		if (hit) return { text: hit.text, source: "cached", renderedAt: hit.renderedAt };
+		const stale = (error: unknown): BibliographyDetail => {
+			const older = store.get(style, entry);
+			return older ? { text: older.text, source: "cached", renderedAt: older.renderedAt, error } : { text: "", source: "fallback", error };
+		};
+		if (options.offline) return stale(options.offlineError ?? this.bbt.lastOutcome?.message ?? "Zotero offline");
+		let text: string;
+		try { text = (await this.bbt.bibliography(entry, style, options.signal)).trim(); }
+		catch (error) { return stale(error); }
+		if (text && this.bibliographyStore === store) store.set(style, entry, text, version);
+		return { text, source: "live" };
+	}
+
+	/**
+	 * One render generation for a list of entries: the previous generation's live flights are aborted, memory and sidecar
+	 * hits are served without BBT, and when anything is left BBT is probed once (`api.ready`, 2.5 s) — a failed probe turns
+	 * the whole generation offline instead of N parallel 20 s requests. Live calls run under `settings.concurrency`.
+	 * `fresh: false` joins the current generation (a copy while a render is in flight must not abort it).
+	 */
+	async bibliographyBatch(entries: ZoteroIndexEntry[], style = this.settings.bibliographyStyle, options: { fresh?: boolean } = {}): Promise<BibliographyDetail[]> {
+		if (options.fresh !== false || !this.bibliographyController) {
+			this.bibliographyController?.abort();
+			const generation = ++this.bibliographyGeneration;
+			for (const [key, flight] of this.bibliographyFlights) if (flight.generation !== 0 && flight.generation !== generation) this.bibliographyFlights.delete(key);
+			this.bibliographyController = new AbortController();
+		}
+		const generation = this.bibliographyGeneration;
+		const controller = this.bibliographyController;
+		const store = this.bibliographyStore;
+		await store.load();
+		const version = this.knownBbtVersion();
+		const pending = entries.some(entry => !this.bibliographyCache.has(`${entry.id}|${style}`) && !store.get(style, entry, version));
+		let offlineError: unknown = null;
+		if (pending) {
+			try { await this.bbt.capabilities({ timeoutMs: BIBLIOGRAPHY_PROBE_MS, signal: controller.signal }); }
+			catch (error) { offlineError = error; }
+		}
+		return mapBounded(entries, this.settings.concurrency, entry => this.bibliographyDetail(entry, style, { generation, signal: controller.signal, ...(offlineError ? { offline: true, offlineError } : {}) })
+			.catch((error: unknown): BibliographyDetail => ({ text: "", source: "fallback", error })));
+	}
+
+	/** "Insert bibliography": live or cached text goes into the editor; without any text the BBT fault is the message. */
+	private async insertBibliography(editor: Editor, entry: ZoteroIndexEntry): Promise<void> {
+		const detail = await this.bibliographyDetail(entry);
+		if (detail.source === "fallback") throw new Error(`${describeBbtError(detail.error)} No cached bibliography exists for this item.`);
+		editor.replaceSelection(detail.text);
+		if (detail.source === "cached") new Notice(`Inserted the bibliography cached on ${detail.renderedAt?.slice(0, 10) ?? "an earlier date"}; Zotero was not contacted.`);
+	}
+
+	/** Aborts the current render generation's flights and writes any pending sidecar records. */
+	private disposeBibliography(): Promise<void> {
+		this.bibliographyController?.abort();
+		this.bibliographyController = null;
+		this.bibliographyFlights.clear();
+		const store: BibliographyStore | undefined = this.bibliographyStore;
+		return store ? store.flush() : Promise.resolve();
 	}
 }

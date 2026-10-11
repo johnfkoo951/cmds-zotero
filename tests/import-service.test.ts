@@ -141,3 +141,52 @@ test("images are apply-only, deduplicated, versioned and library-scoped", async 
 		});
 	} finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
+
+// 0.5 R12: offline bibliography — the injected provider decides; an owned note keeps its citation section, a new note refuses.
+test("an empty bibliography keeps an owned note's citation section byte-identical and refuses a first import", async t => {
+	const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-service-offline-")));
+	try {
+		const output = join(directory, "service.cjs");
+		await build({ stdin: { contents: 'export { ImportService } from "./src/importer"; export { TestVault } from "obsidian";', resolveDir: process.cwd() }, bundle: true, platform: "node", format: "cjs", outfile: output, plugins: [{ name: "synthetic-obsidian", setup(b) { b.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "mock" })); b.onLoad({ filter: /.*/, namespace: "mock" }, () => ({ contents: facade, loader: "js" })); } }] });
+		const { ImportService, TestVault } = createRequire(output)(output);
+		const vault = new TestVault(directory);
+		let text = "Author. (2026). Example.";
+		const seen: unknown[] = [];
+		const bbt = { bibliography: async () => { throw new Error("BBT must not be called when a provider is injected"); } };
+		const service = new ImportService({ vault }, bbt, () => DEFAULT_SETTINGS, async (_entry: unknown, options: unknown) => { seen.push(options); return text; });
+		await service.apply(await service.preview(entry));
+		const notePath = `${DEFAULT_SETTINGS.outputFolder}/@Example2026.md`;
+		const created: string = vault.data.get(notePath);
+		const citation = /<!-- cmds-zotero:citation:[a-f0-9]{64} -->\n[\s\S]*?\n<!-- \/cmds-zotero:citation -->/.exec(created)?.[0];
+		assert.ok(citation && citation.includes("Author. \\(2026\\). Example."));
+		assert.equal(created.includes("Bibliography unavailable."), false);
+		text = "";
+		await t.test("owned note: no conflict, citation block unchanged, nothing rewritten", async () => {
+			const writes = vault.writes;
+			const preview = await service.preview(entry, undefined, { offline: true });
+			assert.deepEqual(preview.conflicts, []);
+			assert.equal(preview.exists, true);
+			assert.ok(preview.content.includes(citation));
+			assert.equal(preview.content.includes("Bibliography unavailable."), false);
+			const result = await service.apply(preview);
+			assert.deepEqual(result.conflicts, []);
+			assert.equal(result.changed, false, "the fresh render equals the stored note, so the batch reports it unchanged");
+			assert.equal(vault.data.get(notePath), created);
+			assert.equal(vault.writes, writes + 1, "apply still goes through vault.process once (identical content)");
+			assert.deepEqual(seen.at(-1), { offline: true }, "the offline flag reaches the provider");
+		});
+		await t.test("new note: refused with the Zotero-must-be-running message, nothing written", async () => {
+			const writes = vault.writes;
+			await assert.rejects(service.preview({ ...entry, id: "user:1:ITEM0002", itemKey: "ITEM0002", citekey: "Fresh2026" }), /Zotero must be running for the first import of this item/);
+			assert.equal(vault.writes, writes);
+			assert.equal(vault.files.has(`${DEFAULT_SETTINGS.outputFolder}/@Fresh2026.md`), false);
+		});
+		await t.test("text returning restores live rendering into the same section", async () => {
+			text = "Author. (2026). Example, 2nd ed.";
+			const preview = await service.preview(entry);
+			assert.deepEqual(preview.conflicts, []);
+			assert.ok(preview.content.includes("Example, 2nd ed."));
+			assert.equal((await service.apply(preview)).changed, true);
+		});
+	} finally { await fs.rm(directory, { recursive: true, force: true }); }
+});

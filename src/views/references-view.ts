@@ -1,12 +1,16 @@
 import { ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf, debounce, setIcon } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
-import { referenceHeader, referenceRowText, resolveReferenceRows, type ReferenceRow, type SnapshotState } from "../citations/reference-rows";
+import { bibliographySourceTag, copyBibliographyNotice, countBibliographySources, fallbackCitation, referenceHeader, referenceRowText, resolveReferenceRows, type ReferenceRow, type SnapshotState } from "../citations/reference-rows";
 import { markdownLink } from "../uris";
+import type { BibliographyDetail } from "../bibliography-store"; // 0.5 R12
 
 export const VIEW_TYPE_REFERENCES = "cmds-zotero-references";
 
-/** Sidebar bibliography for the citekeys in the active note. Resolution is index-local; bibliography text is fetched from BBT and cached. */
+/**
+ * Sidebar bibliography for the citekeys in the active note. Resolution is index-local; bibliography text comes from the
+ * plugin's memory → sidecar → BBT path in one batch per render (0.5 R12), so a closed or hung Zotero costs one short probe.
+ */
 export class ReferencesView extends ItemView {
 	private file: TFile | null = null;
 	private rows: ReferenceRow[] = [];
@@ -75,17 +79,25 @@ export class ReferencesView extends ItemView {
 		if ((!state.loaded || state.stale) && !this.plugin.warmBackoffActive()) void this.plugin.warmIndex();
 		const list = container.createEl("ol", { cls: "cmds-zotero-reference-list" });
 		if (!this.rows.length) container.createEl("p", { cls: "setting-item-description", text: "No [@citekey], @citekey, or [[@citekey]] citations found." });
-		for (const row of this.rows) this.renderRow(list.createEl("li", { cls: `cmds-zotero-reference cmds-zotero-reference-${row.status}` }), row, generation, state);
+		const slots: { entry: ZoteroIndexEntry; text: HTMLElement }[] = [];
+		for (const row of this.rows) {
+			const text = this.renderRow(list.createEl("li", { cls: `cmds-zotero-reference cmds-zotero-reference-${row.status}` }), row, state);
+			if (row.status === "resolved" && row.entry) slots.push({ entry: row.entry, text });
+		}
+		// 0.5 R12: one batch per render generation; rows keep the author-year line until their text arrives, then carry a provenance tag.
+		if (slots.length) void this.plugin.bibliographyBatch(slots.map(slot => slot.entry)).then(details => {
+			if (generation !== this.generation) return;
+			details.forEach((detail, index) => { this.showBibliography(slots[index].text, slots[index].entry, detail); });
+		}).catch(() => undefined);
 	}
 
-	private renderRow(item: HTMLElement, row: ReferenceRow, generation: number, state: SnapshotState): void {
+	private renderRow(item: HTMLElement, row: ReferenceRow, state: SnapshotState): HTMLElement {
 		const text = item.createDiv({ cls: "cmds-zotero-reference-text", attr: { role: "button", tabindex: "0" } });
 		text.addEventListener("click", () => this.jump(row.line));
 		text.addEventListener("keydown", event => { if (event.key === "Enter") this.jump(row.line); });
 		if (row.status === "resolved" && row.entry) {
 			const entry = row.entry;
-			text.setText(this.fallbackCitation(entry));
-			void this.plugin.bibliographyFor(entry).then(bibliography => { if (generation === this.generation && bibliography) text.setText(bibliography); }).catch(() => undefined);
+			text.setText(fallbackCitation(entry));
 			const actions = item.createDiv({ cls: "cmds-zotero-reference-actions" });
 			this.action(actions, "file-text", "Open literature note", () => this.plugin.openNote(entry));
 			this.action(actions, "external-link", "Open in Zotero", () => { window.open(entry.zoteroSelectURI); });
@@ -94,16 +106,13 @@ export class ReferencesView extends ItemView {
 		} else {
 			text.setText(referenceRowText(row, state));
 		}
+		return text;
 	}
 
 	private action(parent: HTMLElement, icon: string, label: string, run: () => Promise<void> | void): void {
 		const button = parent.createEl("button", { cls: "clickable-icon", attr: { "aria-label": label } });
 		setIcon(button, icon);
 		button.addEventListener("click", () => { void this.plugin.run(async () => { await run(); }); });
-	}
-
-	private fallbackCitation(entry: ZoteroIndexEntry): string {
-		return `${entry.authors.slice(0, 3).join(", ")}${entry.authors.length > 3 ? " et al." : ""} (${entry.year || "n.d."}). ${entry.title}`;
 	}
 
 	private jump(line: number): void {
@@ -116,17 +125,22 @@ export class ReferencesView extends ItemView {
 	private async copyBibliography(): Promise<void> {
 		const resolved = this.rows.filter((row): row is ReferenceRow & { entry: ZoteroIndexEntry } => row.status === "resolved" && !!row.entry);
 		if (!resolved.length) { new Notice("No resolved references to copy."); return; }
-		const lines: string[] = [];
-		for (const row of resolved) {
-			const bibliography = await this.plugin.bibliographyFor(row.entry).catch(() => "");
-			lines.push(bibliography || markdownLink(this.fallbackCitation(row.entry), row.entry.zoteroSelectURI));
-		}
+		// 0.5 R12: same detail as the rows (joins the current render generation instead of aborting it); the Notice names the sources.
+		const details = await this.plugin.bibliographyBatch(resolved.map(row => row.entry), undefined, { fresh: false });
+		const lines = details.map((detail, index) => detail.text || markdownLink(fallbackCitation(resolved[index].entry), resolved[index].entry.zoteroSelectURI));
 		await navigator.clipboard.writeText(lines.join("\n\n"));
-		new Notice(`Copied ${lines.length} bibliography entr${lines.length === 1 ? "y" : "ies"}.`);
+		new Notice(copyBibliographyNotice(countBibliographySources(details)));
 	}
 
 	onClose(): Promise<void> { this.contentEl.empty(); this.status = null; return Promise.resolve(); }
 
 	// 0.5 R4: the shared status line in the header, updated by the plugin without a full re-render.
 	renderStatus(line: string): void { this.status?.setText(line); }
+
+	// 0.5 R12: live text replaces the author-year line; cached and fallback answers carry a small provenance tag.
+	private showBibliography(text: HTMLElement, entry: ZoteroIndexEntry, detail: BibliographyDetail): void {
+		text.setText(detail.text || fallbackCitation(entry));
+		const tag = bibliographySourceTag(detail);
+		if (tag) text.createSpan({ cls: "cmds-zotero-reference-tag", text: tag, attr: { title: detail.source === "cached" ? "Rendered earlier by Better BibTeX and stored in .cmds-zotero/bibliography.json" : "Zotero did not answer; no cached rendering exists for this item" } });
+	}
 }

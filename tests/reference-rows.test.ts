@@ -35,3 +35,27 @@ test("resolution uses citekey history, reports ambiguity, and labels stale negat
 	assert.equal(referenceRowText(rows[2], stale), "@dup2021 matches 2 items across libraries. Change the citekey in Zotero or narrow the library.");
 	assert.equal(referenceRowText({ citekey: "gone2019", line: 0, status: "not-found" }, stale), "@gone2019 is not in the saved index (27 h old); refresh to confirm.");
 });
+
+// 0.5 R12: provenance tags and the copy Notice.
+import { bibliographySourceTag, copyBibliographyNotice, countBibliographySources, fallbackCitation } from "../src/citations/reference-rows";
+
+test("row tags name cached and fallback text; live text carries none", () => {
+	assert.equal(bibliographySourceTag({ source: "live" }), null);
+	assert.equal(bibliographySourceTag({ source: "cached", renderedAt: "2026-09-14T10:30:00.000Z" }), "cached 2026-09-14");
+	assert.equal(bibliographySourceTag({ source: "cached" }), "cached");
+	assert.equal(bibliographySourceTag({ source: "cached", renderedAt: "not a date" }), "cached");
+	assert.equal(bibliographySourceTag({ source: "fallback" }), "offline: author-year fallback");
+});
+
+test("the copy Notice counts cache and fallback entries only when Zotero was offline for some of them", () => {
+	assert.equal(copyBibliographyNotice(countBibliographySources([{ source: "live" }, { source: "live" }])), "Copied 2 entries.");
+	assert.equal(copyBibliographyNotice(countBibliographySources([{ source: "live" }])), "Copied 1 entry.");
+	assert.equal(copyBibliographyNotice(countBibliographySources([{ source: "live" }, { source: "cached" }, { source: "cached" }, { source: "fallback" }])), "Copied 4 entries (2 from cache, 1 fallback; Zotero offline).");
+	assert.equal(copyBibliographyNotice(countBibliographySources([{ source: "cached" }])), "Copied 1 entry (1 from cache; Zotero offline).");
+	assert.equal(copyBibliographyNotice(countBibliographySources([{ source: "fallback" }, { source: "fallback" }])), "Copied 2 entries (2 fallback; Zotero offline).");
+});
+
+test("the author-year fallback line truncates after three authors and marks a missing year", () => {
+	assert.equal(fallbackCitation({ authors: ["A", "B", "C", "D"], year: "2020", title: "T" }), "A, B, C et al. (2020). T");
+	assert.equal(fallbackCitation({ authors: ["A"], year: "", title: "T" }), "A (n.d.). T");
+});

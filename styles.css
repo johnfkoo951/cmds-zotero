@@ -184,3 +184,10 @@ mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius
   max-height: 30vh;
   margin-top: var(--size-2-1);
 }
+/* 0.5 R12: provenance tag on a reference row whose text is cached or an offline fallback. */
+.cmds-zotero-reference-tag {
+	margin-left: 0.4em;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+}

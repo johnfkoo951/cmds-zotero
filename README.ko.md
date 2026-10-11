@@ -75,6 +75,7 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 - **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID`, select URI, ZotLit 키 또는 `@citekey` 파일명으로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
 - **Find notes citing a source**는 항목의 현재·이전 citekey를 볼트 전체에서 찾아 첫 인용 위치로 엽니다.
 - **Update all owned literature notes**는 출력 폴더 안에서 소유권 마커를 가진 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·부분(편집 섹션 보존)·변경없음·건너뜀·연결됐지만 비소유를 보고합니다. 편집된 생성 섹션은 그대로 두고 그 노트의 나머지 섹션만 갱신하며, 중복 identity·손상된 마커·비소유 노트는 덮어쓰지 않고 건너뜁니다.
+- **오프라인 참고문헌**(0.5). 참고문헌 텍스트는 메모리 → `.cmds-zotero/bibliography.json` → BBT 순으로 제공됩니다. 사이드카는 BBT 렌더링이 성공할 때마다 기록되고(스타일·항목·content hash·Better BibTeX 버전으로 키 지정, 4 MB 상한, 설정 없음) Zotero가 꺼져 있어도 답합니다. 이때 사이드바 행에는 `cached <날짜>` 태그가, 텍스트가 전혀 없는 행에는 `offline: author-year fallback` 태그가 붙고, "Copy bibliography"는 `Copied N entries (M from cache, K fallback; Zotero offline).`로 출처를 알리며, 사이드바는 행마다 요청하는 대신 렌더링당 한 번(2.5 s) BBT를 탐침합니다. 가져오기와 일괄 갱신은 자리표시자를 쓰지 않습니다. 소유 노트는 Zotero가 다시 답할 때까지 `citation` 섹션을 바이트 단위로 유지하고, 항목의 첫 가져오기는 Zotero 실행이 필요합니다.
 - **Open link under cursor**는 `zotero://select` 링크를 Zotero에서 열고, `zotero://open-pdf` 링크는 인덱스에서 항목을 찾아 PDF를 엽니다(첨부 키 우선, 없으면 Zotero 자체가 허용하는 부모 항목 키. 페이지·주석 유지, 라이브러리를 넘어 추측하지 않음). `[@citekey]`, `@citekey`, `[[@citekey]]`(별칭·헤딩 접미사 무시)에서는 항목 액션 창을 엽니다. 문장 부호가 뒤따르는 링크도 인식합니다. 그 밖에는 알림만 표시하며, 형식이 잘못된 Zotero URI는 선택 여부와 관계없이 가장 비슷한 항목이 아니라 "없음"으로 처리합니다.
 - **Find literature across vaults**는 이 볼트와 등록한 각 피어 볼트에서 항목에 해당하는 모든 노트를 일반 `obsidian://open?vault=…&file=…` 행으로 나열합니다(피어 볼트의 커뮤니티 플러그인 목록에 Advanced URI가 있으면 `obsidian://advanced-uri?…&filepath=…`. 목록은 `<피어>/<이 볼트의 설정 폴더>/community-plugins.json`에서 읽으므로, 설정 폴더 이름이 다른 피어는 `obsidian://open`으로 돌아갑니다). 논문 허브와 `@citekey` 노트가 먼저 옵니다. 플러그인 자체의 `obsidian://cmds-zotero` 프로토콜은 이름 변경에 안전한 identity 링크와 에이전트 전송 용도로만 남깁니다.
 
@@ -148,6 +149,7 @@ node scripts/ingest-ro.mjs --vault "Research" --action reconcile
 
 `pdf-text`는 내장 공개 pdf.js API로 최대 64 MiB 로컬 PDF를 읽고 **원문 전체 텍스트**를 캐시합니다.
 플러그인은 `.cmds-zotero/.gitignore`로 내부 캐시를 보호합니다. 저장소에서는 설정된 인덱스도 ignore하세요.
+권장 메인 볼트 `.gitignore` 항목: `/.cmds-zotero/`, `/.cmds-zotero/bibliography.json`(렌더링된 참고문헌 텍스트, 무해하지만 잡음), 설정된 인덱스 경로.
 Git 진단은 ignore와 이미 추적 중인 상태를 구분합니다. untrack해도 과거 공개 이력은 지워지지 않습니다.
 `locate`는 물리 페이지와 인쇄 라벨을 구분하고 PDF URI에 첨부 key를 사용합니다.
 미검증·원본 변경·fuzzy 결과를 확정 인용 근거로 사용하지 마세요.
