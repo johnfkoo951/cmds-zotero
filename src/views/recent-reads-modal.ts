@@ -174,10 +174,9 @@ export class RecentReadsModal extends Modal {
 					const outcome = await this.plugin.sendToNote(entry, this.index, { offline: !row.fresh });
 					counts[outcome.status]++;
 					row.result = describeSendOutcome(outcome);
-					if (outcome.status !== "refused") {
-						const files = this.plugin.literatureNoteFiles().get(entry.id) ?? [];
-						row.status = literatureNoteStatus(entry, await Promise.all(files.map(async file => ({ path: file.path, text: await this.app.vault.read(file) }))));
-					}
+					// Re-read the note from the path just written: the metadata cache may not know a new note's frontmatter yet.
+					const written = outcome.status !== "refused" ? this.app.vault.getAbstractFileByPath(outcome.path) : null;
+					if (written instanceof TFile) row.status = literatureNoteStatus(entry, [{ path: written.path, text: await this.app.vault.read(written) }]);
 				} catch (error) {
 					counts.failed++;
 					row.result = `Not written: ${error instanceof Error ? error.message : "the send failed"}`;

@@ -62,6 +62,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	// Recently read (Zotero's reading history): the last answer, for ordering the picker without waiting on Zotero, and one shared flight.
 	private recentCache: { at: number; reads: RecentRead[] } | null = null;
 	private recentFlight: { days: number; promise: Promise<RecentRead[]> } | null = null;
+	/** After a failed background refresh the picker does not ask Zotero again until this time (Zotero is likely closed). */
+	private recentRetryAt = 0;
 	/** True while "Send recently read papers to notes" writes notes; a second run is refused. */
 	recentSendActive = false;
 	private warming: { promise: Promise<void>; force: boolean } | null = null;
@@ -536,7 +538,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	/** The last recent-reads answer; an answer older than RECENT_CACHE_MS (or none) is refreshed in the background. */
 	private recentForPicker(): RecentRead[] {
 		const cache = this.recentCache;
-		if (!cache || Date.now() - cache.at > RECENT_CACHE_MS) void this.recentReads().catch(() => undefined);
+		if ((!cache || Date.now() - cache.at > RECENT_CACHE_MS) && Date.now() >= this.recentRetryAt) void this.recentReads().catch(() => { this.recentRetryAt = Date.now() + WARM_BACKOFF_MS; });
 		return cache?.reads ?? [];
 	}
 
