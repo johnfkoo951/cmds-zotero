@@ -37,9 +37,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/yaml/dist/nodes/identity.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
-  "node_modules/yaml/dist/nodes/identity.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/identity.js"(exports) {
     "use strict";
     var ALIAS = Symbol.for("yaml.alias");
     var DOC = Symbol.for("yaml.document");
@@ -94,9 +94,9 @@ var require_identity = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/visit.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/visit.js
 var require_visit = __commonJS({
-  "node_modules/yaml/dist/visit.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/visit.js"(exports) {
     "use strict";
     var identity = require_identity();
     var BREAK = Symbol("break visit");
@@ -252,9 +252,9 @@ var require_visit = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/doc/directives.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/doc/directives.js
 var require_directives = __commonJS({
-  "node_modules/yaml/dist/doc/directives.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/doc/directives.js"(exports) {
     "use strict";
     var identity = require_identity();
     var visit = require_visit();
@@ -423,9 +423,9 @@ var require_directives = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/doc/anchors.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/doc/anchors.js
 var require_anchors = __commonJS({
-  "node_modules/yaml/dist/doc/anchors.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/doc/anchors.js"(exports) {
     "use strict";
     var identity = require_identity();
     var visit = require_visit();
@@ -493,9 +493,9 @@ var require_anchors = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/doc/applyReviver.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/doc/applyReviver.js
 var require_applyReviver = __commonJS({
-  "node_modules/yaml/dist/doc/applyReviver.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/doc/applyReviver.js"(exports) {
     "use strict";
     function applyReviver(reviver, obj, key, val) {
       if (val && typeof val === "object") {
@@ -543,9 +543,9 @@ var require_applyReviver = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/toJS.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/toJS.js
 var require_toJS = __commonJS({
-  "node_modules/yaml/dist/nodes/toJS.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/toJS.js"(exports) {
     "use strict";
     var identity = require_identity();
     function toJS(value, arg, ctx) {
@@ -573,9 +573,9 @@ var require_toJS = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/Node.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/Node.js
 var require_Node = __commonJS({
-  "node_modules/yaml/dist/nodes/Node.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/Node.js"(exports) {
     "use strict";
     var applyReviver = require_applyReviver();
     var identity = require_identity();
@@ -614,9 +614,9 @@ var require_Node = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/Alias.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/Alias.js
 var require_Alias = __commonJS({
-  "node_modules/yaml/dist/nodes/Alias.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/Alias.js"(exports) {
     "use strict";
     var anchors = require_anchors();
     var visit = require_visit();
@@ -728,9 +728,9 @@ var require_Alias = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/Scalar.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/Scalar.js
 var require_Scalar = __commonJS({
-  "node_modules/yaml/dist/nodes/Scalar.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/Scalar.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Node = require_Node();
@@ -758,9 +758,9 @@ var require_Scalar = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/doc/createNode.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/doc/createNode.js
 var require_createNode = __commonJS({
-  "node_modules/yaml/dist/doc/createNode.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/doc/createNode.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var identity = require_identity();
@@ -833,9 +833,9 @@ var require_createNode = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/Collection.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/Collection.js
 var require_Collection = __commonJS({
-  "node_modules/yaml/dist/nodes/Collection.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/Collection.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var identity = require_identity();
@@ -976,9 +976,9 @@ var require_Collection = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/stringify/stringifyComment.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyComment.js
 var require_stringifyComment = __commonJS({
-  "node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyComment.js"(exports) {
     "use strict";
     var stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
@@ -993,9 +993,9 @@ var require_stringifyComment = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/stringify/foldFlowLines.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/foldFlowLines.js
 var require_foldFlowLines = __commonJS({
-  "node_modules/yaml/dist/stringify/foldFlowLines.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/foldFlowLines.js"(exports) {
     "use strict";
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
@@ -1129,9 +1129,9 @@ ${indent}${text3.slice(fold + 1, end2)}`;
   }
 });
 
-// node_modules/yaml/dist/stringify/stringifyString.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyString.js
 var require_stringifyString = __commonJS({
-  "node_modules/yaml/dist/stringify/stringifyString.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyString.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var foldFlowLines = require_foldFlowLines();
@@ -1412,9 +1412,9 @@ ${indent}`);
   }
 });
 
-// node_modules/yaml/dist/stringify/stringify.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringify.js
 var require_stringify = __commonJS({
-  "node_modules/yaml/dist/stringify/stringify.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringify.js"(exports) {
     "use strict";
     var anchors = require_anchors();
     var identity = require_identity();
@@ -1535,9 +1535,9 @@ ${ctx.indent}${str}`;
   }
 });
 
-// node_modules/yaml/dist/stringify/stringifyPair.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyPair.js
 var require_stringifyPair = __commonJS({
-  "node_modules/yaml/dist/stringify/stringifyPair.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyPair.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -1668,9 +1668,9 @@ ${ctx.indent}`;
   }
 });
 
-// node_modules/yaml/dist/log.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/log.js
 var require_log = __commonJS({
-  "node_modules/yaml/dist/log.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/log.js"(exports) {
     "use strict";
     var node_process = __require("process");
     function debug(logLevel, ...messages) {
@@ -1690,9 +1690,9 @@ var require_log = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/merge.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/merge.js
 var require_merge = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -1747,9 +1747,9 @@ var require_merge = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/addPairToJSMap.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/addPairToJSMap.js
 var require_addPairToJSMap = __commonJS({
-  "node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports) {
     "use strict";
     var log = require_log();
     var merge = require_merge();
@@ -1811,9 +1811,9 @@ var require_addPairToJSMap = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/Pair.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/Pair.js
 var require_Pair = __commonJS({
-  "node_modules/yaml/dist/nodes/Pair.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/Pair.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var stringifyPair = require_stringifyPair();
@@ -1851,9 +1851,9 @@ var require_Pair = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/stringify/stringifyCollection.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyCollection.js
 var require_stringifyCollection = __commonJS({
-  "node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity = require_identity();
     var stringify = require_stringify();
@@ -1995,9 +1995,9 @@ ${indent}${end}`;
   }
 });
 
-// node_modules/yaml/dist/nodes/YAMLMap.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/YAMLMap.js
 var require_YAMLMap = __commonJS({
-  "node_modules/yaml/dist/nodes/YAMLMap.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/YAMLMap.js"(exports) {
     "use strict";
     var stringifyCollection = require_stringifyCollection();
     var addPairToJSMap = require_addPairToJSMap();
@@ -2139,9 +2139,9 @@ var require_YAMLMap = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/common/map.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/common/map.js
 var require_map = __commonJS({
-  "node_modules/yaml/dist/schema/common/map.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/common/map.js"(exports) {
     "use strict";
     var identity = require_identity();
     var YAMLMap = require_YAMLMap();
@@ -2161,9 +2161,9 @@ var require_map = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/nodes/YAMLSeq.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/nodes/YAMLSeq.js
 var require_YAMLSeq = __commonJS({
-  "node_modules/yaml/dist/nodes/YAMLSeq.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/nodes/YAMLSeq.js"(exports) {
     "use strict";
     var createNode = require_createNode();
     var stringifyCollection = require_stringifyCollection();
@@ -2277,9 +2277,9 @@ var require_YAMLSeq = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/common/seq.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/common/seq.js
 var require_seq = __commonJS({
-  "node_modules/yaml/dist/schema/common/seq.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/common/seq.js"(exports) {
     "use strict";
     var identity = require_identity();
     var YAMLSeq = require_YAMLSeq();
@@ -2299,9 +2299,9 @@ var require_seq = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/common/string.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/common/string.js
 var require_string = __commonJS({
-  "node_modules/yaml/dist/schema/common/string.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/common/string.js"(exports) {
     "use strict";
     var stringifyString = require_stringifyString();
     var string = {
@@ -2318,9 +2318,9 @@ var require_string = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/common/null.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/common/null.js
 var require_null = __commonJS({
-  "node_modules/yaml/dist/schema/common/null.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/common/null.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var nullTag = {
@@ -2336,9 +2336,9 @@ var require_null = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/core/bool.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/core/bool.js
 var require_bool = __commonJS({
-  "node_modules/yaml/dist/schema/core/bool.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/core/bool.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var boolTag = {
@@ -2360,9 +2360,9 @@ var require_bool = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/stringify/stringifyNumber.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyNumber.js
 var require_stringifyNumber = __commonJS({
-  "node_modules/yaml/dist/stringify/stringifyNumber.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyNumber.js"(exports) {
     "use strict";
     function stringifyNumber({ format, minFractionDigits, tag, value }) {
       if (typeof value === "bigint")
@@ -2387,9 +2387,9 @@ var require_stringifyNumber = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/core/float.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/core/float.js
 var require_float = __commonJS({
-  "node_modules/yaml/dist/schema/core/float.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/core/float.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -2433,9 +2433,9 @@ var require_float = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/core/int.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/core/int.js
 var require_int = __commonJS({
-  "node_modules/yaml/dist/schema/core/int.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/core/int.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -2478,9 +2478,9 @@ var require_int = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/core/schema.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/core/schema.js
 var require_schema = __commonJS({
-  "node_modules/yaml/dist/schema/core/schema.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/core/schema.js"(exports) {
     "use strict";
     var map = require_map();
     var _null = require_null();
@@ -2506,9 +2506,9 @@ var require_schema = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/json/schema.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/json/schema.js
 var require_schema2 = __commonJS({
-  "node_modules/yaml/dist/schema/json/schema.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/json/schema.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var map = require_map();
@@ -2573,9 +2573,9 @@ var require_schema2 = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/binary.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/binary.js
 var require_binary = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports) {
     "use strict";
     var node_buffer = __require("buffer");
     var Scalar = require_Scalar();
@@ -2639,9 +2639,9 @@ var require_binary = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/pairs.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
 var require_pairs = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Pair = require_Pair();
@@ -2717,9 +2717,9 @@ ${cn.comment}` : item.comment;
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/omap.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/omap.js
 var require_omap = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports) {
     "use strict";
     var identity = require_identity();
     var toJS = require_toJS();
@@ -2795,9 +2795,9 @@ var require_omap = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/bool.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/bool.js
 var require_bool2 = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     function boolStringify({ value, source }, ctx) {
@@ -2827,9 +2827,9 @@ var require_bool2 = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/float.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/float.js
 var require_float2 = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -2876,9 +2876,9 @@ var require_float2 = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/int.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/int.js
 var require_int2 = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -2955,9 +2955,9 @@ var require_int2 = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/set.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/set.js
 var require_set = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Pair = require_Pair();
@@ -3044,9 +3044,9 @@ var require_set = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
 var require_timestamp = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     function parseSexagesimal(str, asBigInt) {
@@ -3132,9 +3132,9 @@ var require_timestamp = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/yaml-1.1/schema.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/schema.js
 var require_schema3 = __commonJS({
-  "node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports) {
     "use strict";
     var map = require_map();
     var _null = require_null();
@@ -3176,9 +3176,9 @@ var require_schema3 = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/tags.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/tags.js
 var require_tags = __commonJS({
-  "node_modules/yaml/dist/schema/tags.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/tags.js"(exports) {
     "use strict";
     var map = require_map();
     var _null = require_null();
@@ -3270,9 +3270,9 @@ var require_tags = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/schema/Schema.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/schema/Schema.js
 var require_Schema = __commonJS({
-  "node_modules/yaml/dist/schema/Schema.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/schema/Schema.js"(exports) {
     "use strict";
     var identity = require_identity();
     var map = require_map();
@@ -3302,9 +3302,9 @@ var require_Schema = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/stringify/stringifyDocument.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyDocument.js
 var require_stringifyDocument = __commonJS({
-  "node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity = require_identity();
     var stringify = require_stringify();
@@ -3382,9 +3382,9 @@ var require_stringifyDocument = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/doc/Document.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/doc/Document.js
 var require_Document = __commonJS({
-  "node_modules/yaml/dist/doc/Document.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/doc/Document.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var Collection = require_Collection();
@@ -3691,9 +3691,9 @@ var require_Document = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/errors.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/errors.js
 var require_errors = __commonJS({
-  "node_modules/yaml/dist/errors.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/errors.js"(exports) {
     "use strict";
     var YAMLError = class extends Error {
       constructor(name, pos, code, message) {
@@ -3756,9 +3756,9 @@ ${pointer}
   }
 });
 
-// node_modules/yaml/dist/compose/resolve-props.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-props.js
 var require_resolve_props = __commonJS({
-  "node_modules/yaml/dist/compose/resolve-props.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-props.js"(exports) {
     "use strict";
     function resolveProps(tokens2, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
@@ -3890,9 +3890,9 @@ var require_resolve_props = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/util-contains-newline.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/util-contains-newline.js
 var require_util_contains_newline = __commonJS({
-  "node_modules/yaml/dist/compose/util-contains-newline.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/util-contains-newline.js"(exports) {
     "use strict";
     function containsNewline(key) {
       if (!key)
@@ -3932,9 +3932,9 @@ var require_util_contains_newline = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/util-flow-indent-check.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/util-flow-indent-check.js
 var require_util_flow_indent_check = __commonJS({
-  "node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports) {
     "use strict";
     var utilContainsNewline = require_util_contains_newline();
     function flowIndentCheck(indent, fc, onError) {
@@ -3950,9 +3950,9 @@ var require_util_flow_indent_check = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/util-map-includes.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/util-map-includes.js
 var require_util_map_includes = __commonJS({
-  "node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/util-map-includes.js"(exports) {
     "use strict";
     var identity = require_identity();
     function mapIncludes(ctx, items, search) {
@@ -3966,9 +3966,9 @@ var require_util_map_includes = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/resolve-block-map.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-block-map.js
 var require_resolve_block_map = __commonJS({
-  "node_modules/yaml/dist/compose/resolve-block-map.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-block-map.js"(exports) {
     "use strict";
     var Pair = require_Pair();
     var YAMLMap = require_YAMLMap();
@@ -4074,9 +4074,9 @@ var require_resolve_block_map = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/resolve-block-seq.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-block-seq.js
 var require_resolve_block_seq = __commonJS({
-  "node_modules/yaml/dist/compose/resolve-block-seq.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-block-seq.js"(exports) {
     "use strict";
     var YAMLSeq = require_YAMLSeq();
     var resolveProps = require_resolve_props();
@@ -4125,9 +4125,9 @@ var require_resolve_block_seq = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/resolve-end.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-end.js
 var require_resolve_end = __commonJS({
-  "node_modules/yaml/dist/compose/resolve-end.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-end.js"(exports) {
     "use strict";
     function resolveEnd(end, offset, reqSpace, onError) {
       let comment = "";
@@ -4168,9 +4168,9 @@ var require_resolve_end = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/resolve-flow-collection.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-flow-collection.js
 var require_resolve_flow_collection = __commonJS({
-  "node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Pair = require_Pair();
@@ -4362,9 +4362,9 @@ var require_resolve_flow_collection = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/compose-collection.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-collection.js
 var require_compose_collection = __commonJS({
-  "node_modules/yaml/dist/compose/compose-collection.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-collection.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -4427,9 +4427,9 @@ var require_compose_collection = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/resolve-block-scalar.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-block-scalar.js
 var require_resolve_block_scalar = __commonJS({
-  "node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     function resolveBlockScalar(ctx, scalar, onError) {
@@ -4610,9 +4610,9 @@ var require_resolve_block_scalar = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/resolve-flow-scalar.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-flow-scalar.js
 var require_resolve_flow_scalar = __commonJS({
-  "node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports) {
     "use strict";
     var Scalar = require_Scalar();
     var resolveEnd = require_resolve_end();
@@ -4829,9 +4829,9 @@ var require_resolve_flow_scalar = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/compose-scalar.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-scalar.js
 var require_compose_scalar = __commonJS({
-  "node_modules/yaml/dist/compose/compose-scalar.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-scalar.js"(exports) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -4910,9 +4910,9 @@ var require_compose_scalar = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/util-empty-scalar-position.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/util-empty-scalar-position.js
 var require_util_empty_scalar_position = __commonJS({
-  "node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports) {
     "use strict";
     function emptyScalarPosition(offset, before, pos) {
       if (before) {
@@ -4940,9 +4940,9 @@ var require_util_empty_scalar_position = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/compose-node.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-node.js
 var require_compose_node = __commonJS({
-  "node_modules/yaml/dist/compose/compose-node.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-node.js"(exports) {
     "use strict";
     var Alias = require_Alias();
     var identity = require_identity();
@@ -5041,9 +5041,9 @@ var require_compose_node = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/compose-doc.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-doc.js
 var require_compose_doc = __commonJS({
-  "node_modules/yaml/dist/compose/compose-doc.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/compose-doc.js"(exports) {
     "use strict";
     var Document = require_Document();
     var composeNode = require_compose_node();
@@ -5084,9 +5084,9 @@ var require_compose_doc = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/compose/composer.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/compose/composer.js
 var require_composer = __commonJS({
-  "node_modules/yaml/dist/compose/composer.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/compose/composer.js"(exports) {
     "use strict";
     var node_process = __require("process");
     var directives = require_directives();
@@ -5290,9 +5290,9 @@ ${end.comment}` : end.comment;
   }
 });
 
-// node_modules/yaml/dist/parse/cst-scalar.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/parse/cst-scalar.js
 var require_cst_scalar = __commonJS({
-  "node_modules/yaml/dist/parse/cst-scalar.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/parse/cst-scalar.js"(exports) {
     "use strict";
     var resolveBlockScalar = require_resolve_block_scalar();
     var resolveFlowScalar = require_resolve_flow_scalar();
@@ -5475,9 +5475,9 @@ var require_cst_scalar = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/parse/cst-stringify.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/parse/cst-stringify.js
 var require_cst_stringify = __commonJS({
-  "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
     var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
@@ -5536,9 +5536,9 @@ var require_cst_stringify = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/parse/cst-visit.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/parse/cst-visit.js
 var require_cst_visit = __commonJS({
-  "node_modules/yaml/dist/parse/cst-visit.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/parse/cst-visit.js"(exports) {
     "use strict";
     var BREAK = Symbol("break visit");
     var SKIP = Symbol("skip children");
@@ -5598,9 +5598,9 @@ var require_cst_visit = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/parse/cst.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/parse/cst.js
 var require_cst = __commonJS({
-  "node_modules/yaml/dist/parse/cst.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/parse/cst.js"(exports) {
     "use strict";
     var cstScalar = require_cst_scalar();
     var cstStringify = require_cst_stringify();
@@ -5700,9 +5700,9 @@ var require_cst = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/parse/lexer.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/parse/lexer.js
 var require_lexer = __commonJS({
-  "node_modules/yaml/dist/parse/lexer.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/parse/lexer.js"(exports) {
     "use strict";
     var cst = require_cst();
     function isEmpty(ch) {
@@ -6279,9 +6279,9 @@ var require_lexer = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/parse/line-counter.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/parse/line-counter.js
 var require_line_counter = __commonJS({
-  "node_modules/yaml/dist/parse/line-counter.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/parse/line-counter.js"(exports) {
     "use strict";
     var LineCounter = class {
       constructor() {
@@ -6310,9 +6310,9 @@ var require_line_counter = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/parse/parser.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/parse/parser.js
 var require_parser = __commonJS({
-  "node_modules/yaml/dist/parse/parser.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/parse/parser.js"(exports) {
     "use strict";
     var node_process = __require("process");
     var cst = require_cst();
@@ -7177,9 +7177,9 @@ var require_parser = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/public-api.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/public-api.js
 var require_public_api = __commonJS({
-  "node_modules/yaml/dist/public-api.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/public-api.js"(exports) {
     "use strict";
     var composer = require_composer();
     var Document = require_Document();
@@ -7274,9 +7274,9 @@ var require_public_api = __commonJS({
   }
 });
 
-// node_modules/yaml/dist/index.js
+// ../feature-agentic-0.4/node_modules/yaml/dist/index.js
 var require_dist = __commonJS({
-  "node_modules/yaml/dist/index.js"(exports) {
+  "../feature-agentic-0.4/node_modules/yaml/dist/index.js"(exports) {
     "use strict";
     var composer = require_composer();
     var Document = require_Document();
@@ -8550,6 +8550,28 @@ function checkCitekey(key, index, notes, hints = {}) {
   return { citekey, shape, conventionOk: shape === "vault", p7Valid: isP7Valid(citekey), existsInIndex, collisions, pinInstruction: pinned ? null : pinInstruction(citekey) };
 }
 
+// src/types.ts
+var DEFAULT_REFERENCES_HEADINGS = ["References", "Bibliography", "Works Cited", "\uCC38\uACE0 \uBB38\uD5CC", "\uCC38\uACE0 \uC790\uB8CC"];
+var DEFAULT_SETTINGS = {
+  bbtEndpoint: "http://127.0.0.1:23119/better-bibtex",
+  zoteroIndexPath: "80. References/zotero-index.json",
+  caywFormat: "pandoc",
+  requestTimeoutMs: 2e4,
+  attachmentTimeoutMs: 6e4,
+  concurrency: 2,
+  indexMaxAgeMinutes: 60,
+  outputFolder: "References/Zotero",
+  imageFolder: "References/Zotero/images",
+  bibliographyStyle: "apa",
+  peerVaults: [],
+  citationTrigger: "bracket",
+  excludedTags: ["obscite"],
+  headingHighlightColor: "gray",
+  referencesFollowActiveNote: true,
+  referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS]
+  // 0.5 R10
+};
+
 // src/citations/scan.ts
 var KEY = "[A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*[A-Za-z0-9_]|[A-Za-z0-9_]";
 var CITATION = new RegExp(`\\[\\[@(${KEY})(?:[|#][^\\]]*)?\\]\\]|(^|[\\s\\[;(,\\-])-?@(${KEY})`, "g");
@@ -8619,6 +8641,102 @@ function scanFrontmatterCitations(frontmatter) {
 }
 
 // src/agent/cites-core.ts
+var BIBLIOGRAPHY_FORMATS = ["text", "markdown", "csl-json", "bibtex", "biblatex"];
+var SIDECAR_EXTENSIONS = { text: "txt", markdown: "md", "csl-json": "json", bibtex: "bib", biblatex: "bib" };
+var CSL_STRIPPED_FIELDS = ["abstract", "note"];
+var BIBLIOGRAPHY_DIR = ".cmds-zotero/bibliography";
+var GENERATOR_MARKERS = { bibtex: "% cmds-zotero bibliography", biblatex: "% cmds-zotero bibliography", markdown: "<!-- cmds-zotero bibliography -->", text: "<!-- cmds-zotero bibliography -->" };
+function isStructuredFormat(format) {
+  return format === "csl-json" || format === "bibtex" || format === "biblatex";
+}
+function groupEntriesByLibrary(entries) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    const group = groups.get(entry.libraryID) ?? { libraryID: entry.libraryID, citekeys: [] };
+    if (!group.citekeys.includes(entry.citekey)) group.citekeys.push(entry.citekey);
+    groups.set(entry.libraryID, group);
+  }
+  return [...groups.values()];
+}
+function groupResolvedByLibrary(keys, classified, byId) {
+  const entries = [];
+  const renamed = [];
+  for (const key of uniqueInOrder(keys)) {
+    const verdict2 = classified.get(key);
+    const entry = verdict2?.citeStatus === "resolved" && verdict2.entryId ? byId.get(verdict2.entryId) : void 0;
+    if (!entry) continue;
+    entries.push(entry);
+    if (entry.citekey !== key) renamed.push({ cited: key, current: entry.citekey });
+  }
+  return { groups: groupEntriesByLibrary(entries), renamed };
+}
+var BIBTEX_ENTRY = /^\s*@[A-Za-z]+\s*\{\s*([^,\s}]+)\s*,/gm;
+function bibtexKeys(text3) {
+  return uniqueInOrder([...text3.matchAll(BIBTEX_ENTRY)].map((match) => match[1]));
+}
+function mergeExports(format, outputs) {
+  if (format !== "csl-json") {
+    const content = outputs.map((text3) => text3.trim()).filter(Boolean).join("\n\n");
+    return { content: content ? `${content}
+` : "", exported: bibtexKeys(content), stripped: [] };
+  }
+  const items = [];
+  const stripped = /* @__PURE__ */ new Set();
+  for (const output of outputs) {
+    if (!output.trim()) continue;
+    const parsed = JSON.parse(output);
+    if (!Array.isArray(parsed)) throw new Error("BBT CSL JSON export must be an array");
+    for (const item of parsed) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("BBT CSL JSON export contains a non-object item");
+      const copy = { ...item };
+      for (const field of CSL_STRIPPED_FIELDS) if (field in copy) {
+        delete copy[field];
+        stripped.add(field);
+      }
+      items.push(copy);
+    }
+  }
+  const exported = uniqueInOrder(items.map((item) => typeof item.id === "string" ? item.id : typeof item.id === "number" ? String(item.id) : "").filter(Boolean));
+  return { content: `${JSON.stringify(items, null, 2)}
+`, exported, stripped: CSL_STRIPPED_FIELDS.filter((field) => stripped.has(field)) };
+}
+function sidecarSlug(targetPath, isFile) {
+  const clean = targetPath.replace(/^\/+|\/+$/g, "");
+  const last = clean.split("/").pop() ?? "";
+  const stem = (isFile ? last.replace(/\.md$/i, "") : last).trim();
+  const slug = stem.replace(/[\\/:*?"<>|]+/g, "").replace(new RegExp("\\p{Cc}+", "gu"), "").replace(/\s+/g, "-").replace(/^[.-]+|[.-]+$/g, "");
+  return slug || "vault";
+}
+function defaultSidecarPath(targetPath, isFile, format) {
+  return `${BIBLIOGRAPHY_DIR}/${sidecarSlug(targetPath, isFile)}.${SIDECAR_EXTENSIONS[format]}`;
+}
+function validateSidecarPath(out) {
+  const value = out.trim().replace(/^\/+/, "").replace(/\/+/g, "/").replace(/\/+$/, "");
+  if (!value || value.includes("\\") || value.includes("\0") || /^[a-z]+:/i.test(value)) throw new Error(`Sidecar path must be vault-relative: ${out}`);
+  if (value.split("/").some((part) => part === ".." || part === "." || part === "")) throw new Error(`Sidecar path must not traverse or contain empty segments: ${out}`);
+  return value;
+}
+function isPluginOwnedPath(path) {
+  return path === BIBLIOGRAPHY_DIR || path.startsWith(`${BIBLIOGRAPHY_DIR}/`);
+}
+function sidecarContent(format, content) {
+  if (format === "csl-json") return content;
+  return `${GENERATOR_MARKERS[format]}
+${content}${content.endsWith("\n") || !content ? "" : "\n"}`;
+}
+function startsWithMarker(existing, format) {
+  const first = existing.replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0] ?? "";
+  return first.trim() === GENERATOR_MARKERS[format];
+}
+function sidecarWriteDecision(path, format, existing, force) {
+  if (isPluginOwnedPath(path) || existing === null) return { ok: true };
+  const marked = format !== "csl-json" && startsWithMarker(existing, format);
+  if (marked) return { ok: true };
+  if (/\.md$/i.test(path)) return { ok: false, message: `Refusing to overwrite the note ${path}: it was not written by cmds-zotero (no generator marker) and notes are never replaced, even with --force.` };
+  if (force) return { ok: true };
+  const how = format === "csl-json" ? "CSL-JSON carries no generator marker, so pass --force to replace it" : "it does not start with the generator marker; pass --force to replace it";
+  return { ok: false, message: `Refusing to overwrite ${path}: ${how}, or write under ${BIBLIOGRAPHY_DIR}/ (the default).` };
+}
 var NEGATIVE_STATUSES = /* @__PURE__ */ new Set(["raw-only", "dangling"]);
 var DIAGNOSTIC_CODES = {
   "hub-only": "cite-hub-only",
@@ -8654,8 +8772,14 @@ function hintFor(status, reason) {
 function uncheckedCause(reason) {
   return UNCHECKED_CAUSES[reason ?? "stale-index"];
 }
-var REFERENCES_HEADING = /^##\s+References\s*#*\s*$/i;
-var SECTION_END = /^#{1,2}\s/;
+function escapeRegex2(text3) {
+  return text3.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
+function referencesHeadingPattern(headings = DEFAULT_REFERENCES_HEADINGS) {
+  const titles = uniqueInOrder(headings.map((title) => title.trim()).filter(Boolean)).map((title) => escapeRegex2(title).replace(/\s+/g, "\\s*"));
+  const alternatives = titles.length ? titles.join("|") : escapeRegex2("References");
+  return new RegExp(`^(#{2,6})\\s+(?:${alternatives})(?:\\s*\\([^)]{0,40}\\))?\\s*#*\\s*$`, "iu");
+}
 var LIST_ITEM_BRACKET = /^\s*[-*+]\s+\[/;
 var FENCE = /^\s*(```|~~~)/;
 var FULL_CITATION_LINE = /^\s*[-*+]\s+\*\*Full citation\*\*\s*:\s*(.*)$/im;
@@ -8712,10 +8836,12 @@ function classifyKeys(keys, index, lookups, stale, allowStale) {
   }
   return verdicts;
 }
-function findReferencesSection(lines) {
+function findReferencesSection(lines, headings = DEFAULT_REFERENCES_HEADINGS) {
+  const pattern = referencesHeadingPattern(headings);
   let fenced = false;
   let frontmatter = lines[0]?.trim() === "---";
   let start = -1;
+  let level = 2;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (frontmatter) {
@@ -8726,12 +8852,16 @@ function findReferencesSection(lines) {
       fenced = !fenced;
       continue;
     }
-    if (!fenced && REFERENCES_HEADING.test(line)) {
+    if (fenced) continue;
+    const match = pattern.exec(line);
+    if (match) {
       start = index;
+      level = match[1].length;
       break;
     }
   }
   if (start < 0) return null;
+  const sectionEnd = new RegExp(`^#{1,${level}}\\s`);
   let end = lines.length;
   const listed = [];
   for (let index = start + 1; index < lines.length; index++) {
@@ -8741,7 +8871,7 @@ function findReferencesSection(lines) {
       continue;
     }
     if (fenced) continue;
-    if (SECTION_END.test(line)) {
+    if (sectionEnd.test(line)) {
       end = index;
       break;
     }
@@ -8750,27 +8880,27 @@ function findReferencesSection(lines) {
     const leading = scanCitations(line).find((item) => item.form === "pandoc" && item.column === marker[0].length);
     if (leading && !listed.includes(leading.citekey)) listed.push(leading.citekey);
   }
-  return { start, end, listed };
+  return { start, end, listed, heading: lines[start].trim(), level };
 }
 function sectionReport(span, cited) {
   const listed = span?.listed ?? [];
   const listedSet = new Set(listed);
   const citedUnique = uniqueInOrder(cited);
   const citedSet = new Set(citedUnique);
-  return { present: span !== null, listed, missingFromReferences: citedUnique.filter((key) => !listedSet.has(key)), notCited: listed.filter((key) => !citedSet.has(key)) };
+  return { present: span !== null, listed, missingFromReferences: citedUnique.filter((key) => !listedSet.has(key)), notCited: listed.filter((key) => !citedSet.has(key)), ...span ? { heading: span.heading } : {} };
 }
-function scanNote(note) {
+function scanNote(note, headings) {
   const citations = [];
   for (const item of scanFrontmatterCitations(note.frontmatter ?? {})) citations.push({ citekey: item.citekey, where: "frontmatter", field: item.field, form: item.form });
-  const span = findReferencesSection(note.body.split(/\r?\n/));
+  const span = findReferencesSection(note.body.split(/\r?\n/), headings);
   for (const item of scanCitations(note.body)) {
     if (span && item.line >= span.start && item.line < span.end) continue;
     citations.push({ citekey: item.citekey, where: "body", line: item.line + 1, column: item.column + 1, form: item.form });
   }
   return { citations, span };
 }
-function citedKeys(note) {
-  return uniqueInOrder(scanNote(note).citations.map((item) => item.citekey));
+function citedKeys(note, headings = DEFAULT_REFERENCES_HEADINGS) {
+  return uniqueInOrder(scanNote(note, headings).citations.map((item) => item.citekey));
 }
 function verdictFields(verdict2) {
   const fields = { citeStatus: verdict2.citeStatus };
@@ -8782,8 +8912,8 @@ function verdictFields(verdict2) {
   if (verdict2.uncheckedReason !== void 0) fields.uncheckedReason = verdict2.uncheckedReason;
   return fields;
 }
-function citesForNote(note, verdicts) {
-  const { citations, span } = scanNote(note);
+function citesForNote(note, verdicts, headings = DEFAULT_REFERENCES_HEADINGS) {
+  const { citations, span } = scanNote(note, headings);
   const type = note.frontmatter && typeof note.frontmatter.type === "string" ? note.frontmatter.type : null;
   const shaped = citations.map((item) => {
     const verdict2 = verdicts.get(item.citekey);
@@ -8909,19 +9039,39 @@ function referencesLine(citekey, verdict2, bibliography, hubFullCitation) {
       return `${prefix} (unresolved)`;
   }
 }
-function referencesMarkdown(keys, classified, bibliography, hubFullCitation) {
-  return ["## References", ...uniqueInOrder(keys).map((key) => referencesLine(key, classified.get(key), bibliography, hubFullCitation))].join("\n");
+var DEFAULT_REFERENCES_HEADING = "## References";
+function referencesMarkdown(keys, classified, bibliography, hubFullCitation, heading = DEFAULT_REFERENCES_HEADING) {
+  return [heading, ...uniqueInOrder(keys).map((key) => referencesLine(key, classified.get(key), bibliography, hubFullCitation))].join("\n");
 }
-function referencesPayload(keys, classified, bibliography, hubFullCitation) {
+function unresolvedEntry(citekey, verdict2) {
+  const status = verdict2?.citeStatus ?? "dangling";
+  if (status === "resolved") return { citekey, citeStatus: status, hint: "Resolved in the index but absent from the BBT export; refresh the index or check the item in Zotero" };
+  return { citekey, citeStatus: status, ...status === "unchecked" && verdict2?.uncheckedReason ? { uncheckedReason: verdict2.uncheckedReason } : {}, hint: hintFor(status, verdict2?.uncheckedReason) };
+}
+function referencesPayload(keys, classified, bibliography, hubFullCitation, options = {}) {
+  const format = options.format ?? "text";
+  const heading = options.heading ?? DEFAULT_REFERENCES_HEADING;
   const resolved = [];
   const unresolved2 = [];
   for (const citekey of uniqueInOrder(keys)) {
     const verdict2 = classified.get(citekey);
-    const status = verdict2?.citeStatus ?? "dangling";
-    if (status === "resolved") resolved.push({ citekey, text: oneLine(bibliography.get(citekey) ?? "") });
-    else unresolved2.push({ citekey, citeStatus: status, ...status === "unchecked" && verdict2?.uncheckedReason ? { uncheckedReason: verdict2.uncheckedReason } : {}, hint: hintFor(status, verdict2?.uncheckedReason) });
+    if (verdict2?.citeStatus === "resolved") resolved.push({ citekey, text: oneLine(bibliography.get(citekey) ?? "") });
+    else unresolved2.push(unresolvedEntry(citekey, verdict2));
   }
-  return { resolved, unresolved: unresolved2, markdown: referencesMarkdown(keys, classified, bibliography, hubFullCitation) };
+  const markdown = referencesMarkdown(keys, classified, bibliography, hubFullCitation, heading);
+  const content = format === "markdown" ? markdown : resolved.map((item) => item.text).filter(Boolean).join("\n\n");
+  return { format, style: options.style ?? "", heading, resolved, unresolved: unresolved2, markdown, content };
+}
+function structuredReferencesPayload(keys, classified, format, heading, merged, renamed) {
+  const exported = new Set(merged?.exported ?? []);
+  const currentOf = new Map(renamed.map((pair) => [pair.cited, pair.current]));
+  const unresolved2 = [];
+  for (const citekey of uniqueInOrder(keys)) {
+    const verdict2 = classified.get(citekey);
+    if (verdict2?.citeStatus === "resolved" && merged && exported.has(currentOf.get(citekey) ?? citekey)) continue;
+    unresolved2.push(verdict2?.citeStatus === "resolved" && !merged ? { citekey, citeStatus: "resolved", hint: "Structured bibliography export needs the live host and Better BibTeX (item.export)" } : unresolvedEntry(citekey, verdict2));
+  }
+  return { format, heading, content: merged?.content ?? null, exported: merged?.exported ?? [], unresolved: unresolved2, ...renamed.length ? { renamed: [...renamed] } : {}, ...merged && format === "csl-json" ? { stripped: merged.stripped } : {} };
 }
 
 // src/diagnostics.ts
@@ -9904,16 +10054,36 @@ async function citesAction(host, request) {
   const lookups = toRefMaps(indexes, host.vault);
   const scan = scanOf(host);
   lookups.skipped = [.../* @__PURE__ */ new Set([...lookups.skipped ?? [], ...scan.skipped, ...scan.truncated ? ["<vault-scan-truncated>"] : []])];
+  const headings = host.settings.referencesHeadings;
   const withBodies = [];
   for (const note of targets) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
-  const allKeys = [...new Set(withBodies.flatMap((note) => citedKeys(note)))];
+  const allKeys = [...new Set(withBodies.flatMap((note) => citedKeys(note, headings)))];
   const verdicts = classifyKeys(allKeys, view.index, lookups, stale, allowStaleNegative);
-  const files = withBodies.map((note) => citesForNote(note, verdicts));
+  const files = withBodies.map((note) => citesForNote(note, verdicts, headings));
   const keys = keysForFiles(files);
   let references = null;
   let referencesReason;
   let bbtError = null;
-  if (request.bibliography) {
+  const heading = files.find((file) => file.referencesSection.heading)?.referencesSection.heading ?? DEFAULT_REFERENCES_HEADING;
+  const format = request.format ?? "text";
+  if (request.bibliography && isStructuredFormat(format)) {
+    const byId = new Map(view.index.entries.map((entry) => [entry.id, entry]));
+    const { groups, renamed } = groupResolvedByLibrary(allKeys, verdicts, byId);
+    let merged = null;
+    if (!host.exportBibliography) referencesReason = host.bibliographyReason ?? "offline";
+    else {
+      const outputs = [];
+      try {
+        for (const group of groups) outputs.push(await host.exportBibliography(group.citekeys, format, group.libraryID));
+        merged = mergeExports(format, outputs);
+      } catch (error) {
+        referencesReason = "bbt-unreachable";
+        bbtError = bbtErrorPayload(error);
+        if (!bbtError) referencesReason = "export-invalid";
+      }
+    }
+    references = structuredReferencesPayload(allKeys, verdicts, format, heading, merged, renamed);
+  } else if (request.bibliography && !isStructuredFormat(format)) {
     const bibliography = /* @__PURE__ */ new Map();
     const hubFull = /* @__PURE__ */ new Map();
     const style = request.style ?? host.settings.bibliographyStyle;
@@ -9940,10 +10110,25 @@ async function citesAction(host, request) {
         if (line) hubFull.set(key, line);
       }
     }
-    references = referencesPayload(allKeys, verdicts, bibliography, hubFull);
+    references = referencesPayload(allKeys, verdicts, bibliography, hubFull, { format, heading, style });
   }
   const diagnostics = citesDiagnostics(files);
-  return { ...envelope(host, "cites", 2), files, keys, references, ...referencesReason ? { referencesReason } : {}, ...referencesReason && bbtError ? { bbtError } : {}, summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
+  const payload = { ...envelope(host, "cites", 2), files, keys, references, ...referencesReason ? { referencesReason } : {}, ...referencesReason && bbtError ? { bbtError } : {}, summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
+  if (request.out === void 0) return payload;
+  let outPath;
+  try {
+    outPath = request.out === true ? defaultSidecarPath(request.path, isFile, format) : validateSidecarPath(request.out);
+  } catch (error) {
+    return { ...payload, ...envelope(host, "cites", 2, { reason: "path-outside-vault", message: error instanceof Error ? error.message : "Invalid sidecar path." }), out: { path: String(request.out), written: false } };
+  }
+  if (!request.bibliography) return { ...payload, ...envelope(host, "cites", 2, { reason: "invalid-request", message: "--out needs --bibliography." }), out: { path: outPath, written: false } };
+  if (!host.sidecar) return { ...payload, ...envelope(host, "cites", 2, { reason: "requires-obsidian", message: "Writing a bibliography sidecar requires the live Obsidian host." }), out: { path: outPath, written: false } };
+  const content = references?.content ?? null;
+  if (content === null) return { ...payload, ...envelope(host, "cites", 2, { reason: referencesReason === "bbt-unreachable" ? "bbt-unreachable" : "invalid-request", message: `No bibliography content to write (${referencesReason ?? "unavailable"}).` }), out: { path: outPath, written: false } };
+  const decision = sidecarWriteDecision(outPath, format, await host.sidecar.read(outPath), request.force === true);
+  if (!decision.ok) return { ...payload, ...envelope(host, "cites", 2, { reason: "invalid-request", message: decision.message }), out: { path: outPath, written: false } };
+  const bytes = await host.sidecar.write(outPath, sidecarContent(format, content));
+  return { ...payload, out: { path: outPath, written: true, bytes } };
 }
 async function reconcileDryRun(host, request, listedNotes) {
   const view = host.indexView;
@@ -10152,9 +10337,10 @@ function validateActionRequest(action, value) {
     refresh: ["ifOlderThanMinutes"],
     resolve: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh"],
     identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
-    cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale"],
+    cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"],
     reconcile: ["folders", "apply", "strict", "allowStale"],
     diagnostics: ["allowStale"],
+    // 0.5 R10: format/out/force
     "pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"],
     locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"]
   };
@@ -10175,6 +10361,9 @@ function validateActionRequest(action, value) {
     if (action === "identity" && (selectors.length < 1 || selectors.filter((key) => key !== "citekey").length > 1)) throw new Error("identity requires one selector and may pair a vault citekey with one lookup selector.");
   }
   if (action === "cites" && request.path === void 0) throw new Error("cites requires path.");
+  if (action === "cites" && request.format !== void 0 && !BIBLIOGRAPHY_FORMATS.includes(request.format)) throw new Error(`format must be one of ${BIBLIOGRAPHY_FORMATS.join(", ")}.`);
+  if (action === "cites" && request.out !== void 0 && request.out !== true && (typeof request.out !== "string" || !request.out.trim() || request.out.length > 4096)) throw new Error("out must be true (default sidecar path) or a non-empty vault-relative path.");
+  if (action === "cites" && (request.format !== void 0 || request.out !== void 0 || request.force !== void 0) && request.bibliography !== true) throw new Error("format, out and force need bibliography.");
   if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter((key) => request[key] !== void 0).length !== 1) throw new Error("pdf-text requires exactly one target.");
   if (action === "locate") {
     const targets = ["citekey", "itemKey", "file"].filter((key) => request[key] !== void 0);
@@ -10256,25 +10445,6 @@ async function runAction(host, action, request = {}) {
   }
 }
 
-// src/types.ts
-var DEFAULT_SETTINGS = {
-  bbtEndpoint: "http://127.0.0.1:23119/better-bibtex",
-  zoteroIndexPath: "80. References/zotero-index.json",
-  caywFormat: "pandoc",
-  requestTimeoutMs: 2e4,
-  attachmentTimeoutMs: 6e4,
-  concurrency: 2,
-  indexMaxAgeMinutes: 60,
-  outputFolder: "References/Zotero",
-  imageFolder: "References/Zotero/images",
-  bibliographyStyle: "apa",
-  peerVaults: [],
-  citationTrigger: "bracket",
-  excludedTags: ["obscite"],
-  headingHighlightColor: "gray",
-  referencesFollowActiveNote: true
-};
-
 // src/annotations/colors.ts
 var ANNOTATION_COLORS = ["yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray"];
 function isAnnotationColor(value) {
@@ -10309,8 +10479,14 @@ function normalizeSettings(raw) {
     citationTrigger: ["bracket", "at", "off"].includes(data.citationTrigger) ? data.citationTrigger : DEFAULT_SETTINGS.citationTrigger,
     excludedTags: Array.isArray(data.excludedTags) ? [...new Set(data.excludedTags.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase()).filter(Boolean))] : [...DEFAULT_SETTINGS.excludedTags],
     headingHighlightColor: typeof data.headingHighlightColor === "string" && (data.headingHighlightColor === "none" || isAnnotationColor(data.headingHighlightColor)) ? data.headingHighlightColor : DEFAULT_SETTINGS.headingHighlightColor,
-    referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote
+    referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
+    referencesHeadings: referencesHeadings(data.referencesHeadings)
+    // 0.5 R10
   };
+}
+function referencesHeadings(value) {
+  const list = Array.isArray(value) ? [...new Set(value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean))] : [];
+  return list.length ? list : [...DEFAULT_SETTINGS.referencesHeadings];
 }
 function validateEndpoint(value) {
   const url = new URL(value);

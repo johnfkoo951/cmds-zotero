@@ -11,6 +11,9 @@ Ten CLI actions, no new UI. Zotero remains read-only through documented Better B
 No database access, companion add-on, HTTP listener, telemetry, or automatic citekey changes.
 The only write to non-plugin-owned notes is explicitly requested `reconcile --apply`.
 Neither `identity` nor `cites` nor `locate` applies the Markdown it returns.
+Non-note writes are enumerated: (1) the private PDF text cache of `pdf-text`; (2) the bibliography sidecar of
+`cites --bibliography --out` (0.5), by default `.cmds-zotero/bibliography/<slug>.<ext>` inside the plugin-owned
+private folder, elsewhere only under the overwrite rule in "Bibliography formats and sidecars".
 
 ## Actions and envelope
 
@@ -21,7 +24,7 @@ Neither `identity` nor `cites` nor `locate` applies the Markdown it returns.
 | refresh | 1 | No | Explicit index/cache publication |
 | resolve | 1 | Yes | None unless explicit `--refresh` |
 | identity | 2 | Yes | None unless explicit `--refresh` |
-| cites | 2 | Yes | None |
+| cites | 2 | Yes (`--format csl-json|bibtex|biblatex` and `--out` need the live host) | None; sidecar write with `--out` |
 | reconcile | 2 | Dry-run only | Five-key hub update only with `--apply` |
 | diagnostics | 1 | Yes | None |
 | pdf-text | 2 | No | Private PDF text cache |
@@ -49,6 +52,12 @@ for the remaining keys. A reconcile apply refused because the evidence snapshot 
 with `refusedMessage` (`bbt-unreachable` only for a typed transport error); a storage fault is never reported as a BBT outage.
 The plugin's human status line derives freshness from the same `ageMinutes`/`stale` math and reports the last real BBT
 call, so the UI and the CLI agree on freshness; its wording is UI copy, not part of this contract.
+
+Bibliography text in `identity` and `cites` payloads may be served from the live plugin's write-through sidecar
+(`.cmds-zotero/bibliography.json`, keyed by style, entry id, entry `contentHash` and Better BibTeX version) without a BBT
+call (0.5); such text is byte-identical to what BBT rendered for that content hash and style, and the payload does not
+distinguish it. `bibliographyReason: bbt-unreachable` with `bbtError` therefore means neither a live answer nor a cached
+rendering existed. The sidecar is never filled at refresh time and the offline CLI never reads it.
 
 Existing implicit refresh in read-only legacy operations is intentionally removed.
 The read-only wrapper must not call an old host that might refresh on a read.
@@ -159,6 +168,18 @@ A literature note created by the plugin carries exactly `type: zotero` followed 
 - Duplicate matches never select the first candidate. Multiple hubs return null plus a warning.
 - Malformed YAML, unreadable notes and truncated discovery must be exposed, not silently treated as absent.
 
+### Literature-note managed sections (0.5)
+
+Generated sections of a literature note are delimited by `<!-- cmds-zotero:<id>:<sha256 of body> -->` and
+`<!-- /cmds-zotero:<id> -->` (IDs: `overview`, `citation`, `metadata`, `notes`, `annotation-<attachment>-<annotation>`;
+the set is closed). The variant `<!-- cmds-zotero:<id>:detached -->` … `<!-- /cmds-zotero:<id> -->` marks a block the
+user has detached: agents must treat a detached block as user-owned text — never re-render, edit, re-hash or re-own
+it, and never report it as edited or missing; only an explicit Reset chosen by the user replaces it (after the plugin
+backs the note up under `.cmds-zotero/backups/notes/`). A managed block whose body no longer matches its hash is a
+soft conflict (preserved verbatim; the rest of the note is still written); a missing, duplicate or damaged marker is a
+hard conflict reported per ID with a line number, and the note is not written. Text after an opening marker on the
+same line is moved below the block on the next update. Frontmatter stays outside the marker grammar and user-owned.
+
 ## Evidence availability
 
 Absent, invalid, incomplete or unknown-age/future-dated indexes cannot establish absence.
@@ -180,6 +201,42 @@ when the Zotero index is stale or discovery is incomplete. Raw-only/dangling neg
 `unchecked` when evidence is insufficient, with `uncheckedReason: stale-index` (stale gate; `--allow-stale` lifts it)
 or `discovery-incomplete` (skipped/truncated notes; repair them, `--allow-stale` does not apply); hints, diagnostics
 and References lines name that cause. References output is deterministic and returned for review, not written into the note.
+
+### Bibliography formats and sidecars (0.5)
+
+A note's References section is any `##`–`######` heading whose title is one of the plugin setting
+`referencesHeadings` (default `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료`; case-insensitive,
+whitespace inside a title optional so `참고문헌` matches, an optional parenthesised qualifier of at most 40 characters,
+optional closing hashes). The section ends at the next heading of the same or a higher level. Each file reports
+`referencesSection.heading` (the heading line as written) beside `present`/`listed`. The offline CLI reads the same
+setting from the vault's plugin data; an empty or malformed setting keeps the defaults.
+
+`cites --bibliography` takes `--format text|markdown|csl-json|bibtex|biblatex` (default `text`, unchanged behaviour).
+`references.format` names the format. `text`/`markdown` keep `resolved`, `unresolved`, `markdown` (the References
+block, whose first line reuses the found heading, else `## References`) and add `style`, `heading` and `content`
+(`text`: resolved entries separated by blank lines; `markdown`: the block). They still work offline from hub full
+citations (`referencesReason: offline` when index entries could not be rendered).
+The structured formats run one BBT `item.export` per Zotero library (`Better CSL JSON`, `Better BibTeX`,
+`Better BibLaTeX`) over the resolved keys, exporting each entry under its current citekey; the payload carries
+`content` (CSL-JSON: one merged plain array, `abstract` and `note` removed and listed in `stripped`, `id` and
+`citation-key` kept; BibTeX/BibLaTeX: texts concatenated), `exported` (ids / entry keys present), `unresolved` (every
+cited key without an export entry, with `citeStatus` and a hint; a resolved key the export omitted is listed with
+`citeStatus: resolved`) and `renamed` (`{cited, current}` for keys matched through `citekeyHistory`, which pandoc
+cannot match to the exported `id`). Structured formats need the live host: the offline core answers
+`referencesReason: offline` with `content: null`; a typed BBT fault is `referencesReason: bbt-unreachable` plus
+`bbtError`, an unusable export payload `export-invalid`. No `item.bibliography` call is made for structured formats.
+
+`--out [path]` writes the bibliography (live host only; `requires-obsidian` otherwise, and `ingest-ro.mjs` rejects the
+flag). Without a value the path is `.cmds-zotero/bibliography/<slug>.<json|bib|md|txt>` — the slug is the note
+basename without `.md`, the folder name for folder targets, `vault` for the root; characters `\ / : * ? " < > |` and
+control characters are dropped, whitespace becomes `-`. The write ensures `.cmds-zotero/.gitignore` first. An explicit
+path must be vault-relative (no scheme, `\`, `..`, empty segments; `path-outside-vault` otherwise). Overwrite rule:
+under `.cmds-zotero/bibliography/` the plugin owns the file; elsewhere the target must be absent or start with the
+generator marker line the plugin writes (`% cmds-zotero bibliography` for `.bib`, `<!-- cmds-zotero bibliography -->`
+for `.md`/`.txt`; CSL-JSON stays a plain array and carries no marker, so an existing JSON file needs `--force`); a
+Markdown note that lacks the marker is never replaced, `--force` included. A refused write is `ok:false,
+reason: invalid-request` with the bibliography still in the payload. The response carries
+`out: {path, written, bytes?}`. A `cites` request with `out` holds the plugin's write gate like `reconcile --apply`.
 
 ## Reconcile transition contract
 
