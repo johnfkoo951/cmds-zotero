@@ -179,4 +179,16 @@ export class BbtService {
 		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
 		return output;
 	}
+
+	/**
+	 * 0.5 R10: one `item.export` for the pandoc-ready formats (`translator` is a BBT translator label such as
+	 * "Better CSL JSON"); the response must be a string. Empty key lists never reach BBT.
+	 */
+	async export(citekeys: readonly string[], translator: string, libraryID: number): Promise<string> {
+		if (!citekeys.length) return "";
+		if (!positiveInteger(libraryID)) throw new Error("Bibliography export requires a positive library ID");
+		const output = await this.call("item.export", [[...citekeys], translator, libraryID]);
+		if (typeof output !== "string") throw new Error("Invalid BBT export response");
+		return output;
+	}
 }

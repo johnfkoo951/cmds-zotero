@@ -54,6 +54,10 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 					return { name: separator < 0 ? "" : line.slice(0, separator).trim(), path: separator < 0 ? line.trim() : line.slice(separator + 1).trim() };
 				});
 			}));
+		// 0.5 R10
+		new Setting(containerEl).setName("Bibliography").setHeading();
+		new Setting(containerEl).setName("References headings").setDesc("One heading title per line. A ##–###### heading with one of these titles (case-insensitive, spaces optional, an optional short qualifier in parentheses) marks the references section of a note for the references check and the pandoc sidecar. An empty list restores the defaults.")
+			.addTextArea(text => text.setValue(draft.referencesHeadings.join("\n")).onChange(value => { draft.referencesHeadings = value.split("\n").map(line => line.trim()).filter(Boolean); }));
 		containerEl.createEl("p", { text: "Hookmark-compatible links are Markdown links. This plugin does not change Hookmark settings, create bookmarks, or require Hookmark to be installed." });
 		const status = containerEl.createDiv({ cls: "cmds-zotero-status", attr: { role: "status", "aria-live": "polite" } });
 		new Setting(containerEl).addButton(button => button.setButtonText("Save configuration").setCta().onClick(async () => {

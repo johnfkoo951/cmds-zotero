@@ -28,7 +28,14 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		excludedTags: Array.isArray(data.excludedTags) ? [...new Set(data.excludedTags.filter((tag): tag is string => typeof tag === "string").map(tag => tag.trim().toLowerCase()).filter(Boolean))] : [...DEFAULT_SETTINGS.excludedTags],
 		headingHighlightColor: typeof data.headingHighlightColor === "string" && (data.headingHighlightColor === "none" || isAnnotationColor(data.headingHighlightColor)) ? data.headingHighlightColor : DEFAULT_SETTINGS.headingHighlightColor,
 		referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
+		referencesHeadings: referencesHeadings(data.referencesHeadings), // 0.5 R10
 	};
+}
+
+// 0.5 R10: plain strings, trimmed and deduplicated; an empty or malformed list keeps the defaults so detection never goes blind.
+function referencesHeadings(value: unknown): string[] {
+	const list = Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string").map(item => item.trim()).filter(Boolean))] : [];
+	return list.length ? list : [...DEFAULT_SETTINGS.referencesHeadings];
 }
 
 export function validateEndpoint(value: string): string {

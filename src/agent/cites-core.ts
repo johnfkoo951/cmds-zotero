@@ -5,6 +5,7 @@
  * over every scanned note, then maps each note through `citesForNote()`.
  */
 import type { Diagnostic, ZoteroIndex, ZoteroIndexEntry } from "../types";
+import { DEFAULT_REFERENCES_HEADINGS } from "../types"; // 0.5 R10
 import type { CiteStatus, NoteRecord, NoteRef, UncheckedReason } from "./types";
 import { scanCitations, scanFrontmatterCitations, type CitationOccurrence, type FrontmatterCitationField } from "../citations/scan";
 
@@ -40,13 +41,17 @@ export interface ReferencesSection {
 	listed: string[];
 	missingFromReferences: string[];
 	notCited: string[];
+	/** The heading line as written (trimmed), present exactly when `present` (0.5 R10). */
+	heading?: string;
 }
 
-/** Line span of a `## References` section (0-based, `end` exclusive) and the keys its `- [@key]` lines list. */
+/** Line span of a References section (0-based, `end` exclusive), its heading line and level, and the keys its `- [@key]` lines list. */
 export interface ReferencesSpan {
 	start: number;
 	end: number;
 	listed: string[];
+	heading: string;
+	level: number;
 }
 
 export interface FileCitation {
@@ -108,9 +113,173 @@ export interface CitesSummary {
 }
 
 export interface ReferencesPayload {
+	/** 0.5 R10: `text` (default) or `markdown`; the structured formats use {@link StructuredReferencesPayload}. */
+	format: "text" | "markdown";
+	style: string;
+	/** Heading reused for `markdown`: the note's own References heading when found, else `## References`. */
+	heading: string;
 	resolved: { citekey: string; text: string }[];
 	unresolved: { citekey: string; citeStatus: CiteStatus; uncheckedReason?: UncheckedReason; hint: string }[];
 	markdown: string;
+	/** `text`: resolved bibliography entries separated by blank lines; `markdown`: the References block. */
+	content: string;
+}
+
+// 0.5 R10 — pandoc-ready bibliography formats (`cites --format`), sidecar naming and overwrite rules.
+
+export type BibliographyFormat = "text" | "markdown" | "csl-json" | "bibtex" | "biblatex";
+export const BIBLIOGRAPHY_FORMATS: readonly BibliographyFormat[] = ["text", "markdown", "csl-json", "bibtex", "biblatex"];
+export type StructuredBibliographyFormat = Exclude<BibliographyFormat, "text" | "markdown">;
+/** BBT translator labels for `item.export` (verified live 2026-09). */
+export const EXPORT_TRANSLATORS: Readonly<Record<StructuredBibliographyFormat, string>> = { "csl-json": "Better CSL JSON", bibtex: "Better BibTeX", biblatex: "Better BibLaTeX" };
+export const SIDECAR_EXTENSIONS: Readonly<Record<BibliographyFormat, string>> = { text: "txt", markdown: "md", "csl-json": "json", bibtex: "bib", biblatex: "bib" };
+/** CSL-JSON fields removed unconditionally: private prose that pandoc never renders. `id` and `citation-key` are kept. */
+export const CSL_STRIPPED_FIELDS: readonly string[] = ["abstract", "note"];
+/** Plugin-owned sidecar folder (inside the private `.cmds-zotero/` directory, which the plugin keeps gitignored). */
+export const BIBLIOGRAPHY_DIR = ".cmds-zotero/bibliography";
+/** First line of every non-JSON sidecar; a file outside the private folder may be overwritten only when it starts with it. */
+export const GENERATOR_MARKERS: Readonly<Record<Exclude<BibliographyFormat, "csl-json">, string>> = { bibtex: "% cmds-zotero bibliography", biblatex: "% cmds-zotero bibliography", markdown: "<!-- cmds-zotero bibliography -->", text: "<!-- cmds-zotero bibliography -->" };
+
+export function isStructuredFormat(format: BibliographyFormat): format is StructuredBibliographyFormat {
+	return format === "csl-json" || format === "bibtex" || format === "biblatex";
+}
+
+/** One `item.export` call per library; `citekeys` are the entries' current index keys. */
+export interface BibliographyExporter { (citekeys: string[], format: StructuredBibliographyFormat, libraryID: number): Promise<string> }
+
+export interface ExportGroup { libraryID: number; citekeys: string[] }
+
+/** Groups entries by local library ID in first-seen order; each key once per library. */
+export function groupEntriesByLibrary(entries: readonly ZoteroIndexEntry[]): ExportGroup[] {
+	const groups = new Map<number, ExportGroup>();
+	for (const entry of entries) {
+		const group = groups.get(entry.libraryID) ?? { libraryID: entry.libraryID, citekeys: [] };
+		if (!group.citekeys.includes(entry.citekey)) group.citekeys.push(entry.citekey);
+		groups.set(entry.libraryID, group);
+	}
+	return [...groups.values()];
+}
+
+/**
+ * Resolved keys grouped by library for export. A key resolved through `citekeyHistory` is exported under the entry's
+ * current citekey, so pandoc would not find `[@old]` in the output: such pairs are reported in `renamed`.
+ */
+export function groupResolvedByLibrary(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, byId: ReadonlyMap<string, ZoteroIndexEntry>): { groups: ExportGroup[]; renamed: { cited: string; current: string }[] } {
+	const entries: ZoteroIndexEntry[] = [];
+	const renamed: { cited: string; current: string }[] = [];
+	for (const key of uniqueInOrder(keys)) {
+		const verdict = classified.get(key);
+		const entry = verdict?.citeStatus === "resolved" && verdict.entryId ? byId.get(verdict.entryId) : undefined;
+		if (!entry) continue;
+		entries.push(entry);
+		if (entry.citekey !== key) renamed.push({ cited: key, current: entry.citekey });
+	}
+	return { groups: groupEntriesByLibrary(entries), renamed };
+}
+
+export interface StructuredExport {
+	content: string;
+	/** Citekeys (CSL `id` / BibTeX entry keys) present in the merged output, in output order. */
+	exported: string[];
+	/** CSL-JSON only: the fields of {@link CSL_STRIPPED_FIELDS} that were actually removed from at least one item. */
+	stripped: string[];
+}
+
+const BIBTEX_ENTRY = /^\s*@[A-Za-z]+\s*\{\s*([^,\s}]+)\s*,/gm;
+
+/** Entry keys of a BibTeX/BibLaTeX text in order (`@type{key,`); `@comment`/`@preamble` blocks carry no key and are skipped. */
+export function bibtexKeys(text: string): string[] {
+	return uniqueInOrder([...text.matchAll(BIBTEX_ENTRY)].map(match => match[1]));
+}
+
+/**
+ * Merges the per-library export outputs: CSL-JSON arrays into one array with `abstract`/`note` removed (a non-array
+ * payload throws), BibTeX/BibLaTeX texts concatenated with one blank line. The CSL-JSON output stays a plain array so
+ * pandoc can read it.
+ */
+export function mergeExports(format: StructuredBibliographyFormat, outputs: readonly string[]): StructuredExport {
+	if (format !== "csl-json") {
+		const content = outputs.map(text => text.trim()).filter(Boolean).join("\n\n");
+		return { content: content ? `${content}\n` : "", exported: bibtexKeys(content), stripped: [] };
+	}
+	const items: Record<string, unknown>[] = [];
+	const stripped = new Set<string>();
+	for (const output of outputs) {
+		if (!output.trim()) continue;
+		const parsed: unknown = JSON.parse(output);
+		if (!Array.isArray(parsed)) throw new Error("BBT CSL JSON export must be an array");
+		for (const item of parsed) {
+			if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("BBT CSL JSON export contains a non-object item");
+			const copy = { ...item as Record<string, unknown> };
+			for (const field of CSL_STRIPPED_FIELDS) if (field in copy) { delete copy[field]; stripped.add(field); }
+			items.push(copy);
+		}
+	}
+	const exported = uniqueInOrder(items.map(item => typeof item.id === "string" ? item.id : typeof item.id === "number" ? String(item.id) : "").filter(Boolean));
+	return { content: `${JSON.stringify(items, null, 2)}\n`, exported, stripped: CSL_STRIPPED_FIELDS.filter(field => stripped.has(field)) };
+}
+
+export interface StructuredReferencesPayload {
+	format: StructuredBibliographyFormat;
+	heading: string;
+	/** Null when the export was unavailable (`referencesReason` says why). */
+	content: string | null;
+	exported: string[];
+	/** Every cited key with no entry in the export: non-resolved verdicts, plus resolved keys the export omitted. */
+	unresolved: ReferencesPayload["unresolved"];
+	renamed?: { cited: string; current: string }[];
+	stripped?: string[];
+}
+
+/** Sidecar file stem from the target: note basename (`.md` stripped), the last folder segment, or `vault` for the root. */
+export function sidecarSlug(targetPath: string, isFile: boolean): string {
+	const clean = targetPath.replace(/^\/+|\/+$/g, "");
+	const last = clean.split("/").pop() ?? "";
+	const stem = (isFile ? last.replace(/\.md$/i, "") : last).trim();
+	const slug = stem.replace(/[\\/:*?"<>|]+/g, "").replace(/\p{Cc}+/gu, "").replace(/\s+/g, "-").replace(/^[.-]+|[.-]+$/g, "");
+	return slug || "vault";
+}
+
+export function defaultSidecarPath(targetPath: string, isFile: boolean, format: BibliographyFormat): string {
+	return `${BIBLIOGRAPHY_DIR}/${sidecarSlug(targetPath, isFile)}.${SIDECAR_EXTENSIONS[format]}`;
+}
+
+/** Normalizes an explicit `--out` path; throws for anything a vault reader could not keep inside the vault. */
+export function validateSidecarPath(out: string): string {
+	const value = out.trim().replace(/^\/+/, "").replace(/\/+/g, "/").replace(/\/+$/, "");
+	if (!value || value.includes("\\") || value.includes("\0") || /^[a-z]+:/i.test(value)) throw new Error(`Sidecar path must be vault-relative: ${out}`);
+	if (value.split("/").some(part => part === ".." || part === "." || part === "")) throw new Error(`Sidecar path must not traverse or contain empty segments: ${out}`);
+	return value;
+}
+
+export function isPluginOwnedPath(path: string): boolean {
+	return path === BIBLIOGRAPHY_DIR || path.startsWith(`${BIBLIOGRAPHY_DIR}/`);
+}
+
+/** Sidecar bytes: the generator marker line first for every non-JSON format (CSL-JSON must stay a plain array). */
+export function sidecarContent(format: BibliographyFormat, content: string): string {
+	if (format === "csl-json") return content;
+	return `${GENERATOR_MARKERS[format]}\n${content}${content.endsWith("\n") || !content ? "" : "\n"}`;
+}
+
+function startsWithMarker(existing: string, format: Exclude<BibliographyFormat, "csl-json">): boolean {
+	const first = existing.replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0] ?? "";
+	return first.trim() === GENERATOR_MARKERS[format];
+}
+
+/**
+ * Overwrite rule. Inside `.cmds-zotero/bibliography/` the plugin owns the file. Elsewhere the file must be absent or
+ * start with the generator marker; CSL-JSON carries no marker, so an existing JSON file needs `force`. A Markdown note
+ * (`.md`) that lacks the marker is never overwritten, not even with `force`.
+ */
+export function sidecarWriteDecision(path: string, format: BibliographyFormat, existing: string | null, force: boolean): { ok: true } | { ok: false; message: string } {
+	if (isPluginOwnedPath(path) || existing === null) return { ok: true };
+	const marked = format !== "csl-json" && startsWithMarker(existing, format);
+	if (marked) return { ok: true };
+	if (/\.md$/i.test(path)) return { ok: false, message: `Refusing to overwrite the note ${path}: it was not written by cmds-zotero (no generator marker) and notes are never replaced, even with --force.` };
+	if (force) return { ok: true };
+	const how = format === "csl-json" ? "CSL-JSON carries no generator marker, so pass --force to replace it" : "it does not start with the generator marker; pass --force to replace it";
+	return { ok: false, message: `Refusing to overwrite ${path}: ${how}, or write under ${BIBLIOGRAPHY_DIR}/ (the default).` };
 }
 
 type ScannedCitation = Omit<FileCitation, "citeStatus" | "matchedHistory" | "entryId" | "citekeyCurrent" | "hub" | "raw" | "uncheckedReason">;
@@ -161,8 +330,19 @@ function uncheckedCause(reason: UncheckedReason | undefined): string {
 	return UNCHECKED_CAUSES[reason ?? "stale-index"];
 }
 
-const REFERENCES_HEADING = /^##\s+References\s*#*\s*$/i;
-const SECTION_END = /^#{1,2}\s/;
+function escapeRegex(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
+
+/**
+ * 0.5 R10: `##`–`######` followed by one configured title (case-insensitive; whitespace inside a title is optional, so
+ * "참고 문헌" also matches "참고문헌"), an optional short parenthesised qualifier and optional closing hashes.
+ */
+export function referencesHeadingPattern(headings: readonly string[] = DEFAULT_REFERENCES_HEADINGS): RegExp {
+	const titles = uniqueInOrder(headings.map(title => title.trim()).filter(Boolean)).map(title => escapeRegex(title).replace(/\s+/g, "\\s*"));
+	const alternatives = titles.length ? titles.join("|") : escapeRegex("References");
+	return new RegExp(`^(#{2,6})\\s+(?:${alternatives})(?:\\s*\\([^)]{0,40}\\))?\\s*#*\\s*$`, "iu");
+}
 const LIST_ITEM_BRACKET = /^\s*[-*+]\s+\[/;
 const FENCE = /^\s*(```|~~~)/;
 const FULL_CITATION_LINE = /^\s*[-*+]\s+\*\*Full citation\*\*\s*:\s*(.*)$/im;
@@ -239,33 +419,39 @@ export function classifyKeys(keys: readonly string[], index: ZoteroIndex, lookup
 }
 
 /**
- * Locates the first `## References` heading outside frontmatter and fenced code; the section runs to the next
- * level-1/2 heading or the end. Listed keys come from lines shaped `- [@key] ...` (first key on the line, deduplicated).
+ * Locates the first References heading (see {@link referencesHeadingPattern}) outside frontmatter and fenced code; the
+ * section runs to the next heading of the same or a higher level, or the end. Listed keys come from lines shaped
+ * `- [@key] ...` (first key on the line, deduplicated).
  */
-export function findReferencesSection(lines: readonly string[]): ReferencesSpan | null {
+export function findReferencesSection(lines: readonly string[], headings: readonly string[] = DEFAULT_REFERENCES_HEADINGS): ReferencesSpan | null {
+	const pattern = referencesHeadingPattern(headings);
 	let fenced = false;
 	let frontmatter = lines[0]?.trim() === "---";
 	let start = -1;
+	let level = 2;
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
 		if (frontmatter) { if (index > 0 && line.trim() === "---") frontmatter = false; continue; }
 		if (FENCE.test(line)) { fenced = !fenced; continue; }
-		if (!fenced && REFERENCES_HEADING.test(line)) { start = index; break; }
+		if (fenced) continue;
+		const match = pattern.exec(line);
+		if (match) { start = index; level = match[1].length; break; }
 	}
 	if (start < 0) return null;
+	const sectionEnd = new RegExp(`^#{1,${level}}\\s`);
 	let end = lines.length;
 	const listed: string[] = [];
 	for (let index = start + 1; index < lines.length; index++) {
 		const line = lines[index];
 		if (FENCE.test(line)) { fenced = !fenced; continue; }
 		if (fenced) continue;
-		if (SECTION_END.test(line)) { end = index; break; }
+		if (sectionEnd.test(line)) { end = index; break; }
 		const marker = LIST_ITEM_BRACKET.exec(line);
 		if (!marker) continue;
 		const leading = scanCitations(line).find(item => item.form === "pandoc" && item.column === marker[0].length);
 		if (leading && !listed.includes(leading.citekey)) listed.push(leading.citekey);
 	}
-	return { start, end, listed };
+	return { start, end, listed, heading: lines[start].trim(), level };
 }
 
 function sectionReport(span: ReferencesSpan | null, cited: readonly string[]): ReferencesSection {
@@ -273,22 +459,22 @@ function sectionReport(span: ReferencesSpan | null, cited: readonly string[]): R
 	const listedSet = new Set(listed);
 	const citedUnique = uniqueInOrder(cited);
 	const citedSet = new Set(citedUnique);
-	return { present: span !== null, listed, missingFromReferences: citedUnique.filter(key => !listedSet.has(key)), notCited: listed.filter(key => !citedSet.has(key)) };
+	return { present: span !== null, listed, missingFromReferences: citedUnique.filter(key => !listedSet.has(key)), notCited: listed.filter(key => !citedSet.has(key)), ...(span ? { heading: span.heading } : {}) };
 }
 
-/** Compares the `## References` section of a note against the keys it cites (first-cited order preserved). */
-export function referencesSection(body: string, cited: readonly string[]): ReferencesSection {
-	return sectionReport(findReferencesSection(body.split(/\r?\n/)), cited);
+/** Compares the References section of a note against the keys it cites (first-cited order preserved). */
+export function referencesSection(body: string, cited: readonly string[], headings: readonly string[] = DEFAULT_REFERENCES_HEADINGS): ReferencesSection {
+	return sectionReport(findReferencesSection(body.split(/\r?\n/), headings), cited);
 }
 
 /**
  * Citation occurrences of one note in file order: frontmatter citations first, then body citations with 1-based
  * line/column. Occurrences inside the `## References` section are the bibliography, not citations, and are skipped.
  */
-function scanNote(note: NoteRecord & { body: string }): { citations: ScannedCitation[]; span: ReferencesSpan | null } {
+function scanNote(note: NoteRecord & { body: string }, headings: readonly string[]): { citations: ScannedCitation[]; span: ReferencesSpan | null } {
 	const citations: ScannedCitation[] = [];
 	for (const item of scanFrontmatterCitations(note.frontmatter ?? {})) citations.push({ citekey: item.citekey, where: "frontmatter", field: item.field, form: item.form });
-	const span = findReferencesSection(note.body.split(/\r?\n/));
+	const span = findReferencesSection(note.body.split(/\r?\n/), headings);
 	for (const item of scanCitations(note.body)) {
 		if (span && item.line >= span.start && item.line < span.end) continue;
 		citations.push({ citekey: item.citekey, where: "body", line: item.line + 1, column: item.column + 1, form: item.form });
@@ -297,8 +483,8 @@ function scanNote(note: NoteRecord & { body: string }): { citations: ScannedCita
 }
 
 /** Distinct keys a note cites (frontmatter, then body, References section excluded) in first-cited order. */
-export function citedKeys(note: NoteRecord & { body: string }): string[] {
-	return uniqueInOrder(scanNote(note).citations.map(item => item.citekey));
+export function citedKeys(note: NoteRecord & { body: string }, headings: readonly string[] = DEFAULT_REFERENCES_HEADINGS): string[] {
+	return uniqueInOrder(scanNote(note, headings).citations.map(item => item.citekey));
 }
 
 /** Copies a verdict in the fixed output order, dropping undefined keys so JSON stays free of nulls. */
@@ -317,8 +503,8 @@ function verdictFields(verdict: KeyVerdict): KeyVerdict {
  * Per-file shape of the `cites` action. `verdicts` must cover every key of `citedKeys(note)`; a missing key is an
  * integration error and throws. `note.body` is the note text as read (frontmatter block included).
  */
-export function citesForNote(note: NoteRecord & { body: string }, verdicts: ReadonlyMap<string, KeyVerdict>): FileCites {
-	const { citations, span } = scanNote(note);
+export function citesForNote(note: NoteRecord & { body: string }, verdicts: ReadonlyMap<string, KeyVerdict>, headings: readonly string[] = DEFAULT_REFERENCES_HEADINGS): FileCites {
+	const { citations, span } = scanNote(note, headings);
 	const type = note.frontmatter && typeof note.frontmatter.type === "string" ? note.frontmatter.type : null;
 	const shaped = citations.map((item): FileCitation => {
 		const verdict = verdicts.get(item.citekey);
@@ -438,20 +624,44 @@ export function referencesLine(citekey: string, verdict: KeyVerdict | undefined,
 	}
 }
 
-/** `## References` plus one line per distinct key in the given (first-cited) order; lines joined by `\n`, no trailing newline. */
-export function referencesMarkdown(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, bibliography: ReadonlyMap<string, string>, hubFullCitation: ReadonlyMap<string, string>): string {
-	return ["## References", ...uniqueInOrder(keys).map(key => referencesLine(key, classified.get(key), bibliography, hubFullCitation))].join("\n");
+export const DEFAULT_REFERENCES_HEADING = "## References";
+
+/** The heading (default `## References`) plus one line per distinct key in the given (first-cited) order; lines joined by `\n`, no trailing newline. */
+export function referencesMarkdown(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, bibliography: ReadonlyMap<string, string>, hubFullCitation: ReadonlyMap<string, string>, heading = DEFAULT_REFERENCES_HEADING): string {
+	return [heading, ...uniqueInOrder(keys).map(key => referencesLine(key, classified.get(key), bibliography, hubFullCitation))].join("\n");
 }
 
-/** The `references` payload of the action: resolved texts, unresolved keys with hints, and the generated Markdown. */
-export function referencesPayload(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, bibliography: ReadonlyMap<string, string>, hubFullCitation: ReadonlyMap<string, string>): ReferencesPayload {
+function unresolvedEntry(citekey: string, verdict: KeyVerdict | undefined): ReferencesPayload["unresolved"][number] {
+	const status = verdict?.citeStatus ?? "dangling";
+	if (status === "resolved") return { citekey, citeStatus: status, hint: "Resolved in the index but absent from the BBT export; refresh the index or check the item in Zotero" };
+	return { citekey, citeStatus: status, ...(status === "unchecked" && verdict?.uncheckedReason ? { uncheckedReason: verdict.uncheckedReason } : {}), hint: hintFor(status, verdict?.uncheckedReason) };
+}
+
+/** The `references` payload for `text`/`markdown`: resolved texts, unresolved keys with hints, the References block and `content`. */
+export function referencesPayload(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, bibliography: ReadonlyMap<string, string>, hubFullCitation: ReadonlyMap<string, string>, options: { format?: "text" | "markdown"; heading?: string; style?: string } = {}): ReferencesPayload {
+	const format = options.format ?? "text";
+	const heading = options.heading ?? DEFAULT_REFERENCES_HEADING;
 	const resolved: ReferencesPayload["resolved"] = [];
 	const unresolved: ReferencesPayload["unresolved"] = [];
 	for (const citekey of uniqueInOrder(keys)) {
 		const verdict = classified.get(citekey);
-		const status = verdict?.citeStatus ?? "dangling";
-		if (status === "resolved") resolved.push({ citekey, text: oneLine(bibliography.get(citekey) ?? "") });
-		else unresolved.push({ citekey, citeStatus: status, ...(status === "unchecked" && verdict?.uncheckedReason ? { uncheckedReason: verdict.uncheckedReason } : {}), hint: hintFor(status, verdict?.uncheckedReason) });
+		if (verdict?.citeStatus === "resolved") resolved.push({ citekey, text: oneLine(bibliography.get(citekey) ?? "") });
+		else unresolved.push(unresolvedEntry(citekey, verdict));
 	}
-	return { resolved, unresolved, markdown: referencesMarkdown(keys, classified, bibliography, hubFullCitation) };
+	const markdown = referencesMarkdown(keys, classified, bibliography, hubFullCitation, heading);
+	const content = format === "markdown" ? markdown : resolved.map(item => item.text).filter(Boolean).join("\n\n");
+	return { format, style: options.style ?? "", heading, resolved, unresolved, markdown, content };
+}
+
+/** The `references` payload for `csl-json`/`bibtex`/`biblatex`; `merged` is null when the export was unavailable. */
+export function structuredReferencesPayload(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, format: StructuredBibliographyFormat, heading: string, merged: StructuredExport | null, renamed: readonly { cited: string; current: string }[]): StructuredReferencesPayload {
+	const exported = new Set(merged?.exported ?? []);
+	const currentOf = new Map(renamed.map(pair => [pair.cited, pair.current]));
+	const unresolved: ReferencesPayload["unresolved"] = [];
+	for (const citekey of uniqueInOrder(keys)) {
+		const verdict = classified.get(citekey);
+		if (verdict?.citeStatus === "resolved" && merged && exported.has(currentOf.get(citekey) ?? citekey)) continue;
+		unresolved.push(verdict?.citeStatus === "resolved" && !merged ? { citekey, citeStatus: "resolved", hint: "Structured bibliography export needs the live host and Better BibTeX (item.export)" } : unresolvedEntry(citekey, verdict));
+	}
+	return { format, heading, content: merged?.content ?? null, exported: merged?.exported ?? [], unresolved, ...(renamed.length ? { renamed: [...renamed] } : {}), ...(merged && format === "csl-json" ? { stripped: merged.stripped } : {}) };
 }

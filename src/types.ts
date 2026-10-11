@@ -21,7 +21,12 @@ export interface CmdsZoteroSettings {
 	excludedTags: string[];
 	headingHighlightColor: string;
 	referencesFollowActiveNote: boolean;
+	// 0.5 R10: headings that mark a note's References section (case-insensitive; whitespace inside a title is flexible).
+	referencesHeadings: string[];
 }
+
+// 0.5 R10: default References headings; an empty configured list falls back to these.
+export const DEFAULT_REFERENCES_HEADINGS: readonly string[] = ["References", "Bibliography", "Works Cited", "참고 문헌", "참고 자료"];
 
 export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	bbtEndpoint: "http://127.0.0.1:23119/better-bibtex",
@@ -39,6 +44,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	excludedTags: ["obscite"],
 	headingHighlightColor: "gray",
 	referencesFollowActiveNote: true,
+	referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS], // 0.5 R10
 };
 
 export interface ItemIdentity {

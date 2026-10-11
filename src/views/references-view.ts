@@ -66,6 +66,9 @@ export class ReferencesView extends ItemView {
 		toolbar.createSpan({ text: referenceHeader(this.rows.length, state) });
 		const copy = toolbar.createEl("button", { text: "Copy bibliography", attr: { "aria-label": "Copy the resolved bibliography as text" } });
 		copy.addEventListener("click", () => { void this.copyBibliography(); });
+		// 0.5 R10
+		const csl = toolbar.createEl("button", { text: "Copy CSL-JSON", attr: { "aria-label": "Copy CSL-JSON for the resolved references (pandoc bibliography)" } });
+		csl.addEventListener("click", () => { void this.plugin.run(() => this.plugin.copyCslJson(this.resolvedEntries())); });
 		const refresh = toolbar.createEl("button", { attr: { "aria-label": "Refresh references" } });
 		setIcon(refresh, "refresh-cw");
 		refresh.disabled = this.plugin.forcedWarmActive();
@@ -133,6 +136,13 @@ export class ReferencesView extends ItemView {
 	}
 
 	onClose(): Promise<void> { this.contentEl.empty(); this.status = null; return Promise.resolve(); }
+
+	// 0.5 R10: the resolved entries of the current rows, each once.
+	private resolvedEntries(): ZoteroIndexEntry[] {
+		const entries: ZoteroIndexEntry[] = [];
+		for (const row of this.rows) if (row.status === "resolved" && row.entry && !entries.some(entry => entry.id === row.entry?.id)) entries.push(row.entry);
+		return entries;
+	}
 
 	// 0.5 R4: the shared status line in the header, updated by the plugin without a full re-render.
 	renderStatus(line: string): void { this.status?.setText(line); }
