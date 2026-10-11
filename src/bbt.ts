@@ -4,6 +4,15 @@ import { normalizeAttachments, normalizeEntry, parseItemURI, text } from "./api/
 import { entryHash, record, validateEntry, validateIndex } from "./identity";
 import { indexDiagnostics } from "./diagnostics";
 import { positiveInteger } from "./uris";
+import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentItem, recentKey, windowTerms, type RecentRead } from "./recent/recent-reads";
+
+/** Calendar days probed concurrently while dating recent reads; the probes are single indexed SQLite queries in Zotero. */
+const RECENT_DAY_BATCH = 7;
+/**
+ * Identity a fresh single-item collection must reproduce; the cached citekey is only the lookup handle. `libraryID` is the
+ * local library ID when the saved index knows the item; an item added since then is addressed by its BBT library name.
+ */
+export interface FreshTarget { citekey: string; itemKey: string; libraryType: "user" | "group"; groupID?: number; libraryID?: number; library?: string }
 
 // 0.5 R4: the last real BBT observation (no polling); `aborted` requests are the plugin's own cancellation and are not recorded.
 export interface BbtOutcome { ok: boolean; at: Date; reason?: BbtTransportReason; status?: number; message?: string }
@@ -178,6 +187,91 @@ export class BbtService {
 		const output = await this.call("item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID], this.settings.requestTimeoutMs, signal);
 		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
 		return output;
+	}
+
+	/**
+	 * Items whose attachment Zotero opened within the last `days` calendar days, newest first (Zotero 10
+	 * `attachmentLastRead`). One window search, then exact-day searches backwards from today until every item has its day;
+	 * each probe is one cheap Zotero search. Read-only. Rows without a citekey (standalone PDFs) are left out.
+	 */
+	async recentlyRead(days: number, options: { signal?: AbortSignal; now?: Date } = {}): Promise<RecentRead[]> {
+		const window = clampRecentDays(days);
+		const search = async (terms: unknown[]): Promise<unknown[]> => {
+			const result = await this.call("item.search", [terms], this.settings.requestTimeoutMs, options.signal);
+			if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+			return result as unknown[];
+		};
+		const rows = new Map<string, RecentRead>();
+		for (const raw of await search(windowTerms(window))) {
+			const parsed = parseRecentItem(raw);
+			if (parsed) rows.set(recentKey(parsed), { ...parsed, readOn: null });
+		}
+		const today = localDay(options.now ?? new Date());
+		let undated = rows.size;
+		for (let offset = 0; offset < window && undated > 0; offset += RECENT_DAY_BATCH) {
+			const daysToProbe = Array.from({ length: Math.min(RECENT_DAY_BATCH, window - offset) }, (_, step) => addDays(today, -(offset + step)));
+			const results = await mapBounded(daysToProbe, Math.max(1, this.settings.concurrency), day => search(dayTerms(day)));
+			results.forEach((found, step) => {
+				for (const raw of found) {
+					const parsed = parseRecentItem(raw);
+					const row = parsed ? rows.get(recentKey(parsed)) : undefined;
+					if (row && row.readOn === null) { row.readOn = daysToProbe[step]; undated--; }
+				}
+			});
+		}
+		return orderRecent([...rows.values()]);
+	}
+
+	/** The item's current citekey in its library (local ID or BBT library name), or null when Zotero no longer has the item. */
+	async currentCitekey(itemKey: string, library: number | string, signal?: AbortSignal): Promise<string | null> {
+		const result = await this.call("item.search", [[["key", "is", itemKey], ["libraryID", "is", library]]], this.settings.requestTimeoutMs, signal);
+		if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+		for (const raw of result) {
+			if (!record(raw)) continue;
+			try { if (parseItemURI(text(raw.id)).itemKey !== itemKey) continue; } catch { continue; }
+			const citekey = text(raw.citekey);
+			if (citekey) return citekey;
+		}
+		return null;
+	}
+
+	/**
+	 * Fresh metadata, attachments and annotations for one item straight from BBT (`item.export` + `item.attachments`); the
+	 * saved index is not touched. The export must reproduce `target`'s identity; a citekey renamed in Zotero since the index
+	 * was saved is looked up again by item key. `previous` carries the citekey history forward.
+	 */
+	async collectEntry(target: FreshTarget, previous?: ZoteroIndexEntry, signal?: AbortSignal): Promise<ZoteroIndexEntry> {
+		const library = target.libraryID ?? target.library;
+		if (!target.citekey || library === undefined || (typeof library === "number" && !positiveInteger(library)) || library === "") throw new Error("A fresh collection needs a citekey and a library");
+		const exportOne = async (citekey: string): Promise<Record<string, unknown> | null> => {
+			let serialized: unknown;
+			try { serialized = await this.call("item.export", [[citekey], "BetterBibTeX JSON", library], this.settings.requestTimeoutMs, signal); }
+			catch (error) {
+				// BBT answers an unknown citekey with a JSON-RPC error; anything else is a real fault.
+				if (isBbtTransportError(error) && error.reason === "rpc" && /not found/i.test(error.rpcMessage ?? "")) return null;
+				throw error;
+			}
+			if (typeof serialized !== "string") throw new Error("BBT export must return a JSON string");
+			const exported: unknown = JSON.parse(serialized);
+			if (!record(exported) || !Array.isArray(exported.items) || exported.items.length !== 1 || !record(exported.items[0])) throw new Error("Better BibTeX did not export exactly one item");
+			return exported.items[0];
+		};
+		let raw = await exportOne(target.citekey);
+		if (!raw || text(raw.itemKey) !== target.itemKey) {
+			const current = await this.currentCitekey(target.itemKey, library, signal);
+			if (!current) throw new Error(`Zotero no longer has item ${target.itemKey} in library ${String(library)}.`);
+			raw = current === target.citekey && raw ? raw : await exportOne(current);
+			if (!raw) throw new Error(`Better BibTeX could not export @${current}.`);
+		}
+		const entry = normalizeEntry(raw, previous);
+		if (entry.itemKey !== target.itemKey || (target.libraryID !== undefined && entry.libraryID !== target.libraryID) || entry.libraryType !== target.libraryType || (entry.groupID ?? 0) !== (target.groupID ?? 0)) throw new Error("The fresh Better BibTeX export is a different Zotero item; refresh the index.");
+		const attachments = await this.call("item.attachments", [entry.citekey, entry.libraryID], this.settings.attachmentTimeoutMs, signal);
+		entry.attachments = normalizeAttachments(attachments, entry);
+		entry.attachmentPath = entry.attachments.find(attachment => attachment.path?.toLowerCase().endsWith(".pdf"))?.path ?? "";
+		entry.attachmentStatus = "complete";
+		entry.contentHash = entryHash(entry);
+		if (!validateEntry(entry)) throw new Error("Invalid fresh Zotero item data");
+		return entry;
 	}
 
 	/**

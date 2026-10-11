@@ -36,8 +36,11 @@ export class BbtTransportError extends Error {
 	readonly timeoutMs?: number;
 	/** The raw cause text (`connect ECONNREFUSED 127.0.0.1:23119`, `BBT RPC error for item.bibliography`). */
 	readonly detail: string;
+	/** JSON-RPC error code and message Better BibTeX sent with an `rpc` fault (`-32602`, `not found: <citekey>`). */
+	readonly rpcCode?: number;
+	readonly rpcMessage?: string;
 
-	constructor(reason: BbtTransportReason, endpoint: string, detail: string, options: { cause?: unknown; code?: string; status?: number; timeoutMs?: number } = {}) {
+	constructor(reason: BbtTransportReason, endpoint: string, detail: string, options: { cause?: unknown; code?: string; status?: number; timeoutMs?: number; rpcCode?: number; rpcMessage?: string } = {}) {
 		super("");
 		this.reason = reason;
 		this.endpoint = endpoint;
@@ -46,6 +49,8 @@ export class BbtTransportError extends Error {
 		if (options.code !== undefined) this.code = options.code;
 		if (options.status !== undefined) this.status = options.status;
 		if (options.timeoutMs !== undefined) this.timeoutMs = options.timeoutMs;
+		if (options.rpcCode !== undefined) this.rpcCode = options.rpcCode;
+		if (options.rpcMessage !== undefined) this.rpcMessage = options.rpcMessage;
 		this.message = describeBbtError(this);
 	}
 }
@@ -183,7 +188,13 @@ export async function rpc(endpoint: string, method: string, params: unknown[], t
 	try { parsed = JSON.parse(response.text); }
 	catch (error) { throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${method}`, { cause: error }); }
 	if (!record(parsed) || parsed.jsonrpc !== "2.0" || parsed.id !== 1) throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`);
-	if ("error" in parsed) throw new BbtTransportError("rpc", url, `BBT RPC error for ${method}`);
+	if ("error" in parsed) {
+		const fault = record(parsed.error) ? parsed.error : {};
+		throw new BbtTransportError("rpc", url, `BBT RPC error for ${method}`, {
+			...(typeof fault.code === "number" ? { rpcCode: fault.code } : {}),
+			...(typeof fault.message === "string" ? { rpcMessage: fault.message.slice(0, 500) } : {}),
+		});
+	}
 	if (!("result" in parsed)) throw new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`);
 	return parsed.result;
 }

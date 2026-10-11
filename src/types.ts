@@ -23,6 +23,8 @@ export interface CmdsZoteroSettings {
 	referencesFollowActiveNote: boolean;
 	// 0.5 R10: headings that mark a note's References section (case-insensitive; whitespace inside a title is flexible).
 	referencesHeadings: string[];
+	/** Days of Zotero reading history "Send recently read papers to notes" lists (1–365). */
+	recentReadsDays: number;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -45,6 +47,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	headingHighlightColor: "gray",
 	referencesFollowActiveNote: true,
 	referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS], // 0.5 R10
+	recentReadsDays: 30,
 };
 
 export interface ItemIdentity {

@@ -30,6 +30,8 @@ import { CitekeySuggest } from "./citations/suggest";
 import { scanCitations } from "./citations/scan";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "./views/references-view";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "./views/annotations-view";
+import { RecentReadsModal } from "./views/recent-reads-modal";
+import { freshTargetOf, freshTargetOfRead, indexEntryFor, localDay, readLabel, type RecentRead, type SendOutcome } from "./recent/recent-reads";
 import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
@@ -38,6 +40,8 @@ const LEGACY_PLUGIN_MESSAGE = "The legacy cmds-link-zotero plugin is enabled bes
 const WARM_BACKOFF_MS = 60_000;
 // 0.5 R12: a sidebar render probes `api.ready` once with this bound before any live bibliography call of that generation.
 const BIBLIOGRAPHY_PROBE_MS = 2500;
+/** The picker lists recently read papers first from the last Zotero answer; an older answer is refreshed in the background. */
+const RECENT_CACHE_MS = 10 * 60_000;
 
 export default class CMDSZoteroPlugin extends Plugin {
 	settings!: CmdsZoteroSettings;
@@ -55,6 +59,11 @@ export default class CMDSZoteroPlugin extends Plugin {
 	private bibliographyStore!: BibliographyStore;
 	private bibliographyGeneration = 0;
 	private bibliographyController: AbortController | null = null;
+	// Recently read (Zotero's reading history): the last answer, for ordering the picker without waiting on Zotero, and one shared flight.
+	private recentCache: { at: number; reads: RecentRead[] } | null = null;
+	private recentFlight: { days: number; promise: Promise<RecentRead[]> } | null = null;
+	/** True while "Send recently read papers to notes" writes notes; a second run is refused. */
+	recentSendActive = false;
 	private warming: { promise: Promise<void>; force: boolean } | null = null;
 	private warmFailedUntil = 0;
 	/** Index generation (generatedAt, or "none") for which the offline Notice was already shown. */
@@ -90,6 +99,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			}).open();
 		} });
 		this.addCommand({ id: "import-literature-note", name: "Import literature note", callback: () => { void this.pick(entry => { void this.previewImport(entry); }); } });
+		this.addCommand({ id: "send-recent-reads", name: "Send recently read papers to notes", callback: () => { this.openRecentReads(); } });
 		this.addCommand({ id: "update-all-literature-notes", name: "Update all owned literature notes", callback: () => { void this.updateAllLiteratureNotes(); } });
 		this.addCommand({ id: "insert-bibliography", name: "Insert bibliography", editorCallback: (editor: Editor) => {
 			void this.pick(entry => { void this.run(() => this.insertBibliography(editor, entry)); }); // 0.5 R12
@@ -109,6 +119,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.addCommand({ id: "write-bibliography-sidecar", name: "Write pandoc bibliography sidecar for current note", callback: () => { void this.run(() => this.writeBibliographySidecar()); } });
 		this.addRibbonIcon("library", "Search literature", () => { void this.pick(entry => this.showActions(entry)); });
 		this.addRibbonIcon("highlighter", "Zotero annotations", () => { void this.activateView(VIEW_TYPE_ANNOTATIONS); });
+		this.addRibbonIcon("book-open", "Send recently read papers to notes", () => { this.openRecentReads(); });
 
 		this.registerObsidianProtocolHandler("cmds-zotero", params => {
 			void this.run(async () => {
@@ -458,7 +469,16 @@ export default class CMDSZoteroPlugin extends Plugin {
 		await this.run(async () => {
 			const index = await this.loadIndexForRead();
 			if (!index.entries.length) throw new Error("No literature entries. Check Zotero and refresh the index.");
-			new PickerModal(this.app, index.entries, entry => `${entry.title} — @${entry.citekey} · ${entry.year} · library ${entry.libraryID}`, choose).open();
+			// Recently read papers first, from the last Zotero answer (never awaited here, so the picker opens instantly).
+			const readOn = new Map<string, string | null>();
+			for (const read of this.recentForPicker()) {
+				const entry = indexEntryFor(read, index.entries);
+				if (entry && !readOn.has(entry.id)) readOn.set(entry.id, read.readOn);
+			}
+			const recent = [...readOn.keys()].flatMap(id => index.entries.filter(entry => entry.id === id));
+			const ordered = [...recent, ...index.entries.filter(entry => !readOn.has(entry.id))];
+			const today = localDay(new Date());
+			new PickerModal(this.app, ordered, entry => `${entry.title} — @${entry.citekey} · ${entry.year} · library ${entry.libraryID}${readOn.has(entry.id) ? ` · ${readLabel(readOn.get(entry.id) ?? null, today)}` : ""}`, choose).open();
 		});
 	}
 
@@ -484,10 +504,90 @@ export default class CMDSZoteroPlugin extends Plugin {
 		]).open();
 	}
 
+	openRecentReads(): void { new RecentReadsModal(this.app, this).open(); }
+
+	/**
+	 * Papers whose PDF Zotero opened within `days` (its reading history), newest first. Concurrent callers for one window
+	 * share a flight; the answer is remembered so the literature picker can list recent reads first without waiting.
+	 */
+	recentReads(days = this.settings.recentReadsDays): Promise<RecentRead[]> {
+		if (this.recentFlight?.days === days) return this.recentFlight.promise;
+		const bbt = this.bbt;
+		const promise = bbt.recentlyRead(days).then(reads => {
+			if (this.bbt === bbt) this.recentCache = { at: Date.now(), reads };
+			return reads;
+		}).finally(() => { if (this.recentFlight?.promise === promise) this.recentFlight = null; });
+		this.recentFlight = { days, promise };
+		return promise;
+	}
+
+	/** The last recent-reads answer; an answer older than RECENT_CACHE_MS (or none) is refreshed in the background. */
+	private recentForPicker(): RecentRead[] {
+		const cache = this.recentCache;
+		if (!cache || Date.now() - cache.at > RECENT_CACHE_MS) void this.recentReads().catch(() => undefined);
+		return cache?.reads ?? [];
+	}
+
+	/** The newest validated snapshot from disk without contacting BBT, or null when none exists. */
+	savedIndex(): Promise<ZoteroIndex | null> { return this.peekPublished().catch(() => null); }
+
+	/** True for faults that mean Zotero is not answering (so other BBT calls in this action should not wait on it). */
+	private isOfflineError(error: unknown): boolean {
+		const reason = transportReasonOf(error);
+		return reason === "connection-refused" || reason === "timeout" || reason === "http-404";
+	}
+
+	/**
+	 * The item as Zotero has it now (fresh export + attachments), so annotations made since the index was saved are
+	 * included. Falls back to the saved entry when Zotero cannot answer; `error` says why.
+	 */
+	async freshEntry(entry: ZoteroIndexEntry): Promise<{ entry: ZoteroIndexEntry; fresh: boolean; error?: unknown }> {
+		try { return { entry: await this.bbt.collectEntry(freshTargetOf(entry), entry), fresh: true }; }
+		catch (error) { return { entry, fresh: false, error }; }
+	}
+
+	/** A recent read as an entry: fresh from Zotero when possible, else the saved one; a paper added since the last refresh is read from Zotero only. */
+	async entryForRecent(read: RecentRead, index: ZoteroIndex | null): Promise<{ entry: ZoteroIndexEntry | null; fresh: boolean; error?: unknown }> {
+		const known = index ? indexEntryFor(read, index.entries) : null;
+		if (known) return this.freshEntry(known);
+		try { return { entry: await this.bbt.collectEntry(freshTargetOfRead(read, index?.entries ?? [])), fresh: true }; }
+		catch (error) { return { entry: null, fresh: false, error }; }
+	}
+
+	/** Literature notes in the output folder keyed by their frontmatter `zoteroID` (metadata cache; no file reads). */
+	literatureNoteFiles(): Map<string, TFile[]> {
+		const prefix = `${this.settings.outputFolder.replace(/\/+$/, "")}/`;
+		const notes = new Map<string, TFile[]>();
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			if (!file.path.startsWith(prefix)) continue;
+			const id: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.zoteroID;
+			if (typeof id !== "string") continue;
+			notes.set(id, [...(notes.get(id) ?? []), file]);
+		}
+		return notes;
+	}
+
+	/**
+	 * Creates the literature note or refreshes its managed sections (new annotations included). Edited generated sections
+	 * stay as they are (0.5 R5); hard conflicts (unowned note, damaged markers, several notes with one identity) refuse.
+	 */
+	async sendToNote(entry: ZoteroIndexEntry, index: ZoteroIndex | null, options: { offline?: boolean } = {}): Promise<SendOutcome> {
+		const preview = await this.importer.preview(entry, index ?? undefined, options.offline ? { offline: true } : {});
+		if (preview.conflicts.length) return { status: "refused", path: preview.path, preserved: [], message: preview.conflicts.join("; ") };
+		const result = await this.importer.apply(preview);
+		if (result.conflicts.length) return { status: "refused", path: result.path, preserved: [], message: result.conflicts.join("; ") };
+		this.scheduleMap();
+		return { status: !preview.exists ? "created" : result.changed ? "updated" : "unchanged", path: result.path, preserved: result.preserved };
+	}
+
 	async previewImport(entry: ZoteroIndexEntry): Promise<void> {
 		await this.run(async () => {
-			const { index } = await this.service.ensureIndex();
-			const preview = await this.importer.preview(entry, index);
+			// Related items come from the saved snapshot (no full refresh); the item itself is read fresh from Zotero so
+			// annotations made since the index was saved are included.
+			const index = await this.loadIndexForRead();
+			const current = await this.freshEntry(entry);
+			if (!current.fresh) new Notice(`${describeBbtError(current.error)} Previewing from the saved index (${formatIndexAge(this.index.ageMinutes(index))} old); annotations made since then are not included.`);
+			const preview = await this.importer.preview(current.entry, index, current.fresh || !this.isOfflineError(current.error) ? {} : { offline: true });
 			new ImportPreviewModal(this.app, preview, async choices => {
 				// 0.5 R5: detach/reset choices travel with the apply; edited sections no longer block the note.
 				const result = await this.importer.apply(preview, choices);
@@ -524,7 +624,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 			try {
 				for (const entry of owned) {
 					try {
-						const preview = await this.importer.preview(entry, index, offline ? { offline: true } : {}); // 0.5 R12
+						// Online, each note is rendered from the item as Zotero has it now (new annotations included).
+						const current = offline ? entry : (await this.freshEntry(entry)).entry;
+						const preview = await this.importer.preview(current, index, offline ? { offline: true } : {}); // 0.5 R12
 						if (preview.conflicts.length) { skipped.push(`@${entry.citekey}: ${preview.conflicts.join("; ")}`); continue; }
 						if (!preview.exists) { skipped.push(`@${entry.citekey}: note was not created by this plugin; use Import literature note`); continue; }
 						const result = await this.importer.apply(preview);

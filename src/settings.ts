@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type CMDSZoteroPlugin from "./main";
+import { RECENT_WINDOW_CHOICES } from "./recent/recent-reads";
 
 export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	constructor(app: App, private plugin: CMDSZoteroPlugin) { super(app, plugin); }
@@ -45,6 +46,12 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			.addText(text => text.setValue(draft.bibliographyStyle).onChange(value => { draft.bibliographyStyle = value.trim(); }));
 		new Setting(containerEl).setName("Citation format").setDesc("CAYW format; pandoc inserts [@citekey].")
 			.addText(text => text.setValue(draft.caywFormat).onChange(value => { draft.caywFormat = value.trim(); }));
+		new Setting(containerEl).setName("Recently read window").setDesc("How far back the recently read list looks in Zotero's reading history (the day a PDF was last opened in Zotero's reader). The literature picker also lists these papers first.")
+			.addDropdown(dropdown => {
+				const choices = RECENT_WINDOW_CHOICES.includes(draft.recentReadsDays) ? RECENT_WINDOW_CHOICES : [...RECENT_WINDOW_CHOICES, draft.recentReadsDays].sort((a, b) => a - b);
+				for (const days of choices) dropdown.addOption(String(days), `${days} days`);
+				dropdown.setValue(String(draft.recentReadsDays)).onChange(value => { draft.recentReadsDays = Number(value); });
+			});
 
 		new Setting(containerEl).setName("Connected vaults").setHeading();
 		new Setting(containerEl).setName("Peer vaults").setDesc("Opt-in, read-only access to each vault's published note map. One line: Vault name | absolute folder path. Refresh the index in each vault after importing notes.")
