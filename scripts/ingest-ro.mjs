@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const READ_ONLY = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'locate', 'diagnostics', 'reconcile']);
-const FORBIDDEN = new Set(['--apply', '--refresh', '--force']);
+const FORBIDDEN = new Set(['--apply', '--refresh', '--force', '--out']); // 0.5 R10: --out writes a sidecar
 const args = process.argv.slice(2);
 const actionIndex = args.indexOf('--action');
 const action = actionIndex >= 0 ? args[actionIndex + 1] : 'resolve';

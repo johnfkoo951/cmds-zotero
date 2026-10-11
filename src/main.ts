@@ -17,7 +17,9 @@ import { validateIndex } from "./identity";
 import { describeBbtError, transportReasonOf } from "./api/transport";
 import { VaultLinks } from "./vault-links";
 import { ownershipSummary, partitionOwnedNotes } from "./note-ownership"; // 0.5 R14
-import { VaultIndexStorage, assertVaultBoundary, relativePath } from "./vault-storage";
+import { VaultIndexStorage, assertVaultBoundary, ensureCmdsIgnore, ensureDirectory, relativePath } from "./vault-storage";
+import { EXPORT_TRANSLATORS, defaultSidecarPath, groupEntriesByLibrary, mergeExports, type StructuredExport } from "./agent/cites-core"; // 0.5 R10
+import { resolveReferenceRows } from "./citations/reference-rows"; // 0.5 R10
 import { normalizeSettings, validateEndpoint } from "./settings-data";
 import { citekeyAtCursor, classifyLink, parseProtocolRequest, resolveOpenPdfTarget } from "./protocol";
 import { pdfURI, noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "./uris";
@@ -95,6 +97,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 		// 0.5 R15
 		this.addCommand({ id: "copy-file-link", name: "Copy Obsidian file link (Hookmark-native)", callback: () => { void this.pick(entry => { void this.run(() => this.copyFileLink(entry)); }); } });
 		this.addCommand({ id: "open-link-under-cursor", name: "Open link under cursor", editorCallback: (editor: Editor) => { void this.openLinkUnderCursor(editor); } });
+		// 0.5 R10: pandoc-ready bibliography for the active note (index-local citation rows, one BBT export per library).
+		this.addCommand({ id: "copy-csl-json", name: "Copy CSL-JSON for cited sources", callback: () => { void this.run(() => this.copyCslJsonForActiveNote()); } });
+		this.addCommand({ id: "write-bibliography-sidecar", name: "Write pandoc bibliography sidecar for current note", callback: () => { void this.run(() => this.writeBibliographySidecar()); } });
 		this.addRibbonIcon("library", "Search literature", () => { void this.pick(entry => this.showActions(entry)); });
 		this.addRibbonIcon("highlighter", "Zotero annotations", () => { void this.activateView(VIEW_TYPE_ANNOTATIONS); });
 
@@ -195,6 +200,26 @@ export default class CMDSZoteroPlugin extends Plugin {
 				},
 			},
 			vaultPdfPaths: async () => this.app.vault.getFiles().filter(file => file.extension.toLowerCase() === "pdf").map(file => file.path).sort(),
+			// 0.5 R10: structured bibliography export and the sidecar store (vault-bounded; the private ignore file is ensured before every write).
+			exportBibliography: (citekeys, format, libraryID) => this.bbt.export(citekeys, EXPORT_TRANSLATORS[format], libraryID),
+			sidecar: {
+				read: async path => {
+					await assertVaultBoundary(this.app, path);
+					const stat = await adapter.stat(path);
+					if (!stat) return null;
+					if (stat.type !== "file") throw new Error(`Sidecar path is a folder: ${path}`);
+					if (stat.size > 32 * 1024 * 1024) throw new Error(`Existing file is too large to inspect: ${path}`);
+					return adapter.read(path);
+				},
+				write: async (path, content) => {
+					await assertVaultBoundary(this.app, path);
+					if (!this.active || this.index !== indexToken) throw new Error("The plugin was reloaded; the sidecar was not written.");
+					await ensureCmdsIgnore(this.app);
+					await ensureDirectory(this.app, path);
+					await adapter.write(path, content);
+					return Buffer.byteLength(content);
+				},
+			},
 		};
 		host.refresh = async (refresh: RefreshRequest) => {
 			const outcome = await indexToken.refresh({ force: refresh.ifOlderThanMinutes === undefined, ...(refresh.ifOlderThanMinutes ? { ifOlderThanMs: refresh.ifOlderThanMinutes * 60000 } : {}) });
@@ -659,5 +684,54 @@ export default class CMDSZoteroPlugin extends Plugin {
 		const pending = this.service.pendingWrites();
 		if (!pending.length) return "Wait for index refresh to finish before changing configuration.";
 		return `Wait for the running agent request${pending.length === 1 ? "" : "s"} to finish before changing configuration: ${pending.map(job => `${job.action} (${job.id})`).join(", ")}. Each request times out on its own.`;
+	}
+
+	// 0.5 R10 — pandoc-ready bibliography from the References sidebar rows of the active note.
+
+	/** Resolved entries the active note cites: the same index-local rows the References sidebar shows (no BBT call). */
+	private async citedEntriesOfActiveNote(): Promise<{ file: TFile; entries: ZoteroIndexEntry[] }> {
+		const view = this.lastMarkdownView();
+		const file = view?.file ?? this.app.workspace.getActiveFile();
+		if (!(file instanceof TFile) || file.extension !== "md") throw new Error("Open a Markdown note first.");
+		const text = view?.file === file ? view.editor.getValue() : await this.app.vault.cachedRead(file);
+		await this.loadIndexForRead();
+		const rows = resolveReferenceRows(text, this.cachedEntries(), this.indexLoaded());
+		const entries: ZoteroIndexEntry[] = [];
+		for (const row of rows) if (row.status === "resolved" && row.entry && !entries.some(entry => entry.id === row.entry?.id)) entries.push(row.entry);
+		return { file, entries };
+	}
+
+	/** CSL-JSON for the entries: one BBT `item.export` per library, merged into one array with `abstract`/`note` removed. */
+	async cslJsonFor(entries: readonly ZoteroIndexEntry[]): Promise<StructuredExport> {
+		if (!entries.length) throw new Error("No resolved Zotero citations to export.");
+		const outputs: string[] = [];
+		try { for (const group of groupEntriesByLibrary(entries)) outputs.push(await this.bbt.export(group.citekeys, EXPORT_TRANSLATORS["csl-json"], group.libraryID)); }
+		catch (error) { throw new Error(`${describeBbtError(error)} CSL-JSON export needs Better BibTeX.`); }
+		return mergeExports("csl-json", outputs);
+	}
+
+	/** Copies merged CSL-JSON for `entries` (the References sidebar button passes its resolved rows). */
+	async copyCslJson(entries: readonly ZoteroIndexEntry[]): Promise<void> {
+		const result = await this.cslJsonFor(entries);
+		await navigator.clipboard.writeText(result.content);
+		const missing = entries.length - result.exported.length;
+		new Notice(`Copied CSL-JSON for ${result.exported.length} source${result.exported.length === 1 ? "" : "s"}${missing > 0 ? ` (${missing} missing from the export)` : ""}.`);
+	}
+
+	async copyCslJsonForActiveNote(): Promise<void> {
+		const { entries } = await this.citedEntriesOfActiveNote();
+		await this.copyCslJson(entries);
+	}
+
+	/** Writes `.cmds-zotero/bibliography/<note>.json` (plugin-owned, gitignored) and shows the YAML line to add; the note itself is never edited. */
+	async writeBibliographySidecar(): Promise<void> {
+		const { file, entries } = await this.citedEntriesOfActiveNote();
+		const result = await this.cslJsonFor(entries);
+		const path = defaultSidecarPath(file.path, true, "csl-json");
+		await assertVaultBoundary(this.app, path);
+		await ensureCmdsIgnore(this.app);
+		await ensureDirectory(this.app, path);
+		await this.app.vault.adapter.write(path, result.content);
+		new Notice(`Bibliography sidecar written: ${path} (${result.exported.length} source${result.exported.length === 1 ? "" : "s"}). Add to the note's frontmatter: bibliography: ${path}`, 15000);
 	}
 }

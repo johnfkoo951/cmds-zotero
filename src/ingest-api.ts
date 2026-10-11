@@ -91,6 +91,7 @@ export class IngestAPI {
 
 	private static writes(action: IngestAction, request: unknown): boolean {
 		if (action === "refresh" || action === "pdf-text") return true;
+		if (action === "cites" && (request as { out?: unknown }).out !== undefined) return true; // 0.5 R10: sidecar write
 		return action === "reconcile" && (request as { apply?: unknown }).apply === true;
 	}
 

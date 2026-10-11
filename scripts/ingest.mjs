@@ -58,7 +58,10 @@ const FLAGS = {
 	'--apply': { type: 'boolean', actions: ['reconcile'], help: 'Write allow-listed hub frontmatter keys (live only)' },
 	'--file': { type: 'string', actions: ['pdf-text', 'locate'], help: 'Vault-relative PDF instead of a Zotero attachment' },
 	'--pages': { type: 'string', actions: ['pdf-text'], help: 'Page range to inline, e.g. 1-5,9' },
-	'--force': { type: 'boolean', actions: ['pdf-text'], help: 'Re-extract even when a cache exists' },
+	'--force': { type: 'boolean', actions: ['pdf-text', 'cites'], help: 'pdf-text: re-extract even when a cache exists; cites: overwrite an unmarked --out file (never a note)' },
+	// 0.5 R10
+	'--format': { type: 'string', actions: ['cites'], help: 'With --bibliography: text (default) | markdown | csl-json | bibtex | biblatex' },
+	'--out': { type: 'optional-string', actions: ['cites'], help: 'With --bibliography: write the sidecar (live only). No value = .cmds-zotero/bibliography/<slug>.<ext>; a vault-relative path outside it must be absent or plugin-marked' },
 	'--quote': { type: 'string', actions: ['locate'], help: 'Quote text to locate (≤ 8 KiB)' },
 	'--if-older-than': { type: 'integer', actions: ['refresh'], min: 1, max: 10080, help: 'Refresh only when the index is older than N minutes' },
 };
@@ -84,6 +87,8 @@ function parseArgs(argv) {
 		if (name in values) fail(`Duplicate argument: ${name}.`);
 		if (flag.type === 'boolean') { values[name] = true; continue; }
 		const raw = argv[i + 1];
+		// 0.5 R10: an optional value; a following flag (or nothing) means "use the default".
+		if (flag.type === 'optional-string') { if (raw === undefined || (raw.startsWith('--') && raw.length > 2)) { values[name] = true; continue; } i++; values[name] = raw; continue; }
 		if (raw === undefined || (raw.startsWith('--') && raw.length > 2)) fail(`Missing value for ${name}.`);
 		i++;
 		if (flag.type === 'integer') {
@@ -124,14 +129,20 @@ if (['pdf-text', 'locate'].includes(action)) {
 	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
 }
 if (action === 'cites' && !('--path' in parsed.values)) fail('cites needs --path.');
+// 0.5 R10
+const BIBLIOGRAPHY_FORMATS = ['text', 'markdown', 'csl-json', 'bibtex', 'biblatex'];
+if (action === 'cites' && '--format' in parsed.values && !BIBLIOGRAPHY_FORMATS.includes(parsed.values['--format'])) fail(`--format must be one of ${BIBLIOGRAPHY_FORMATS.join(', ')}.`);
+if (action === 'cites' && ('--format' in parsed.values || '--out' in parsed.values || '--force' in parsed.values) && !('--bibliography' in parsed.values)) fail('--format, --out and --force need --bibliography.');
 
 const request = {};
-const map = { '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict' };
+const map = { '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict' };
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
 const pollOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
 const timeoutMs = pollOverride ?? (parsed.values['--timeout'] ?? (action === 'pdf-text' ? 900 : 300)) * 1000;
 const offline = parsed.values['--offline'] === true;
+// 0.5 R10: a cites request that writes a sidecar is a live write, like reconcile --apply.
+const liveWrite = LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply === true) || (action === 'cites' && request.out !== undefined);
 const TRANSIENT_DELAY_MS = 500;
 const DISCOVERY_RETRIES = 3;
 // Throws raised by the eval wrapper itself or by the plugin's lifecycle/capacity guards: the plugin is not (usably)
@@ -269,13 +280,13 @@ async function main() {
 		if (bridge.kind === 'invalid-request') { await emit(structuredFailure('invalid-request', bridge.message, true, presentPluginConnection(bridge.apiVersions))); return; }
 		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') { await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message)); return; }
 		if (bridge.kind === 'too-old' || bridge.kind === 'too-old-read') {
-			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !(action === 'reconcile' && request.apply)) { await emit(await runOffline(`Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`)); return; }
+			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !liveWrite) { await emit(await runOffline(`Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`)); return; }
 			await emit(structuredFailure('plugin-too-old', `The loaded plugin supports API versions ${bridge.apiVersions.join(',')}; ${action} needs contract 2.`, true)); return;
 		}
-		if (LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply)) { await emit(structuredFailure('requires-obsidian', bridge.message)); return; }
+		if (liveWrite) { await emit(structuredFailure('requires-obsidian', bridge.message)); return; }
 		await emit(await runOffline(bridge.message)); return;
 	}
-	if (LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply)) { await emit(structuredFailure('requires-obsidian', `${action}${request.apply ? ' --apply' : ''} requires the live host.`, true)); return; }
+	if (liveWrite) { await emit(structuredFailure('requires-obsidian', `${action}${request.apply ? ' --apply' : request.out !== undefined ? ' --out' : ''} requires the live host.`, true)); return; }
 	if (!OFFLINE_CAPABLE.has(action)) fail(`${action} is not available offline.`);
 	await emit(await runOffline(null));
 }

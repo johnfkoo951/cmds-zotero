@@ -28,6 +28,7 @@ Run `--help` for the complete action-specific flag list.
 | Resolve identity | resolve | one of `--citekey`, `--item-key ... --library ...`, `--doi`, `--arxiv`, `--title`, `--query` |
 | Propose hub YAML and S01 | identity | selectors as above; optionally vault `--citekey` plus one other selector, `--raw-source`, `--no-bibliography`, `--style` |
 | Validate body/frontmatter citations | cites | `--path "20. Wiki/25. Questions" --recursive --bibliography`; optional `--strict` |
+| Pandoc-ready bibliography (0.5) | cites | `--path "Drafts/manuscript.md" --bibliography --format csl-json` (or `bibtex`/`biblatex`; `text`/`markdown` keep the References block); `--out` writes `.cmds-zotero/bibliography/<slug>.json` (live only, `ingest-ro` refuses it), `--out "Drafts/refs.bib"` a guarded path, `--force` replaces an unmarked non-note file |
 | Audit hubs | reconcile | default dry-run; optional `--folders "40. Paper Analyses"`, `--strict` |
 | Apply reviewed hub identity fields | reconcile | `--apply`; explicit authorization required |
 | Extract PDF text | pdf-text | `--citekey KEY` or `--item-key KEY --library ID` or `--file "80. References/Attachments/example.pdf"`; optional `--attachment`, `--pages "1-5,9"`, `--force` |
@@ -37,6 +38,10 @@ Run `--help` for the complete action-specific flag list.
 `--year` and `--author` narrow title/query selectors. Query/prefix matches rank candidates; they do not resolve by themselves.
 `--refresh` is explicit and live-only on resolve/identity. `--pages` selects text to inline, not a partial-source cache.
 PDF extraction is live-only even with `--file`; offline locate reads an existing cache.
+Structured bibliography formats and `--out` are live-only (offline answers `referencesReason: offline`, `content: null`).
+The References section of a note is any `##`–`######` heading titled per the plugin's `referencesHeadings` setting
+(default `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료`); `referencesSection.heading` reports it and
+`--format markdown` reuses it. See `docs/pandoc-docx.md` in the repository for the DOCX recipe.
 
 ## Response and exit interpretation
 
@@ -115,7 +120,7 @@ Repeated no-op applies do not churn timestamps. Always inspect applied/skipped/i
 
 PDF page positions and printed labels are separate; open-pdf links use the ATTACHMENT key, not parent item key.
 Use only unambiguous verified matches for confirmed quote callout titles. Fuzzy or changed-source evidence needs review.
-`.cmds-zotero/pdf-text/` contains full paper text. Keep `.cmds-zotero/` and the configured index private and gitignored.
+`.cmds-zotero/pdf-text/` contains full paper text; `.cmds-zotero/bibliography/` holds the pandoc sidecars. Keep `.cmds-zotero/` and the configured index private and gitignored.
 Ignored files can still be tracked; untracking does not erase prior public history.
 
 See `references/cli-contract-v2.md` for the complete normative safety, limits, transport and transition contract.

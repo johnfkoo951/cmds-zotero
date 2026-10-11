@@ -80,6 +80,10 @@ After migration, launch Obsidian yourself, verify only the new ID is enabled, in
 
 Imported notes use the CMDS callout layout: `[!Cite]`, `[!Abstract]`, an `[!md]` callout with inline Dataview fields (creators by role, journal, volume, issue, publisher, pages, DOI, ISBN, collections, related items as `[[@citekey]]`), `[!LINK]` with the Zotero select URI and `file://` attachment links, then `[!Highlight]`, `[!Image]`, and `[!Note]` annotation callouts. Highlight text is wrapped in `<mark class="cmds-zotero-hl-<color>">`; the color is the nearest Zotero palette hue. Highlights in the configured heading color (default gray) become `#####` headings for structural reading. Tags listed under "Excluded tags" (default `obscite`) are left out. Frontmatter includes `zotero_title`, `zotero_author`, `zotero_year`, `zotero_journal`, `zotero_doi`, `zotero_url`, and `zotero_tags` alongside the identity keys, and stays user-owned after creation.
 
+### Bibliography for pandoc
+
+Pandoc's citeproc needs a bibliography file for the `[@citekey]` citations; the plugin produces it from Better BibTeX (one read-only `item.export` per Zotero library) and never edits the note. **Write pandoc bibliography sidecar for current note** writes `.cmds-zotero/bibliography/<note>.json` (CSL-JSON, `abstract`/`note` stripped, plugin-owned and gitignored) and shows the `bibliography:` YAML line to add; **Copy CSL-JSON for cited sources** and the References sidebar's "Copy CSL-JSON" button put the same array on the clipboard. Agents use `cites --bibliography --format csl-json|bibtex|biblatex [--out]`. A note's References section is recognised under `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료` (Settings → Bibliography → References headings). The DOCX recipe — obsidian-pandoc settings, `csl:`/`link-citations:`/`lang: ko-KR`, the shell command and `.gitignore` lines — is in [`docs/pandoc-docx.md`](docs/pandoc-docx.md).
+
 ## Hookmark
 
 Hookmark support is **copy-only**. The plugin puts a Markdown link on the clipboard; Hookmark's own **Hook to Copied Link** does the rest. There is no bookmark creation, no AppleScript or `osascript`, no `hook://` records in frontmatter, and Hookmark is not required for any Zotero link. If hook/unhook automation is ever wanted it belongs in a separate sibling plugin, not here.
@@ -111,7 +115,7 @@ See [`src/ingest-api.ts`](src/ingest-api.ts) and [`scripts/ingest.mjs`](scripts/
 | refresh | Explicit index refresh, optionally `--if-older-than` | No |
 | resolve | Citekey, item key/library, DOI, arXiv, title or query | Yes |
 | identity | Proposed hub YAML/S01, bibliography, current/pending PIN state | Yes |
-| cites | Body/frontmatter citation verdicts and References text | Yes |
+| cites | Body/frontmatter citation verdicts and References text; `--format csl-json|bibtex|biblatex` and `--out` sidecar (0.5) | Yes (structured formats and `--out` live only) |
 | reconcile | Hub audit; five-key writes only with explicit `--apply` | Dry-run |
 | diagnostics | Index, identity, citation and privacy diagnostics | Yes |
 | pdf-text | Bundled pdf.js extraction into a private cache | No |

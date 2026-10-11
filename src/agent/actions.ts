@@ -14,6 +14,9 @@ import { callout, identityFrontmatter, pickPdf, s01Lines, yamlFragment } from ".
 import { buildNoteLookup, checkCitekey } from "./citekey-check";
 import { citedKeys, citesDiagnostics, citesForNote, classifyKeys, hubFullCitationLine, keysForFiles, referencesPayload, summarize } from "./cites-core";
 import type { NoteLookups } from "./cites-core";
+// 0.5 R10
+import { BIBLIOGRAPHY_FORMATS, DEFAULT_REFERENCES_HEADING, defaultSidecarPath, groupResolvedByLibrary, isStructuredFormat, mergeExports, sidecarContent, sidecarWriteDecision, structuredReferencesPayload, validateSidecarPath } from "./cites-core";
+import type { BibliographyExporter, BibliographyFormat, ReferencesPayload, StructuredExport, StructuredReferencesPayload } from "./cites-core";
 import { reconcileNotes } from "./reconcile-core";
 import type { ReconcileResult } from "./reconcile-core";
 import { diagnostic } from "../diagnostics";
@@ -69,12 +72,21 @@ export interface ActionHost {
 	refresh?: (request: RefreshRequest) => Promise<{ host: ActionHost; refreshed: boolean; reason: "forced" | "stale" | "fresh"; ageMinutesBefore: number | null }>;
 	extractPdf?: (target: LocateTarget, request: PdfTextRequest) => Promise<ExtractResult>;
 	applyReconcile?: (result: ReconcileResult, request: ReconcileRequest) => Promise<unknown>;
+	// 0.5 R10: live host only. `exportBibliography` runs one BBT `item.export` per library; `sidecar` reads/writes the bibliography file.
+	exportBibliography?: BibliographyExporter;
+	sidecar?: SidecarStore;
+}
+
+/** 0.5 R10: vault-relative sidecar access; `read` returns null when absent, `write` ensures the private ignore file and folders and returns the byte count. */
+export interface SidecarStore {
+	read(path: string): Promise<string | null>;
+	write(path: string, content: string): Promise<number>;
 }
 
 export interface CommonRequest { allowStale?: boolean }
 export interface ResolveRequest extends Selector, CommonRequest { refresh?: boolean }
 export interface IdentityRequest extends ResolveRequest { rawSource?: string; attachment?: string; style?: string; noBibliography?: boolean }
-export interface CitesRequest extends CommonRequest { path: string; recursive?: boolean; bibliography?: boolean; style?: string; strict?: boolean }
+export interface CitesRequest extends CommonRequest { path: string; recursive?: boolean; bibliography?: boolean; style?: string; strict?: boolean; /** 0.5 R10 */ format?: BibliographyFormat; out?: string | true; force?: boolean }
 export interface ReconcileRequest extends CommonRequest { folders?: string[]; apply?: boolean; strict?: boolean }
 export interface LocateRequestArgs { path?: string; citekey?: string; itemKey?: string; libraryID?: number; file?: string; quote?: string; attachment?: string }
 export interface RefreshRequest { ifOlderThanMinutes?: number }
@@ -294,16 +306,38 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	const lookups = toRefMaps(indexes, host.vault);
 	const scan = scanOf(host);
 	lookups.skipped = [...new Set([...(lookups.skipped ?? []), ...scan.skipped, ...(scan.truncated ? ["<vault-scan-truncated>"] : [])])];
+	const headings = host.settings.referencesHeadings; // 0.5 R10
 	const withBodies: (NoteRecord & { body: string })[] = [];
 	for (const note of targets) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
-	const allKeys = [...new Set(withBodies.flatMap(note => citedKeys(note)))];
+	const allKeys = [...new Set(withBodies.flatMap(note => citedKeys(note, headings)))];
 	const verdicts = classifyKeys(allKeys, view.index, lookups, stale, allowStaleNegative);
-	const files = withBodies.map(note => citesForNote(note, verdicts));
+	const files = withBodies.map(note => citesForNote(note, verdicts, headings));
 	const keys = keysForFiles(files);
-	let references: unknown = null;
+	let references: ReferencesPayload | StructuredReferencesPayload | null = null;
 	let referencesReason: string | undefined;
 	let bbtError: ReturnType<typeof bbtErrorPayload> = null; // 0.5 R4
-	if (request.bibliography) {
+	// 0.5 R10: the found heading is reused for markdown output (first note with a References section wins).
+	const heading = files.find(file => file.referencesSection.heading)?.referencesSection.heading ?? DEFAULT_REFERENCES_HEADING;
+	const format: BibliographyFormat = request.format ?? "text";
+	if (request.bibliography && isStructuredFormat(format)) {
+		const byId = new Map(view.index.entries.map(entry => [entry.id, entry]));
+		const { groups, renamed } = groupResolvedByLibrary(allKeys, verdicts, byId);
+		let merged: StructuredExport | null = null;
+		if (!host.exportBibliography) referencesReason = host.bibliographyReason ?? "offline";
+		else {
+			const outputs: string[] = [];
+			try {
+				// One RPC per library; a typed fault stops the loop (never N timeouts).
+				for (const group of groups) outputs.push(await host.exportBibliography(group.citekeys, format, group.libraryID));
+				merged = mergeExports(format, outputs);
+			} catch (error) {
+				referencesReason = "bbt-unreachable";
+				bbtError = bbtErrorPayload(error);
+				if (!bbtError) referencesReason = "export-invalid";
+			}
+		}
+		references = structuredReferencesPayload(allKeys, verdicts, format, heading, merged, renamed);
+	} else if (request.bibliography && !isStructuredFormat(format)) {
 		const bibliography = new Map<string, string>();
 		const hubFull = new Map<string, string>();
 		const style = request.style ?? host.settings.bibliographyStyle;
@@ -326,10 +360,23 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 			} else if (verdict.citeStatus === "resolved" && !host.bibliography) referencesReason = host.bibliographyReason ?? "offline";
 			if (verdict.hub) { const line = hubFullCitationLine(await host.reader.readNote(verdict.hub.path)); if (line) hubFull.set(key, line); }
 		}
-		references = referencesPayload(allKeys, verdicts, bibliography, hubFull);
+		references = referencesPayload(allKeys, verdicts, bibliography, hubFull, { format, heading, style });
 	}
 	const diagnostics = citesDiagnostics(files);
-	return { ...envelope(host, "cites", 2), files, keys, references, ...(referencesReason ? { referencesReason } : {}), ...(referencesReason && bbtError ? { bbtError } : {}), summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
+	const payload: Payload = { ...envelope(host, "cites", 2), files, keys, references, ...(referencesReason ? { referencesReason } : {}), ...(referencesReason && bbtError ? { bbtError } : {}), summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
+	if (request.out === undefined) return payload;
+	// 0.5 R10: sidecar write. Default path is plugin-owned; an explicit path is validated, then guarded by the overwrite rule.
+	let outPath: string;
+	try { outPath = request.out === true ? defaultSidecarPath(request.path, isFile, format) : validateSidecarPath(request.out); }
+	catch (error) { return { ...payload, ...envelope(host, "cites", 2, { reason: "path-outside-vault", message: error instanceof Error ? error.message : "Invalid sidecar path." }), out: { path: String(request.out), written: false } }; }
+	if (!request.bibliography) return { ...payload, ...envelope(host, "cites", 2, { reason: "invalid-request", message: "--out needs --bibliography." }), out: { path: outPath, written: false } };
+	if (!host.sidecar) return { ...payload, ...envelope(host, "cites", 2, { reason: "requires-obsidian", message: "Writing a bibliography sidecar requires the live Obsidian host." }), out: { path: outPath, written: false } };
+	const content = references?.content ?? null;
+	if (content === null) return { ...payload, ...envelope(host, "cites", 2, { reason: referencesReason === "bbt-unreachable" ? "bbt-unreachable" : "invalid-request", message: `No bibliography content to write (${referencesReason ?? "unavailable"}).` }), out: { path: outPath, written: false } };
+	const decision = sidecarWriteDecision(outPath, format, await host.sidecar.read(outPath), request.force === true);
+	if (!decision.ok) return { ...payload, ...envelope(host, "cites", 2, { reason: "invalid-request", message: decision.message }), out: { path: outPath, written: false } };
+	const bytes = await host.sidecar.write(outPath, sidecarContent(format, content));
+	return { ...payload, out: { path: outPath, written: true, bytes } };
 }
 
 export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest, listedNotes?: NoteRecord[]): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean }> {
@@ -537,7 +584,7 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 	const allowed: Record<AgentAction, readonly string[]> = {
 		connection: [], info: [], refresh: ["ifOlderThanMinutes"], resolve: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh"],
 		identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
-		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale"],
+		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale"], // 0.5 R10: format/out/force
 		"pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"], locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
 	};
 	for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
@@ -554,6 +601,10 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 		if (action === "identity" && (selectors.length < 1 || selectors.filter(key => key !== "citekey").length > 1)) throw new Error("identity requires one selector and may pair a vault citekey with one lookup selector.");
 	}
 	if (action === "cites" && request.path === undefined) throw new Error("cites requires path.");
+	// 0.5 R10
+	if (action === "cites" && request.format !== undefined && !BIBLIOGRAPHY_FORMATS.includes(request.format as BibliographyFormat)) throw new Error(`format must be one of ${BIBLIOGRAPHY_FORMATS.join(", ")}.`);
+	if (action === "cites" && request.out !== undefined && request.out !== true && (typeof request.out !== "string" || !request.out.trim() || request.out.length > 4096)) throw new Error("out must be true (default sidecar path) or a non-empty vault-relative path.");
+	if (action === "cites" && (request.format !== undefined || request.out !== undefined || request.force !== undefined) && request.bibliography !== true) throw new Error("format, out and force need bibliography.");
 	if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined).length !== 1) throw new Error("pdf-text requires exactly one target.");
 	if (action === "locate") {
 		const targets = ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined);

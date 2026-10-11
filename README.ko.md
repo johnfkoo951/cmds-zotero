@@ -80,6 +80,10 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 가져온 노트는 CMDS 콜아웃 레이아웃을 사용합니다: `[!Cite]`, `[!Abstract]`, 인라인 Dataview 필드를 담은 `[!md]`(역할별 저자, 저널, 권·호, 출판사, 쪽, DOI, ISBN, 컬렉션, 관련 문헌 `[[@citekey]]`), Zotero select URI와 `file://` 첨부 링크를 담은 `[!LINK]`, 그리고 `[!Highlight]`·`[!Image]`·`[!Note]` 주석 콜아웃. 하이라이트 본문은 `<mark class="cmds-zotero-hl-<color>">`로 감싸며 색상은 Zotero 팔레트에서 가장 가까운 색조입니다. 설정한 제목용 색상(기본 gray)의 하이라이트는 `#####` 제목이 됩니다. "Excluded tags"(기본 `obscite`)의 태그는 제외합니다. 프론트매터에는 identity 키와 함께 `zotero_title`, `zotero_author`, `zotero_year`, `zotero_journal`, `zotero_doi`, `zotero_url`, `zotero_tags`가 들어가며 생성 후에는 사용자 소유입니다.
 
+### pandoc용 참고문헌
+
+pandoc의 citeproc은 `[@citekey]` 인용에 대응하는 참고문헌 파일이 필요합니다. 플러그인은 그 파일을 Better BibTeX에서(Zotero 라이브러리마다 읽기 전용 `item.export` 한 번) 만들며 노트 자체는 편집하지 않습니다. **Write pandoc bibliography sidecar for current note**는 `.cmds-zotero/bibliography/<노트>.json`(CSL-JSON, `abstract`/`note` 제거, 플러그인 소유·gitignore)을 쓰고 추가할 `bibliography:` YAML 줄을 알림으로 보여줍니다. **Copy CSL-JSON for cited sources**와 참고문헌 사이드바의 "Copy CSL-JSON" 버튼은 같은 배열을 클립보드에 넣습니다. 에이전트는 `cites --bibliography --format csl-json|bibtex|biblatex [--out]`을 사용합니다. 노트의 참고문헌 절은 `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료` 제목으로 인식합니다(설정 → Bibliography → References headings). obsidian-pandoc 설정, `csl:`/`link-citations:`/`lang: ko-KR`, 셸 명령, `.gitignore` 줄을 담은 DOCX 레시피는 [`docs/pandoc-docx.md`](docs/pandoc-docx.md)에 있습니다.
+
 ## Hookmark
 
 Hookmark 지원은 **복사 전용**입니다. 플러그인은 Markdown 링크를 클립보드에 넣고, 나머지는 Hookmark의 **Hook to Copied Link**가 처리합니다. 북마크 생성, AppleScript/`osascript`, frontmatter의 `hook://` 기록은 없으며 일반 Zotero 링크에 Hookmark가 필요하지도 않습니다. hook/unhook 자동화가 필요해지면 이 플러그인이 아니라 별도의 형제 플러그인에서 다룹니다.
@@ -111,7 +115,7 @@ Paper ingest 서비스·CLI 계약은 [`src/ingest-api.ts`](src/ingest-api.ts), 
 | refresh | 명시적 갱신, `--if-older-than` 지원 | 불가 |
 | resolve | citekey·item key/library·DOI·arXiv·제목·query 조회 | 가능 |
 | identity | 허브 YAML/S01 제안, 참고문헌, PIN 대기 상태 | 가능 |
-| cites | 본문·프론트매터 인용 검사 및 References 생성 | 가능 |
+| cites | 본문·프론트매터 인용 검사 및 References 생성; `--format csl-json|bibtex|biblatex`·`--out` 사이드카(0.5) | 가능(구조화 형식·`--out`은 라이브 전용) |
 | reconcile | 허브 감사, 명시적 `--apply`만 5개 키 기록 | dry-run만 |
 | diagnostics | 인덱스·identity·인용·개인정보 진단 | 가능 |
 | pdf-text | 내장 pdf.js로 비공개 텍스트 캐시 생성 | 불가 |

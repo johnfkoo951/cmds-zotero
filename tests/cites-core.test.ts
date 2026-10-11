@@ -127,7 +127,7 @@ test("references section: RQ-like note cites three keys but lists two", () => {
 	]);
 	assert.deepEqual(citedKeys(rq), ["alpha2020memory", "beta2021old", "nowhere2025gone", "gamma2019dup"]);
 	const section = referencesSection(rq.body, citedKeys(rq));
-	assert.deepEqual(section, { present: true, listed: ["alpha2020memory", "beta2021old"], missingFromReferences: ["nowhere2025gone", "gamma2019dup"], notCited: [] });
+	assert.deepEqual(section, { present: true, listed: ["alpha2020memory", "beta2021old"], missingFromReferences: ["nowhere2025gone", "gamma2019dup"], notCited: [], heading: "## References" });
 	const drift = referencesSection(rq.body, ["alpha2020memory", "beta2021old", "nowhere2025gone"]);
 	assert.deepEqual(drift.missingFromReferences, ["nowhere2025gone"]);
 	assert.deepEqual(referencesSection(rq.body, ["alpha2020memory"]).notCited, ["beta2021old"]);
@@ -137,7 +137,7 @@ test("references section: RQ-like note cites three keys but lists two", () => {
 test("references section skips fenced code and frontmatter, ends at the next heading and reads only the leading key", () => {
 	const lines = ["---", "title: \"## References\"", "---", "```", "## References", "- [@fence2000code]", "```", "## references ##", "- [@alpha2020memory, p. 3] see also [@beta2021old]", "* [-@gamma2019dup]", "- plain text line", "- [@alpha2020memory] duplicate line", "### Sub", "- [@delta2018moved]", "## Next", "- [@nowhere2025gone]"];
 	const span = findReferencesSection(lines);
-	assert.deepEqual(span, { start: 7, end: 14, listed: ["alpha2020memory", "gamma2019dup", "delta2018moved"] });
+	assert.deepEqual(span, { start: 7, end: 14, listed: ["alpha2020memory", "gamma2019dup", "delta2018moved"], heading: "## references ##", level: 2 });
 	assert.equal(findReferencesSection(["# Title", "text"]), null);
 });
 
@@ -165,7 +165,7 @@ test("citesForNote merges frontmatter and body citations with verdicts, 1-based 
 	assert.deepEqual(file.citations[0], { citekey: "beta2021old", where: "frontmatter", field: "supports", form: "bare", citeStatus: "resolved", matchedHistory: true, entryId: "1:BBBB0001", citekeyCurrent: "beta2021agent" });
 	assert.deepEqual(file.citations[4], { citekey: "alpha2020memory", where: "body", line: 9, column: 28, form: "pandoc", citeStatus: "resolved", matchedHistory: false, entryId: "1:AAAA0001" });
 	assert.deepEqual(file.citations[5].hub, bothHubRef);
-	assert.deepEqual(file.referencesSection, { present: true, listed: ["alpha2020memory"], missingFromReferences: ["beta2021old", "hubonly2022note", "rawonly2023note", "nowhere2025gone", "both2024note"], notCited: [] });
+	assert.deepEqual(file.referencesSection, { present: true, listed: ["alpha2020memory"], missingFromReferences: ["beta2021old", "hubonly2022note", "rawonly2023note", "nowhere2025gone", "both2024note"], notCited: [], heading: "## References" });
 	assert.throws(() => citesForNote(atom, new Map()), /was not classified/);
 });
 
