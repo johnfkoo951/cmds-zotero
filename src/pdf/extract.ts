@@ -18,6 +18,12 @@ export const MAX_PDF_PAGES = 2000;
 export const MAX_PAGE_CHARS = 200_000;
 /** `%PDF-` */
 const PDF_MAGIC = ["255044462d"];
+/**
+ * Obsidian ships pdf.js's character maps and standard-font data beside its own PDF viewer and passes these URLs to it
+ * (`/lib/pdfjs/...` resolves inside the app). Without them, CID-keyed CJK fonts that use a predefined CMap and non-embedded
+ * standard fonts extract as empty or wrong text.
+ */
+export const PDFJS_RESOURCE_OPTIONS: Readonly<Record<string, string | boolean>> = { cMapUrl: "/lib/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/lib/pdfjs/standard_fonts/" };
 
 export { PDF_TEXT_CACHE_DIR };
 export type ExtractedPdf = PdfTextCache;
@@ -227,7 +233,7 @@ export class PdfTextService {
 		try { pdfjs = await loadPdfJs() as PdfJsModule; }
 		catch (error) { throw new PdfExtractError("pdfjs-unavailable", `pdf.js could not be loaded: ${error instanceof Error ? error.message : String(error)}`); }
 		const tool = `pdfjs/${typeof pdfjs.version === "string" && pdfjs.version ? pdfjs.version : "unknown"}`;
-		const task = pdfjs.getDocument({ data: bytes, disableFontFace: true, isEvalSupported: false, useSystemFonts: false, stopAtErrors: false });
+		const task = pdfjs.getDocument({ data: bytes, disableFontFace: true, isEvalSupported: false, useSystemFonts: false, stopAtErrors: false, ...PDFJS_RESOURCE_OPTIONS });
 		let doc: PdfDocument | null = null;
 		try {
 			try { doc = await task.promise; }

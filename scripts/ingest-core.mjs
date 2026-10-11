@@ -396,7 +396,7 @@ var require_directives = __commonJS({
         return tag[0] === "!" ? tag : `!<${tag}>`;
       }
       toString(doc) {
-        const lines = this.yaml.explicit ? [`%YAML ${this.yaml.version || "1.2"}`] : [];
+        const lines2 = this.yaml.explicit ? [`%YAML ${this.yaml.version || "1.2"}`] : [];
         const tagEntries = Object.entries(this.tags);
         let tagNames;
         if (doc && tagEntries.length > 0 && identity.isNode(doc.contents)) {
@@ -412,9 +412,9 @@ var require_directives = __commonJS({
           if (handle === "!!" && prefix === "tag:yaml.org,2002:")
             continue;
           if (!doc || tagNames.some((tn) => tn.startsWith(prefix)))
-            lines.push(`%TAG ${handle} ${prefix}`);
+            lines2.push(`%TAG ${handle} ${prefix}`);
         }
-        return lines.join("\n");
+        return lines2.join("\n");
       }
     };
     Directives.defaultYaml = { explicit: false, version: "1.2" };
@@ -1867,22 +1867,22 @@ var require_stringifyCollection = __commonJS({
       const { indent, options: { commentString } } = ctx;
       const itemCtx = Object.assign({}, ctx, { indent: itemIndent, type: null });
       let chompKeep = false;
-      const lines = [];
+      const lines2 = [];
       for (let i = 0; i < items.length; ++i) {
         const item = items[i];
         let comment2 = null;
         if (identity.isNode(item)) {
           if (!chompKeep && item.spaceBefore)
-            lines.push("");
-          addCommentBefore(ctx, lines, item.commentBefore, chompKeep);
+            lines2.push("");
+          addCommentBefore(ctx, lines2, item.commentBefore, chompKeep);
           if (item.comment)
             comment2 = item.comment;
         } else if (identity.isPair(item)) {
           const ik = identity.isNode(item.key) ? item.key : null;
           if (ik) {
             if (!chompKeep && ik.spaceBefore)
-              lines.push("");
-            addCommentBefore(ctx, lines, ik.commentBefore, chompKeep);
+              lines2.push("");
+            addCommentBefore(ctx, lines2, ik.commentBefore, chompKeep);
           }
         }
         chompKeep = false;
@@ -1891,15 +1891,15 @@ var require_stringifyCollection = __commonJS({
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
           chompKeep = false;
-        lines.push(blockItemPrefix + str2);
+        lines2.push(blockItemPrefix + str2);
       }
       let str;
-      if (lines.length === 0) {
+      if (lines2.length === 0) {
         str = flowChars.start + flowChars.end;
       } else {
-        str = lines[0];
-        for (let i = 1; i < lines.length; ++i) {
-          const line = lines[i];
+        str = lines2[0];
+        for (let i = 1; i < lines2.length; ++i) {
+          const line = lines2[i];
           str += line ? `
 ${indent}${line}` : "\n";
         }
@@ -1922,22 +1922,22 @@ ${indent}${line}` : "\n";
       });
       let reqNewline = false;
       let linesAtValue = 0;
-      const lines = [];
+      const lines2 = [];
       for (let i = 0; i < items.length; ++i) {
         const item = items[i];
         let comment = null;
         if (identity.isNode(item)) {
           if (item.spaceBefore)
-            lines.push("");
-          addCommentBefore(ctx, lines, item.commentBefore, false);
+            lines2.push("");
+          addCommentBefore(ctx, lines2, item.commentBefore, false);
           if (item.comment)
             comment = item.comment;
         } else if (identity.isPair(item)) {
           const ik = identity.isNode(item.key) ? item.key : null;
           if (ik) {
             if (ik.spaceBefore)
-              lines.push("");
-            addCommentBefore(ctx, lines, ik.commentBefore, false);
+              lines2.push("");
+            addCommentBefore(ctx, lines2, ik.commentBefore, false);
             if (ik.comment)
               reqNewline = true;
           }
@@ -1958,37 +1958,37 @@ ${indent}${line}` : "\n";
           str += ",";
         if (comment)
           str += stringifyComment.lineComment(str, itemIndent, commentString(comment));
-        if (!reqNewline && (lines.length > linesAtValue || str.includes("\n")))
+        if (!reqNewline && (lines2.length > linesAtValue || str.includes("\n")))
           reqNewline = true;
-        lines.push(str);
-        linesAtValue = lines.length;
+        lines2.push(str);
+        linesAtValue = lines2.length;
       }
       const { start, end } = flowChars;
-      if (lines.length === 0) {
+      if (lines2.length === 0) {
         return start + end;
       } else {
         if (!reqNewline) {
-          const len = lines.reduce((sum, line) => sum + line.length + 2, 2);
+          const len = lines2.reduce((sum, line) => sum + line.length + 2, 2);
           reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
         }
         if (reqNewline) {
           let str = start;
-          for (const line of lines)
+          for (const line of lines2)
             str += line ? `
 ${indentStep}${indent}${line}` : "\n";
           return `${str}
 ${indent}${end}`;
         } else {
-          return `${start}${fcPadding}${lines.join(" ")}${fcPadding}${end}`;
+          return `${start}${fcPadding}${lines2.join(" ")}${fcPadding}${end}`;
         }
       }
     }
-    function addCommentBefore({ indent, options: { commentString } }, lines, comment, chompKeep) {
+    function addCommentBefore({ indent, options: { commentString } }, lines2, comment, chompKeep) {
       if (comment && chompKeep)
         comment = comment.replace(/^\n+/, "");
       if (comment) {
         const ic = stringifyComment.indentComment(commentString(comment), indent);
-        lines.push(ic.trimStart());
+        lines2.push(ic.trimStart());
       }
     }
     exports.stringifyCollection = stringifyCollection;
@@ -2626,11 +2626,11 @@ var require_binary = __commonJS({
         if (type !== Scalar.Scalar.QUOTE_DOUBLE) {
           const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
           const n = Math.ceil(str.length / lineWidth);
-          const lines = new Array(n);
+          const lines2 = new Array(n);
           for (let i = 0, o = 0; i < n; ++i, o += lineWidth) {
-            lines[i] = str.substr(o, lineWidth);
+            lines2[i] = str.substr(o, lineWidth);
           }
-          str = lines.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
+          str = lines2.join(type === Scalar.Scalar.BLOCK_LITERAL ? "\n" : " ");
         }
         return stringifyString.stringifyString({ comment, type, value: str }, ctx, onComment, onChompKeep);
       }
@@ -3310,35 +3310,35 @@ var require_stringifyDocument = __commonJS({
     var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
-      const lines = [];
+      const lines2 = [];
       let hasDirectives = options.directives === true;
       if (options.directives !== false && doc.directives) {
         const dir = doc.directives.toString(doc);
         if (dir) {
-          lines.push(dir);
+          lines2.push(dir);
           hasDirectives = true;
         } else if (doc.directives.docStart)
           hasDirectives = true;
       }
       if (hasDirectives)
-        lines.push("---");
+        lines2.push("---");
       const ctx = stringify.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
-        if (lines.length !== 1)
-          lines.unshift("");
+        if (lines2.length !== 1)
+          lines2.unshift("");
         const cs = commentString(doc.commentBefore);
-        lines.unshift(stringifyComment.indentComment(cs, ""));
+        lines2.unshift(stringifyComment.indentComment(cs, ""));
       }
       let chompKeep = false;
       let contentComment = null;
       if (doc.contents) {
         if (identity.isNode(doc.contents)) {
           if (doc.contents.spaceBefore && hasDirectives)
-            lines.push("");
+            lines2.push("");
           if (doc.contents.commentBefore) {
             const cs = commentString(doc.contents.commentBefore);
-            lines.push(stringifyComment.indentComment(cs, ""));
+            lines2.push(stringifyComment.indentComment(cs, ""));
           }
           ctx.forceBlockIndent = !!doc.comment;
           contentComment = doc.contents.comment;
@@ -3347,36 +3347,36 @@ var require_stringifyDocument = __commonJS({
         let body = stringify.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
-        if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
-          lines[lines.length - 1] = `--- ${body}`;
+        if ((body[0] === "|" || body[0] === ">") && lines2[lines2.length - 1] === "---") {
+          lines2[lines2.length - 1] = `--- ${body}`;
         } else
-          lines.push(body);
+          lines2.push(body);
       } else {
-        lines.push(stringify.stringify(doc.contents, ctx));
+        lines2.push(stringify.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
           const cs = commentString(doc.comment);
           if (cs.includes("\n")) {
-            lines.push("...");
-            lines.push(stringifyComment.indentComment(cs, ""));
+            lines2.push("...");
+            lines2.push(stringifyComment.indentComment(cs, ""));
           } else {
-            lines.push(`... ${cs}`);
+            lines2.push(`... ${cs}`);
           }
         } else {
-          lines.push("...");
+          lines2.push("...");
         }
       } else {
         let dc = doc.comment;
         if (dc && chompKeep)
           dc = dc.replace(/^\n+/, "");
         if (dc) {
-          if ((!chompKeep || contentComment) && lines[lines.length - 1] !== "")
-            lines.push("");
-          lines.push(stringifyComment.indentComment(commentString(dc), ""));
+          if ((!chompKeep || contentComment) && lines2[lines2.length - 1] !== "")
+            lines2.push("");
+          lines2.push(stringifyComment.indentComment(commentString(dc), ""));
         }
       }
-      return lines.join("\n") + "\n";
+      return lines2.join("\n") + "\n";
     }
     exports.stringifyDocument = stringifyDocument;
   }
@@ -4438,17 +4438,17 @@ var require_resolve_block_scalar = __commonJS({
       if (!header)
         return { value: "", type: null, comment: "", range: [start, start, start] };
       const type = header.mode === ">" ? Scalar.Scalar.BLOCK_FOLDED : Scalar.Scalar.BLOCK_LITERAL;
-      const lines = scalar.source ? splitLines(scalar.source) : [];
-      let chompStart = lines.length;
-      for (let i = lines.length - 1; i >= 0; --i) {
-        const content = lines[i][1];
+      const lines2 = scalar.source ? splitLines(scalar.source) : [];
+      let chompStart = lines2.length;
+      for (let i = lines2.length - 1; i >= 0; --i) {
+        const content = lines2[i][1];
         if (content === "" || content === "\r")
           chompStart = i;
         else
           break;
       }
       if (chompStart === 0) {
-        const value2 = header.chomp === "+" && lines.length > 0 ? "\n".repeat(Math.max(1, lines.length - 1)) : "";
+        const value2 = header.chomp === "+" && lines2.length > 0 ? "\n".repeat(Math.max(1, lines2.length - 1)) : "";
         let end2 = start + header.length;
         if (scalar.source)
           end2 += scalar.source.length;
@@ -4458,7 +4458,7 @@ var require_resolve_block_scalar = __commonJS({
       let offset = scalar.offset + header.length;
       let contentStart = 0;
       for (let i = 0; i < chompStart; ++i) {
-        const [indent, content] = lines[i];
+        const [indent, content] = lines2[i];
         if (content === "" || content === "\r") {
           if (header.indent === 0 && indent.length > trimIndent)
             trimIndent = indent.length;
@@ -4478,17 +4478,17 @@ var require_resolve_block_scalar = __commonJS({
         }
         offset += indent.length + content.length + 1;
       }
-      for (let i = lines.length - 1; i >= chompStart; --i) {
-        if (lines[i][0].length > trimIndent)
+      for (let i = lines2.length - 1; i >= chompStart; --i) {
+        if (lines2[i][0].length > trimIndent)
           chompStart = i + 1;
       }
       let value = "";
       let sep3 = "";
       let prevMoreIndented = false;
       for (let i = 0; i < contentStart; ++i)
-        value += lines[i][0].slice(trimIndent) + "\n";
+        value += lines2[i][0].slice(trimIndent) + "\n";
       for (let i = contentStart; i < chompStart; ++i) {
-        let [indent, content] = lines[i];
+        let [indent, content] = lines2[i];
         offset += indent.length + content.length + 1;
         const crlf = content[content.length - 1] === "\r";
         if (crlf)
@@ -4525,8 +4525,8 @@ var require_resolve_block_scalar = __commonJS({
         case "-":
           break;
         case "+":
-          for (let i = chompStart; i < lines.length; ++i)
-            value += "\n" + lines[i][0].slice(trimIndent);
+          for (let i = chompStart; i < lines2.length; ++i)
+            value += "\n" + lines2[i][0].slice(trimIndent);
           if (value[value.length - 1] !== "\n")
             value += "\n";
           break;
@@ -4601,10 +4601,10 @@ var require_resolve_block_scalar = __commonJS({
       const first = split[0];
       const m = first.match(/^( *)/);
       const line0 = m?.[1] ? [m[1], first.slice(m[1].length)] : ["", first];
-      const lines = [line0];
+      const lines2 = [line0];
       for (let i = 1; i < split.length; i += 2)
-        lines.push([split[i], split[i + 1]]);
-      return lines;
+        lines2.push([split[i], split[i + 1]]);
+      return lines2;
     }
     exports.resolveBlockScalar = resolveBlockScalar;
   }
@@ -8352,13 +8352,13 @@ function identityFrontmatter(input) {
   return entry ? { ...requested, citekeyProvisional, doi, zoteroID: entry.id, zoteroSelectURI: entry.zoteroSelectURI, ...tail } : { ...requested, citekeyProvisional, doi, ...tail };
 }
 function yamlFragment(fm) {
-  const lines = [];
+  const lines2 = [];
   for (const key of HUB_IDENTITY_KEYS) {
     const value = fm[key];
     if (value === void 0 || key === "citekey" && value === "") continue;
-    lines.push(`${key}: ${typeof value === "boolean" ? String(value) : JSON.stringify(value)}`);
+    lines2.push(`${key}: ${typeof value === "boolean" ? String(value) : JSON.stringify(value)}`);
   }
-  return lines.join("\n");
+  return lines2.join("\n");
 }
 function isPdfName(name) {
   return typeof name === "string" && /\.pdf$/i.test(name.trim());
@@ -8435,16 +8435,16 @@ function rawSourceLine(input) {
 function s01Lines(input) {
   const fm = input.frontmatter;
   const fullCitation = input.bibliography && input.bibliography.trim() ? singleLine(input.bibliography) : null;
-  const lines = [
+  const lines2 = [
     `- **Full citation**: ${fullCitation ?? FULL_CITATION_PLACEHOLDER}`,
     citekeyLine(fm, input.citekeyCurrent),
     `- **DOI**: ${fm.doi || "none"}`,
     `- **Zotero**: ${zoteroLine(fm, input)}`
   ];
   const pdf = pdfLine(input.pdf);
-  if (pdf !== null) lines.push(pdf);
-  lines.push(rawSourceLine(input));
-  return { fullCitation, lines, markdown: lines.join("\n") };
+  if (pdf !== null) lines2.push(pdf);
+  lines2.push(rawSourceLine(input));
+  return { fullCitation, lines: lines2, markdown: lines2.join("\n") };
 }
 function callout(status, citekey, checkedAt, pinInstruction2, extra = {}) {
   switch (status) {
@@ -8585,12 +8585,12 @@ var DEFAULT_SETTINGS = {
 var KEY = "[A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*[A-Za-z0-9_]|[A-Za-z0-9_]";
 var CITATION = new RegExp(`\\[\\[@(${KEY})(?:[|#][^\\]]*)?\\]\\]|(^|[\\s\\[;(,\\-])-?@(${KEY})`, "g");
 function scanCitations(text3) {
-  const lines = text3.split(/\r?\n/);
+  const lines2 = text3.split(/\r?\n/);
   const occurrences = [];
   let fenced = false;
-  let frontmatter = lines[0]?.trim() === "---";
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
+  let frontmatter = lines2[0]?.trim() === "---";
+  for (let index = 0; index < lines2.length; index++) {
+    const line = lines2[index];
     if (frontmatter) {
       if (index > 0 && line.trim() === "---") frontmatter = false;
       continue;
@@ -8845,14 +8845,14 @@ function classifyKeys(keys, index, lookups, stale, allowStale) {
   }
   return verdicts;
 }
-function findReferencesSection(lines, headings = DEFAULT_REFERENCES_HEADINGS) {
+function findReferencesSection(lines2, headings = DEFAULT_REFERENCES_HEADINGS) {
   const pattern = referencesHeadingPattern(headings);
   let fenced = false;
-  let frontmatter = lines[0]?.trim() === "---";
+  let frontmatter = lines2[0]?.trim() === "---";
   let start = -1;
   let level = 2;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
+  for (let index = 0; index < lines2.length; index++) {
+    const line = lines2[index];
     if (frontmatter) {
       if (index > 0 && line.trim() === "---") frontmatter = false;
       continue;
@@ -8871,10 +8871,10 @@ function findReferencesSection(lines, headings = DEFAULT_REFERENCES_HEADINGS) {
   }
   if (start < 0) return null;
   const sectionEnd = new RegExp(`^#{1,${level}}\\s`);
-  let end = lines.length;
+  let end = lines2.length;
   const listed = [];
-  for (let index = start + 1; index < lines.length; index++) {
-    const line = lines[index];
+  for (let index = start + 1; index < lines2.length; index++) {
+    const line = lines2[index];
     if (FENCE.test(line)) {
       fenced = !fenced;
       continue;
@@ -8889,7 +8889,7 @@ function findReferencesSection(lines, headings = DEFAULT_REFERENCES_HEADINGS) {
     const leading = scanCitations(line).find((item) => item.form === "pandoc" && item.column === marker[0].length);
     if (leading && !listed.includes(leading.citekey)) listed.push(leading.citekey);
   }
-  return { start, end, listed, heading: lines[start].trim(), level };
+  return { start, end, listed, heading: lines2[start].trim(), level };
 }
 function sectionReport(span, cited) {
   const listed = span?.listed ?? [];
@@ -9829,15 +9829,15 @@ function stripWrappingQuotes(value) {
   return text3;
 }
 function extractQuoteCallouts(markdown) {
-  const lines = markdown.split(/\r?\n/);
+  const lines2 = markdown.split(/\r?\n/);
   const callouts = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (!QUOTE_HEAD.test(lines[i])) continue;
+  for (let i = 0; i < lines2.length; i++) {
+    if (!QUOTE_HEAD.test(lines2[i])) continue;
     const payload = [];
     let j = i + 1;
-    for (; j < lines.length; j++) {
-      const match = QUOTE_LINE.exec(lines[j]);
-      if (!match || CALLOUT_HEAD.test(lines[j])) break;
+    for (; j < lines2.length; j++) {
+      const match = QUOTE_LINE.exec(lines2[j]);
+      if (!match || CALLOUT_HEAD.test(lines2[j])) break;
       payload.push(match[1]);
     }
     callouts.push({ line: i + 1, quote: stripWrappingQuotes(payload.join("\n")) });
@@ -9880,6 +9880,33 @@ function locateBatch(pages, quotes, attachment) {
 
 // src/agent/actions.ts
 import { createHash as createHash3 } from "node:crypto";
+
+// src/pdf/text-layer.ts
+var MIN_PAGE_BODY_CHARS = 20;
+function lines(text3) {
+  return text3.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+function visibleLength(line) {
+  return line.replace(/\s/g, "").length;
+}
+function textLayerReport(pages) {
+  const pageLines = pages.map((page) => lines(page.text));
+  const occurrences = /* @__PURE__ */ new Map();
+  for (const set of pageLines.map((list) => new Set(list))) for (const line of set) occurrences.set(line, (occurrences.get(line) ?? 0) + 1);
+  const repeatedAt = pages.length >= 3 ? Math.max(3, Math.ceil(pages.length / 2)) : Infinity;
+  const bodies = pageLines.map((list) => list.filter((line) => (occurrences.get(line) ?? 0) < repeatedAt).reduce((sum, line) => sum + visibleLength(line), 0));
+  const emptyPages = pages.filter((_, position) => bodies[position] < MIN_PAGE_BODY_CHARS).map((page) => page.page);
+  const bodyChars = bodies.reduce((sum, chars) => sum + chars, 0);
+  const textLayer = !pages.length || emptyPages.length === pages.length ? "none" : emptyPages.length > Math.max(2, pages.length * 0.2) ? "partial" : "full";
+  return { textLayer, emptyPages, bodyChars, ocrRecommended: textLayer !== "full" };
+}
+function textLayerWarning(report, pageCount) {
+  if (report.textLayer === "full") return null;
+  if (report.textLayer === "none") return `No text layer: none of the ${pageCount} pages has extractable body text (a scanned PDF). Run OCR before reading or quoting it; locate cannot verify quotes in it.`;
+  return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (scanned pages). Run OCR for those pages before relying on the text.`;
+}
+
+// src/agent/actions.ts
 var MAX_CITES_FILES = 2e3;
 var AGENT_ACTIONS = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate"];
 var ACTION_API_VERSION = {
@@ -10421,7 +10448,9 @@ async function pdfTextAction(host, request) {
   const selected = pagesRequested(request.pages, extraction.extracted.pageCount);
   const inlinePages = selected.map((page) => extraction.extracted.pages[page - 1]);
   if (Buffer.byteLength(JSON.stringify(inlinePages)) > 200 * 1024) return { ...envelope(host, "pdf-text", 2, { reason: "inline-too-large", message: "Selected inline page text exceeds 200 KiB; request fewer pages." }), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache };
-  return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: extraction.warnings };
+  const textLayer = textLayerReport(extraction.extracted.pages);
+  const layerWarning = textLayerWarning(textLayer, extraction.extracted.pageCount);
+  return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, textLayer, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: layerWarning ? [...extraction.warnings, layerWarning] : extraction.warnings };
 }
 async function runAction(host, action, request = {}) {
   validateActionRequest(action, request);

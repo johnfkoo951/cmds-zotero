@@ -10,7 +10,7 @@ async function moduleForTest() {
 			builder.onResolve({ filter: /local-file$/ }, () => ({ path: "local-file", namespace: "mock" }));
 			builder.onResolve({ filter: /vault-storage$/ }, () => ({ path: "storage", namespace: "mock" }));
 			builder.onLoad({ filter: /.*/, namespace: "mock" }, args => ({ contents: args.path === "obsidian"
-				? `export class App{}; export class FileSystemAdapter{}; export const state={loads:0,destroys:0,fail:false,text:'x'.repeat(200001),pages:1}; export async function loadPdfJs(){return {version:'test',getDocument({data}){state.loads++;structuredClone(data,{transfer:[data.buffer]});return {destroy:async()=>{state.destroys++},promise:state.fail?Promise.reject(new Error('load failure')):Promise.resolve({numPages:state.pages,getPageLabels:async()=>null,getPage:async()=>({getTextContent:async()=>({items:[{str:state.text,hasEOL:false}]}),cleanup(){}}),destroy:async()=>{state.destroys++}})}}}};`
+				? `export class App{}; export class FileSystemAdapter{}; export const state={loads:0,destroys:0,fail:false,text:'x'.repeat(200001),pages:1}; export async function loadPdfJs(){return {version:'test',getDocument(options){const data=options.data;state.options=options;state.loads++;structuredClone(data,{transfer:[data.buffer]});return {destroy:async()=>{state.destroys++},promise:state.fail?Promise.reject(new Error('load failure')):Promise.resolve({numPages:state.pages,getPageLabels:async()=>null,getPage:async()=>({getTextContent:async()=>({items:[{str:state.text,hasEOL:false}]}),cleanup(){}}),destroy:async()=>{state.destroys++}})}}}};`
 				: args.path === "local-file" ? `export async function readLocalFile(){return {bytes:new Uint8Array(512).fill(7),mtimeMs:1234.5}};`
 				: `export async function assertVaultBoundary(){}; export async function ensureCmdsIgnore(){}; export async function ensureDirectory(){};` }));
 		},
@@ -86,4 +86,16 @@ test("configuration replacement before publication cancels cache writes", async 
 	await assert.rejects(service.extract(scope), /publication was cancelled/);
 	assert.equal(fixture.files.size, 0);
 	assert.ok(!fixture.events.includes("write"));
+});
+
+test("pdf.js receives Obsidian's bundled character maps and standard fonts so CJK text extracts", async () => {
+	const { PdfTextService, PDFJS_RESOURCE_OPTIONS, state } = await moduleForTest();
+	state.text = "synthetic";
+	const service = new PdfTextService({}, storeFixture().store);
+	await service.extract(scope, { force: true });
+	assert.equal(state.options.cMapUrl, "/lib/pdfjs/cmaps/");
+	assert.equal(state.options.cMapPacked, true);
+	assert.equal(state.options.standardFontDataUrl, "/lib/pdfjs/standard_fonts/");
+	assert.equal(state.options.isEvalSupported, false, "resource options never re-enable eval");
+	assert.deepEqual(Object.keys(PDFJS_RESOURCE_OPTIONS).sort(), ["cMapPacked", "cMapUrl", "standardFontDataUrl"]);
 });

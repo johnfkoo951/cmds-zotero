@@ -29,6 +29,7 @@ import type { LocateRequest } from "../pdf/locate";
 import { createHash } from "node:crypto";
 import { bbtErrorPayload } from "../api/transport";
 import { IndexRefusalError } from "../index-service";
+import { textLayerReport, textLayerWarning } from "../pdf/text-layer";
 
 export const MAX_CITES_FILES = 2000;
 
@@ -654,7 +655,10 @@ export async function pdfTextAction(host: ActionHost, request: PdfTextRequest): 
 	const selected = pagesRequested(request.pages, extraction.extracted.pageCount);
 	const inlinePages = selected.map(page => extraction.extracted.pages[page - 1]);
 	if (Buffer.byteLength(JSON.stringify(inlinePages)) > 200 * 1024) return { ...envelope(host, "pdf-text", 2, { reason: "inline-too-large", message: "Selected inline page text exceeds 200 KiB; request fewer pages." }), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache };
-	return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: extraction.warnings };
+	// A scanned PDF extracts as empty (or watermark-only) pages: say so instead of returning silent emptiness as success.
+	const textLayer = textLayerReport(extraction.extracted.pages);
+	const layerWarning = textLayerWarning(textLayer, extraction.extracted.pageCount);
+	return { ...envelope(host, "pdf-text", 2), item: resolved.target.item, attachment: resolved.target.attachment, cache: extraction.cache, extracted: { sha256: extraction.extracted.sha256, bytes: extraction.extracted.bytes, pageCount: extraction.extracted.pageCount, extractedAt: extraction.extracted.extractedAt, tool: extraction.extracted.tool }, textLayer, pages: inlinePages, truncatedPages: extraction.truncatedPages, warnings: layerWarning ? [...extraction.warnings, layerWarning] : extraction.warnings };
 }
 
 export async function runAction(host: ActionHost, action: AgentAction, request: unknown = {}): Promise<Payload> {
