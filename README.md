@@ -4,7 +4,7 @@
 
 Verified Zotero sources, citations, annotations, and literature notes for a local-first research vault. By CMDSPACE.
 
-**Version 0.4.0 is in development/release preparation, not a published or community-approved release.** Its ten-action agent contract adds identity, citation validation, guarded hub reconciliation, PDF text and quote locators without new UI. See the [contract](docs/agent-contract-v2/contract.md) and [implementation status](docs/0.4-agent-contract-plan.md). The following 0.3.0 description and live checks are historical, not acceptance evidence for 0.4.0. 0.3.0 adds inline citekey completion, references and annotation sidebars, batch note updates, and a callout-based literature note layout after a review of ZotLit 2.1.4 and the archived Zotero Integration plugin; see [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md) for what was adopted and what was deliberately left out. The 0.2.0 baseline below still describes the live-tested scope. It has been tested on Obsidian 1.13.7 with Zotero 9.0.6 / Better BibTeX 9.0.63 in two desktop vaults. Live checks cover index rebuilding, APA bibliography, text/image imports, preservation on repeat imports, renamed-note deep links, and cross-vault lookup. Group libraries, the interactive citation picker, and Hookmark hooks made from each copied link form still require manual acceptance in your own setup. Keep existing integrations until your workflow is verified.
+**Version 0.5.0 is in local development, not a published or community-approved release.** 0.5 adds **Send recently read papers to notes**: the papers you opened in Zotero's reader (Zotero 10's reading history), each with the state of its literature note, sent to their notes with fresh annotations; plus the agent actions `recent` and `import`, reading-order annotation blocks, structured Zotero child notes and PDF text for CJK and scanned papers. **Version 0.4.0** Its ten-action agent contract adds identity, citation validation, guarded hub reconciliation, PDF text and quote locators without new UI. See the [contract](docs/agent-contract-v2/contract.md) and [implementation status](docs/0.4-agent-contract-plan.md). The following 0.3.0 description and live checks are historical, not acceptance evidence for 0.4.0. 0.3.0 adds inline citekey completion, references and annotation sidebars, batch note updates, and a callout-based literature note layout after a review of ZotLit 2.1.4 and the archived Zotero Integration plugin; see [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md) for what was adopted and what was deliberately left out. The 0.2.0 baseline below still describes the live-tested scope. It has been tested on Obsidian 1.13.7 with Zotero 9.0.6 / Better BibTeX 9.0.63 in two desktop vaults. Live checks cover index rebuilding, APA bibliography, text/image imports, preservation on repeat imports, renamed-note deep links, and cross-vault lookup. Group libraries, the interactive citation picker, and Hookmark hooks made from each copied link form still require manual acceptance in your own setup. Keep existing integrations until your workflow is verified.
 
 ## Scope
 
@@ -68,6 +68,14 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 After migration, launch Obsidian yourself, verify only the new ID is enabled, inspect preserved settings, refresh the index, and test commands. Keep the previous plugins installed until replacement is actually validated.
 
+## From reading in Zotero to the literature note
+
+1. Read and annotate PDFs in Zotero's reader as usual. Zotero 10 records the day each PDF was last opened.
+2. Run **Send recently read papers to notes** (command palette or the open-book ribbon icon). The list shows the papers read in the last 30 days (7/30/90/365; setting *Recently read window*), newest first, with the state of each note: *No literature note yet*, *N new annotations not in the note*, *Note is up to date*, or a note that CMDS Zotero did not create (never overwritten).
+3. Papers that need it are preselected; **Send** creates the note or refreshes its managed sections from Zotero's current data. Text you wrote — frontmatter, `## Synthesis`, `## Notes`, edited or detached blocks — is kept. The note button opens the result.
+
+Zotero must be running for the list (it reads the reading history through Better BibTeX). **Import literature note** lists recently read papers first and also imports fresh data; with Zotero closed it falls back to the saved index and says so. Agents use the same path with `recent` and `import` (below).
+
 ## Writing and reviewing with the sidebars
 
 - **Citekey completion.** Type `[@` and part of a citekey, title, author, or year (use `_` for spaces). Enter inserts `[@citekey]`; Shift+Enter inserts `@citekey`; inside `[[` the wikilink form is completed. The suggester reads only the local index and triggers a background index load when none is cached. Set the trigger to "At sign" to also complete after a bare `@` at a word start, or "Off".
@@ -121,6 +129,8 @@ See [`src/ingest-api.ts`](src/ingest-api.ts) and [`scripts/ingest.mjs`](scripts/
 | diagnostics | Index, identity, citation and privacy diagnostics | Yes |
 | pdf-text | Bundled pdf.js extraction into a private cache | No |
 | locate | Quote locations from that cache, with verification state | Yes |
+| recent | Papers recently read in Zotero with each literature note's state (0.5) | No |
+| import | Create or update the plugin-owned literature note from fresh Zotero data; dry run unless `--apply` (0.5) | No |
 
 ```sh
 node scripts/ingest.mjs --vault "Research" --action connection
@@ -189,8 +199,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # tracked working-tree files
 node scripts/sanitize.mjs --staged  # staged additions/changes, reads index bytes
-node scripts/version-bump.mjs 0.4.0 # synchronizes package, lock, manifest, versions
-node scripts/verify-release.mjs 0.4.0
+node scripts/version-bump.mjs 0.5.0 # synchronizes package, lock, manifest, versions
+node scripts/verify-release.mjs 0.5.0
 ```
 
 Tests use synthetic fixtures. The sanitizer reports matching file/line/rule without printing secrets; it is a heuristic and does not replace manual staged-diff inspection or review of private repository links. CI uses `npm ci`, lint, typecheck, tests, and production build on Node 22. The prepared release workflow requires an exact stable semver tag **without `v`**, matching manifest/package/lock/versions; it builds three plugin assets and publishes their provenance bundle. **Pushing such a tag publishes a release: obtain approval first.** A prepared workflow does not imply a release, successful CI run, or community submission has occurred.

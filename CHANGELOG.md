@@ -2,6 +2,17 @@
 
 ## 0.5.0 — Development, unreleased
 
+Recently read papers to literature notes (the reading → metadata note flow, centred on what was actually read):
+
+- **Send recently read papers to notes** (command `send-recent-reads`, ribbon): Zotero 10 records `attachmentLastRead` when a PDF opens in its reader; the plugin lists those papers newest first (one Better BibTeX `lastRead` search with `resultLevel: item`, then exact-day searches) with each literature note's state — no note yet, *N new annotations not in the note*, up to date, not owned (never written), duplicate — computed from the note's managed markers without waiting on Zotero. Sending creates the note or refreshes its managed sections; edited sections are kept. Window setting `recentReadsDays` (default 30; 7/30/90/365 in the modal).
+- **Fresh data at import.** Import preview, the recent-reads send, update-all and agent `import` render from the item as Zotero has it now (one `item.export` + `item.attachments`, identity-pinned; a citekey renamed in Zotero is followed by item key; another item is never used), so highlights made since the last index refresh arrive. Import preview no longer triggers a full index refresh; without Zotero it says the saved index is used.
+- **The literature picker lists recently read papers first** (`· read 3 days ago`), from the last Zotero answer; it never waits on Zotero.
+- **Reading order.** New annotation blocks go before the first existing block Zotero orders after them (`annotationSortIndex`, detached blocks included); new notes render in reading order.
+- **Zotero child notes keep their structure** (headings, lists, links) through Obsidian's `htmlToMarkdown`, nested under `## Zotero notes`, marker-safe; embedded note images and unsafe link schemes become text. Ink annotations render as a named drawing with a deep link.
+- **Agent actions `recent` and `import`** (contract 2, API 2, live only): reading history with note states; `import` is a dry run unless `--apply`, refuses hard conflicts with the new reason `note-conflict`, and refuses a non-fresh read unless `--allow-stale`. The host advertises its action list and the CLI answers `plugin-too-old` for an older host instead of submitting.
+- **PDF text for CJK and scanned papers.** pdf.js now receives Obsidian's bundled character maps and standard fonts; `pdf-text` adds a `textLayer` report (`full`/`partial`/`none`, empty pages, `ocrRecommended`; repeated watermark lines are not body text) and warns instead of returning a scan's emptiness as success.
+- Better BibTeX JSON-RPC faults keep BBT's error code and message (`rpcCode`, `rpcMessage`) beside the unchanged wording.
+
 Note-writer correctness (literature note rendering; managed section IDs unchanged, so the managed sections of existing notes update in place — frontmatter of existing notes stays user-owned and is never rewritten):
 
 - **No more `<…>` data loss in plain-text fields.** Titles, creators, tags, DOIs, URLs and the bibliography go through `plainText()` (control-character filtering and Markdown escaping only); HTML tag stripping and entity decoding apply only to the abstract and Zotero child notes. SICI-style DOIs such as `10.1016/S0378-7206(98)00080-9` and titles containing `<B>` survive intact. Trade-off: Zotero rich-text markup in titles and annotation comments (`<i>`, `<sup>`, `<span class="nocase">`) is now shown literally as escaped text instead of being stripped; converting that small tag set to Markdown is a possible follow-up.

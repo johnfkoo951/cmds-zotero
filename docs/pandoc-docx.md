@@ -48,8 +48,8 @@ lang: ko-KR
 Absolute-path alternative (safe from any working directory, e.g. when obsidian-pandoc runs from the note's folder):
 
 ```yaml
-bibliography: /Users/you/Vaults/Research/.cmds-zotero/bibliography/manuscript.json
-csl: /Users/you/Vaults/Research/.pandoc/apa.csl
+bibliography: /path/to/Research/.cmds-zotero/bibliography/manuscript.json
+csl: /path/to/Research/.pandoc/apa.csl
 ```
 
 Keep the CSL file in the vault (`<vault>/.pandoc/apa.csl` here) or reference one from the Zotero styles folder.
@@ -59,7 +59,7 @@ Keep the CSL file in the vault (`<vault>/.pandoc/apa.csl` here) or reference one
 Shell, from the vault root:
 
 ```sh
-cd "/Users/you/Vaults/Research"
+cd "/path/to/Research"
 pandoc "Drafts/manuscript.md" --citeproc --bibliography .cmds-zotero/bibliography/manuscript.json --csl .pandoc/apa.csl -o manuscript.docx
 ```
 

@@ -4,7 +4,7 @@
 
 검증된 Zotero 원문·인용·주석·문헌노트를 로컬 중심 연구 볼트에 연결합니다. By CMDSPACE.
 
-**0.4.0은 개발·릴리스 준비 단계이며 공개·커뮤니티 승인 릴리스가 아닙니다.** UI 추가 없이 10개 액션의 에이전트 계약으로 identity·인용 검사·보호된 허브 정합성 갱신·PDF 텍스트·인용 페이지 탐색을 제공합니다. [계약 정본](docs/agent-contract-v2/contract.md)과 [구현 상태](docs/0.4-agent-contract-plan.md)를 참고하세요. 아래 0.3.0 설명과 실측은 과거 기록이며 0.4.0 인수 검증을 의미하지 않습니다. 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, 복사한 각 링크 형식으로 만든 Hookmark hook은 본인 환경에서의 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
+**0.5.0은 로컬 개발 버전이며 공개·커뮤니티 승인 릴리스가 아닙니다.** 0.5는 **Send recently read papers to notes**를 추가합니다. Zotero 리더로 연 논문(Zotero 10의 읽기 기록)을 각 문헌노트의 상태와 함께 보여 주고, 최신 주석을 담아 노트로 보냅니다. 에이전트 액션 `recent`·`import`, 읽기 순서대로 놓이는 주석 블록, 구조를 유지하는 Zotero 자식 노트, 한글(CJK)·스캔 PDF 텍스트 처리도 포함합니다. **0.4.0은** UI 추가 없이 10개 액션의 에이전트 계약으로 identity·인용 검사·보호된 허브 정합성 갱신·PDF 텍스트·인용 페이지 탐색을 제공합니다. [계약 정본](docs/agent-contract-v2/contract.md)과 [구현 상태](docs/0.4-agent-contract-plan.md)를 참고하세요. 아래 0.3.0 설명과 실측은 과거 기록이며 0.4.0 인수 검증을 의미하지 않습니다. 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, 복사한 각 링크 형식으로 만든 Hookmark hook은 본인 환경에서의 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
 
 ## 범위
 
@@ -68,6 +68,14 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 
 이전 후 직접 앱을 실행해 새 ID만 활성화되었는지 확인하고 설정 보존·인덱스 갱신·명령을 검증하세요. 기능 대체가 실제로 확인될 때까지 이전의 다른 Zotero 플러그인도 설치 상태를 유지하세요.
 
+## Zotero에서 읽고 문헌노트로 보내기
+
+1. 평소처럼 Zotero 리더에서 PDF를 읽고 하이라이트합니다. Zotero 10은 PDF를 마지막으로 연 날짜를 기록합니다.
+2. **Send recently read papers to notes**를 실행합니다(명령 팔레트 또는 펼친 책 리본 아이콘). 최근 30일(7/30/90/365일, 설정 *Recently read window*) 안에 읽은 논문이 최신순으로 나오고, 노트마다 상태가 표시됩니다: *No literature note yet*(노트 없음), *N new annotations not in the note*(새 주석 N개), *Note is up to date*(최신), CMDS Zotero가 만들지 않은 노트(절대 덮어쓰지 않음).
+3. 보낼 필요가 있는 논문이 미리 선택됩니다. **Send**는 노트를 새로 만들거나 Zotero의 현재 데이터로 관리 구역만 갱신합니다. 사용자가 쓴 내용(프론트매터, `## Synthesis`, `## Notes`, 편집하거나 detach한 블록)은 보존됩니다. 노트 버튼으로 결과를 엽니다.
+
+목록을 보려면 Zotero가 실행 중이어야 합니다(Better BibTeX로 읽기 기록을 조회). **Import literature note**도 최근 읽은 논문을 맨 위에 보여 주고 최신 데이터로 가져오며, Zotero가 꺼져 있으면 저장된 인덱스를 쓴다고 알립니다. 에이전트는 같은 경로를 `recent`·`import`로 씁니다(아래).
+
 ## 사이드바로 쓰고 검토하기
 
 - **citekey 자동완성.** `[@` 뒤에 citekey·제목·저자·연도 일부를 입력합니다(공백은 `_`). Enter는 `[@citekey]`, Shift+Enter는 `@citekey`를 넣고, `[[` 안에서는 위키링크 형태로 완성합니다. 서제스터는 로컬 인덱스만 읽으며 캐시가 없으면 백그라운드 로드를 시작합니다. 트리거를 "At sign"으로 바꾸면 단어 시작의 `@` 뒤에서도 동작하고, "Off"로 끌 수 있습니다.
@@ -121,6 +129,8 @@ Paper ingest 서비스·CLI 계약은 [`src/ingest-api.ts`](src/ingest-api.ts), 
 | diagnostics | 인덱스·identity·인용·개인정보 진단 | 가능 |
 | pdf-text | 내장 pdf.js로 비공개 텍스트 캐시 생성 | 불가 |
 | locate | 캐시에서 인용 페이지와 검증 상태 반환 | 가능 |
+| recent | Zotero에서 최근 읽은 논문과 각 문헌노트 상태(0.5) | 불가 |
+| import | 최신 Zotero 데이터로 플러그인 소유 문헌노트 생성·갱신, `--apply` 없으면 dry-run(0.5) | 불가 |
 
 ```sh
 node scripts/ingest.mjs --vault "Research" --action connection
@@ -189,8 +199,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # 추적 중인 작업 파일 검사
 node scripts/sanitize.mjs --staged  # Git index의 추가·변경 파일 검사
-node scripts/version-bump.mjs 0.4.0 # package/lock/manifest/versions 동기화
-node scripts/verify-release.mjs 0.4.0
+node scripts/version-bump.mjs 0.5.0 # package/lock/manifest/versions 동기화
+node scripts/verify-release.mjs 0.5.0
 ```
 
 테스트는 합성 데이터만 사용합니다. 새니타이저는 비밀값 대신 파일·줄·규칙만 출력하는 휴리스틱이며 staged diff와 private 저장소 링크의 수동 검토를 대체하지 않습니다. CI는 Node 22에서 `npm ci`, lint, typecheck, test, production build를 수행합니다. 준비된 릴리스 workflow는 manifest/package/lock/versions와 일치하는 **v 접두사 없는 정식 semver 태그**를 요구하며 세 플러그인 파일과 provenance bundle을 배포합니다. **해당 태그를 push하면 릴리스가 공개되므로 먼저 승인을 받으세요.** Workflow 준비는 릴리스·CI 성공·커뮤니티 등록을 완료했다는 뜻이 아닙니다.

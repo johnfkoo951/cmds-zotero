@@ -62,7 +62,7 @@ test("notes carrying a foreign identity are never claimed by citekey or ZotLit k
 		{ citekey: "koo2022", bookendsID: "1234" },
 		{ citekey: "koo2022", bookendsID: 1234 },
 		{ citekey: "koo2022", source: "bookends://sonnysoftware.com/1234" },
-		{ citekey: "koo2022", links: ["x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000000"] },
+		{ citekey: "koo2022", links: ["x-devonthink-item://0A1B2C3D-0000-0000-8000-000000000000"] },
 		{ citekey: "koo2022", type: "bookends" },
 		{ citekey: "koo2022", type: "note" },
 		{ "zotero-key": "KOOAAAA1", type: "bookends" },
@@ -80,7 +80,7 @@ test("notes carrying a foreign identity are never claimed by citekey or ZotLit k
 });
 
 test("a Bookends or DEVONthink link marks only notes without a Zotero note type", () => {
-	const devon = "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000000";
+	const devon = "x-devonthink-item://0A1B2C3D-0000-0000-8000-000000000000";
 	for (const type of ZOTERO_NOTE_TYPES) {
 		const fm = { type, citekey: "koo2022", source: devon };
 		assert.equal(hasForeignIdentity(fm), false, type);
@@ -113,9 +113,9 @@ test("classifyNotes follows the same ladder: select URI matches, foreign notes a
 		note("30. Literature/by-uri.md", { zoteroSelectURI: "zotero://select/library/items/KOOAAAA1" }),
 		note("30. Literature/other-uri.md", { zoteroSelectURI: "zotero://select/library/items/LEEAAAA1" }),
 		note("20. Literature Notes/koo2022.md", { citekey: "koo2022", bookendsID: "77" }),
-		note("20. Literature Notes/koo2022-devon.md", { type: "zotero", citekey: "koo2022", link: "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000000" }),
-		note("20. Literature Notes/untyped-devon.md", { citekey: "koo2022", link: "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000000" }),
-		note("10. Raw Sources/koo-raw.md", { type: "raw-source", doi: "10.1000/koo.2022", pdf: "x-devonthink-item://0A1B2C3D-0000-4000-8000-000000000001" }),
+		note("20. Literature Notes/koo2022-devon.md", { type: "zotero", citekey: "koo2022", link: "x-devonthink-item://0A1B2C3D-0000-0000-8000-000000000000" }),
+		note("20. Literature Notes/untyped-devon.md", { citekey: "koo2022", link: "x-devonthink-item://0A1B2C3D-0000-0000-8000-000000000000" }),
+		note("10. Raw Sources/koo-raw.md", { type: "raw-source", doi: "10.1000/koo.2022", pdf: "x-devonthink-item://0A1B2C3D-0000-0000-8000-000000000001" }),
 		note("20. Wiki/summary.md", { citekey: "koo2022" }),
 		note("20. Wiki/@koo2022.md", {}),
 	];
