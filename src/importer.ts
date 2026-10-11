@@ -1,23 +1,39 @@
 import { App, FileSystemAdapter, parseYaml, TFile, TFolder } from "obsidian";
 import type { BbtService } from "./bbt";
 import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { hashText, renderLiterature, safeVaultPath } from "./note-writer";
+import { hashText, renderLiterature, safeVaultPath, type RenderedNote, type SectionInfo } from "./note-writer";
 import { relatedCitekeys } from "./related";
 import { checkVaultDestination, hashBytes, MAX_IMAGE_BYTES, readAnnotationImage } from "./import/images";
+import { assertVaultBoundary, BACKUP_DIR, ensureCmdsIgnore, ensureDirectory } from "./vault-storage";
 
 export interface ImportPreview {
 	path: string;
 	content: string;
+	/** Hard conflicts: apply is refused. */
 	conflicts: string[];
+	/** 0.5 R5: soft conflicts (edited sections kept verbatim); apply is allowed. */
+	softConflicts: string[];
+	/** 0.5 R5: IDs of detached (user-owned) blocks. */
+	detached: string[];
+	/** 0.5 R5: per-section states for the preview UI. */
+	sections: SectionInfo[];
 	exists: boolean;
 }
+// 0.5 R5: per-apply choices; ids are applied before writing.
+export interface ApplyOptions { detach?: string[]; reset?: string[] }
+export interface ApplyResult { path: string; conflicts: string[]; changed: boolean; preserved: string[]; detached: string[]; reset: string[] }
 interface Snapshot {
 	path: string;
 	content: string;
 	original: string | null;
 	images: { source: string; path: string; hash: string }[];
 	conflicts: string[];
+	rendered: RenderedNote | null;
+	/** Inputs needed to re-render with detach/reset choices at apply time. */
+	render: { entry: ZoteroIndexEntry; bibliography: string; settings: CmdsZoteroSettings; imageHashes: Map<string, string>; related: string[] } | null;
 }
+/** 0.5 R5: note backups written before a reset: `.cmds-zotero/backups/notes/<basename>-<epoch ms>.md`. */
+export const NOTE_BACKUP_DIR = `${BACKUP_DIR}/notes`;
 
 export class ImportService {
 	private snapshots = new WeakMap<ImportPreview, Snapshot>();
@@ -31,8 +47,8 @@ export class ImportService {
 		const identities = await this.findIdentityPaths(settings.outputFolder, entry.id);
 		if (identities.length > 1) {
 			const conflicts = [`Multiple notes have this Zotero identity; choose one before importing: ${identities.join(", ")}`];
-			const preview: ImportPreview = { path: defaultPath, content: "", conflicts: [...conflicts], exists: true };
-			this.snapshots.set(preview, { path: defaultPath, content: "", original: null, images: [], conflicts });
+			const preview: ImportPreview = { path: defaultPath, content: "", conflicts: [...conflicts], softConflicts: [], detached: [], sections: [], exists: true };
+			this.snapshots.set(preview, { path: defaultPath, content: "", original: null, images: [], conflicts, rendered: null, render: null });
 			return preview;
 		}
 		const path = identities[0] ?? defaultPath;
@@ -45,7 +61,8 @@ export class ImportService {
 		for (const attachment of entry.attachments) for (const annotation of attachment.annotations) {
 			if (annotation.imagePath && !imageHashes.has(annotation.imagePath)) imageHashes.set(annotation.imagePath, hashBytes(await readAnnotationImage(annotation.imagePath)));
 		}
-		const rendered = renderLiterature(entry, bibliography, settings, original, imageHashes, { related: index ? relatedCitekeys(entry, index) : [] });
+		const related = index ? relatedCitekeys(entry, index) : [];
+		const rendered = renderLiterature(entry, bibliography, settings, original, imageHashes, { related });
 		const images: Snapshot["images"] = [];
 		for (const image of rendered.images) {
 			await this.checkPath(image.path);
@@ -55,31 +72,49 @@ export class ImportService {
 			if (found && (!(found instanceof TFile) || found.stat.size > MAX_IMAGE_BYTES || hashBytes(new Uint8Array(await this.app.vault.readBinary(found))) !== hash)) rendered.conflicts.push(`Image destination contains different content: ${image.path}`);
 			images.push({ ...image, hash });
 		}
-		const preview: ImportPreview = { path, content: rendered.content, conflicts: [...rendered.conflicts], exists: original !== null };
-		this.snapshots.set(preview, { path, content: rendered.content, original, images, conflicts: [...rendered.conflicts] });
+		const preview: ImportPreview = { path, content: rendered.content, conflicts: [...rendered.conflicts], softConflicts: [...rendered.softConflicts], detached: [...rendered.detached], sections: rendered.sections.map(section => ({ ...section })), exists: original !== null };
+		this.snapshots.set(preview, { path, content: rendered.content, original, images, conflicts: [...rendered.conflicts], rendered, render: { entry, bibliography, settings, imageHashes, related } });
 		return preview;
 	}
 
-	async apply(preview: ImportPreview): Promise<{ path: string; conflicts: string[]; changed: boolean }> {
+	/**
+	 * Writes the previewed note. Soft conflicts (edited sections) do not block: those blocks stay verbatim and are
+	 * reported as `preserved`. `options.detach` freezes blocks as user-owned; `options.reset` replaces edited or
+	 * detached blocks with the fresh render after backing up the previous note text (0.5 R5).
+	 */
+	async apply(preview: ImportPreview, options: ApplyOptions = {}): Promise<ApplyResult> {
 		const snapshot = this.snapshots.get(preview);
 		if (!snapshot) throw new Error("Unknown or already applied import preview");
 		const path = snapshot.path;
-		const changed = snapshot.original !== snapshot.content;
-		if (snapshot.conflicts.length) return { path, conflicts: [...snapshot.conflicts], changed: false };
-		if (this.applying) return { path, conflicts: ["Another import is being applied"], changed: false };
+		const refuse = (message: string): ApplyResult => ({ path, conflicts: [message], changed: false, preserved: [], detached: [], reset: [] });
+		if (snapshot.conflicts.length) return { ...refuse(""), conflicts: [...snapshot.conflicts] };
+		let rendered = snapshot.rendered;
+		let content = snapshot.content;
+		const choices = { detach: [...new Set(options.detach ?? [])], reset: [...new Set(options.reset ?? [])] };
+		if ((choices.detach.length || choices.reset.length) && snapshot.render) {
+			const { entry, bibliography, settings, imageHashes, related } = snapshot.render;
+			rendered = renderLiterature(entry, bibliography, settings, snapshot.original, imageHashes, { related, ...choices });
+			if (rendered.conflicts.length) return { ...refuse(""), conflicts: [...rendered.conflicts] };
+			content = rendered.content;
+		}
+		const preserved = rendered ? rendered.sections.filter(section => section.state === "edited").map(section => section.id) : [];
+		const detached = rendered ? [...rendered.detached] : [];
+		const reset = rendered ? [...rendered.reset] : [];
+		const changed = snapshot.original !== content;
+		if (this.applying) return refuse("Another import is being applied");
 		this.applying = true;
 		try {
 			await this.checkPath(path);
-			if (!(await this.matches(snapshot))) return { path, conflicts: ["Note changed after preview; preview again"], changed: false };
+			if (!(await this.matches(snapshot))) return refuse("Note changed after preview; preview again");
 			const pending: { path: string; bytes: Uint8Array }[] = [];
 			// Finish all source and destination checks before creating any files.
 			for (const image of snapshot.images) {
 				await this.checkPath(image.path);
 				const bytes = await readAnnotationImage(image.source);
-				if (hashBytes(bytes) !== image.hash) return { path, conflicts: ["Annotation image changed after preview"], changed: false };
+				if (hashBytes(bytes) !== image.hash) return refuse("Annotation image changed after preview");
 				const existing = this.app.vault.getAbstractFileByPath(image.path);
 				if (existing) {
-					if (!(existing instanceof TFile) || existing.stat.size > MAX_IMAGE_BYTES || hashBytes(new Uint8Array(await this.app.vault.readBinary(existing))) !== image.hash) return { path, conflicts: [`Image conflict: ${image.path}`], changed: false };
+					if (!(existing instanceof TFile) || existing.stat.size > MAX_IMAGE_BYTES || hashBytes(new Uint8Array(await this.app.vault.readBinary(existing))) !== image.hash) return refuse(`Image conflict: ${image.path}`);
 				} else pending.push({ path: image.path, bytes });
 			}
 			for (const image of pending) {
@@ -91,18 +126,31 @@ export class ImportService {
 			await this.checkPath(path);
 			const file = this.app.vault.getAbstractFileByPath(path);
 			if (snapshot.original === null) {
-				if (file) return { path, conflicts: ["Note appeared after preview; refusing overwrite"], changed: false };
-				await this.app.vault.create(path, snapshot.content);
+				if (file) return refuse("Note appeared after preview; refusing overwrite");
+				await this.app.vault.create(path, content);
 			} else {
-				if (!(file instanceof TFile)) return { path, conflicts: ["Note removed after preview"], changed: false };
+				if (!(file instanceof TFile)) return refuse("Note removed after preview");
+				// A reset discards the user's edited text: keep a copy in the private (ignored) backup folder first.
+				if (reset.length && changed) await this.backupNote(path, snapshot.original);
 				await this.app.vault.process(file, current => {
 					if (hashText(current) !== hashText(snapshot.original ?? "")) throw new Error("Note changed after preview; no note content was written");
-					return snapshot.content;
+					return content;
 				});
 			}
 			this.snapshots.delete(preview);
-			return { path, conflicts: [], changed };
+			return { path, conflicts: [], changed, preserved, detached, reset };
 		} finally { this.applying = false; }
+	}
+
+	// 0.5 R5
+	private async backupNote(path: string, text: string): Promise<string> {
+		await ensureCmdsIgnore(this.app);
+		const basename = (path.split("/").pop() ?? "note").replace(/\.md$/i, "");
+		const backup = `${NOTE_BACKUP_DIR}/${basename}-${Date.now()}.md`;
+		await assertVaultBoundary(this.app, backup);
+		await ensureDirectory(this.app, backup);
+		await this.app.vault.adapter.write(backup, text);
+		return backup;
 	}
 
 	private async findIdentityPaths(folder: string, identity: string): Promise<string[]> {

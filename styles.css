@@ -146,3 +146,41 @@ mark.cmds-zotero-hl-magenta { background: rgba(229, 110, 238, 0.45); }
 mark.cmds-zotero-hl-orange { background: rgba(241, 152, 55, 0.45); }
 mark.cmds-zotero-hl-gray { background: rgba(170, 170, 170, 0.45); }
 mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius: 2px; }
+
+/* 0.5 R5: import preview section list */
+.cmds-zotero-section-summary {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-2);
+}
+.cmds-zotero-section-list {
+  max-height: 50vh;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  padding: 0 var(--size-4-2);
+}
+.cmds-zotero-section .setting-item {
+  padding: var(--size-2-2) 0;
+}
+.cmds-zotero-section .setting-item-name {
+  font-family: var(--font-monospace);
+  font-size: var(--font-smaller);
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-section-edited .setting-item-name { color: var(--text-warning); }
+.cmds-zotero-section-detached .setting-item-name { color: var(--text-muted); }
+.cmds-zotero-section-malformed .setting-item-name,
+.cmds-zotero-section-missing .setting-item-name { color: var(--text-error); }
+.cmds-zotero-section-details {
+  margin: 0 0 var(--size-2-2);
+  font-size: var(--font-smaller);
+}
+.cmds-zotero-section-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.cmds-zotero-section-body {
+  max-height: 30vh;
+  margin-top: var(--size-2-1);
+}

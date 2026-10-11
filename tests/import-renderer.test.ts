@@ -52,7 +52,9 @@ test("reimport is idempotent and preserves all user prose and YAML", () => {
 test("edited generated text is preserved and reported, unrelated names refuse ownership", () => {
 	const edited = render(null).content.replace(">Evidence<", ">My changed evidence<");
 	const result = render(edited);
-	assert.match(result.conflicts.join(" "), /Edited generated section/);
+	// 0.5 R5: an edited block is a soft conflict (kept verbatim, note still written); hard conflicts stay empty.
+	assert.deepEqual(result.conflicts, []);
+	assert.match(result.softConflicts.join(" "), /Edited generated section/);
 	assert.match(result.content, /My changed evidence/);
 	assert.deepEqual(render("my unowned note").content, "my unowned note");
 	assert.equal(render("my unowned note").conflicts.length, 1);
@@ -258,7 +260,7 @@ test("automatic link-target rewrites inside hashed sections are not reported as 
 	assert.notEqual(storedHash, hashText(normalizeLinkTargets(body ?? "")));
 	// A real edit of the image line is still preserved and reported.
 	const edited = initial.replace("![Annotation image]", "![My caption]");
-	assert.match(renderLiterature(imageEntry, "APA", settings, edited, hashes).conflicts.join(" "), /Edited generated section/);
+	assert.match(renderLiterature(imageEntry, "APA", settings, edited, hashes).softConflicts.join(" "), /Edited generated section/);
 });
 
 test("link-target normalization handles image folders containing parentheses (T14, live vault path)", () => {
@@ -282,5 +284,5 @@ test("link-target normalization handles image folders containing parentheses (T1
 	}
 	// Still a real edit when the image basename itself changes.
 	const renamed = initial.replace("-ANNOT001-", "-ANNOT999-");
-	assert.match(renderLiterature(imageEntry, "APA", settings, renamed, hashes).conflicts.join(" "), /Edited generated section/);
+	assert.match(renderLiterature(imageEntry, "APA", settings, renamed, hashes).softConflicts.join(" "), /Edited generated section/);
 });

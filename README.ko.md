@@ -74,7 +74,7 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 - **참고문헌 사이드바**(`Open references sidebar`). 활성 노트의 `[@key]`, `@key`, `[[@key]]`를 프론트매터와 코드펜스를 제외하고 스캔해 문헌마다 한 번씩 BBT의 설정 스타일 참고문헌을 표시합니다. 미해결·중복 키는 이유와 함께 붉게 표시됩니다. 문헌노트·Zotero 항목·PDF 열기, 첫 인용 위치로 이동, "Copy bibliography"로 목록 복사가 가능합니다.
 - **주석 사이드바**(`Open annotations sidebar`, 리본 형광펜). 활성 문헌노트를 `zoteroID`, select URI, ZotLit 키 또는 `@citekey` 파일명으로 따라가거나 임의 항목을 고정합니다. 카드마다 색상·페이지 라벨·본문·코멘트·태그를 보여주며, Zotero 리더에서 열기, 가져오기와 동일한 콜아웃으로 커서 위치에 삽입, 링크 복사, 텍스트 복사를 지원합니다. 이미지 주석은 링크만 넣고 복사하지 않습니다. 검증된 이미지 복사는 가져오기 명령을 사용하세요.
 - **Find notes citing a source**는 항목의 현재·이전 citekey를 볼트 전체에서 찾아 첫 인용 위치로 엽니다.
-- **Update all owned literature notes**는 출력 폴더 안에서 소유권 마커를 가진 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·변경없음·건너뜀·연결됐지만 비소유를 보고합니다. 편집된 생성 섹션, 중복 identity, 비소유 노트는 덮어쓰지 않고 건너뜁니다.
+- **Update all owned literature notes**는 출력 폴더 안에서 소유권 마커를 가진 모든 노트의 관리 섹션을 다시 렌더링하고 갱신·부분(편집 섹션 보존)·변경없음·건너뜀·연결됐지만 비소유를 보고합니다. 편집된 생성 섹션은 그대로 두고 그 노트의 나머지 섹션만 갱신하며, 중복 identity·손상된 마커·비소유 노트는 덮어쓰지 않고 건너뜁니다.
 - **Open link under cursor**는 `zotero://select` 링크를 Zotero에서 열고, `zotero://open-pdf` 링크는 인덱스에서 항목을 찾아 PDF를 엽니다(첨부 키 우선, 없으면 Zotero 자체가 허용하는 부모 항목 키. 페이지·주석 유지, 라이브러리를 넘어 추측하지 않음). `[@citekey]`, `@citekey`, `[[@citekey]]`(별칭·헤딩 접미사 무시)에서는 항목 액션 창을 엽니다. 문장 부호가 뒤따르는 링크도 인식합니다. 그 밖에는 알림만 표시하며, 형식이 잘못된 Zotero URI는 선택 여부와 관계없이 가장 비슷한 항목이 아니라 "없음"으로 처리합니다.
 - **Find literature across vaults**는 이 볼트와 등록한 각 피어 볼트에서 항목에 해당하는 모든 노트를 일반 `obsidian://open?vault=…&file=…` 행으로 나열합니다(피어 볼트의 커뮤니티 플러그인 목록에 Advanced URI가 있으면 `obsidian://advanced-uri?…&filepath=…`. 목록은 `<피어>/<이 볼트의 설정 폴더>/community-plugins.json`에서 읽으므로, 설정 폴더 이름이 다른 피어는 `obsidian://open`으로 돌아갑니다). 논문 허브와 `@citekey` 노트가 먼저 옵니다. 플러그인 자체의 `obsidian://cmds-zotero` 프로토콜은 이름 변경에 안전한 identity 링크와 에이전트 전송 용도로만 남깁니다.
 
@@ -157,6 +157,8 @@ Git 진단은 ignore와 이미 추적 중인 상태를 구분합니다. untrack�
 `node scripts/sync-contract.mjs --check`로 드리프트를 검사합니다.
 
 가져온 노트는 `zoteroID`로 이름·citekey 변경 뒤에도 경로를 유지합니다. 최초 YAML은 사용자 관리 영역이며 이후 메타데이터는 관리 섹션에서 갱신됩니다. 이미지명에는 라이브러리와 content hash가 포함되어 원본이 바뀌면 새 버전을 추가하고 구버전·사용자 수정 이미지를 삭제하지 않습니다. 소유권 마커가 없는 기존 노트는 자동 편입하지 않으므로, 나란히 가져오려면 출력 폴더를 바꾸세요.
+
+**보존과 충돌 해결(0.5).** 생성 섹션은 모두 `<!-- cmds-zotero:<id>:<hash> -->`와 `<!-- /cmds-zotero:<id> -->` 사이에 있습니다. 사용자가 편집한 섹션은 *소프트* 충돌입니다. 미리보기에 "edited (preserved)"로 표시되고 블록은 그대로 유지되며 노트의 나머지는 정상 갱신됩니다. 더 이상 노트 전체를 막지 않습니다. 섹션마다 **Detach**(마커가 `<!-- cmds-zotero:<id>:detached -->`가 되어 그 블록은 사용자 소유가 되고, 다시 렌더링되거나 편집됨·누락으로 보고되지 않으며 Zotero에서 주석이 사라져도 그대로 둡니다) 또는 **Reset**(블록을 새 렌더링으로 교체하되, 그 전에 이전 노트 전문을 플러그인의 gitignore된 비공개 폴더 `.cmds-zotero/backups/notes/<basename>-<timestamp>.md`에 복사합니다)을 선택할 수 있습니다. Detach는 의도적으로 되돌릴 수 없습니다. 분리된 블록을 다시 소유하는 명령은 없으며 Reset만이 유일한 복귀 경로입니다. 여는 마커 줄에 붙여넣은 텍스트는 다음 갱신 때 블록 아래로 옮겨지고, 닫는 마커 앞의 공백은 허용됩니다. 누락·중복·손상된 마커는 여전히 *하드* 충돌로, 섹션별로 줄 번호와 함께 보고되며("Malformed managed markers for `<id>` (line N)") 고치기 전까지 노트를 쓰지 않습니다.
 
 ## 지원 경계와 검증
 

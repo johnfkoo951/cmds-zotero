@@ -7,10 +7,37 @@ export const hashText = (text: string): string => createHash("sha256").update(te
 // 0.5 R14: the marker that proves a literature note was created by this plugin for exactly this item.
 export const ownerMarker = (id: string): string => `<!-- cmds-zotero-owner:${hashText(id)} -->`;
 export interface ImagePlan { source: string; path: string }
-export interface RenderedNote { content: string; conflicts: string[]; images: ImagePlan[] }
+// 0.5 R5: soft/hard conflict split, detached (user-owned) blocks and per-section states.
+export type SectionState = "fresh" | "unchanged" | "edited" | "detached" | "malformed" | "missing";
+export interface SectionInfo {
+	id: string;
+	state: SectionState;
+	reason: string;
+	/** 1-based line of the block's opening marker in the previous note text; absent for new blocks. */
+	line?: number;
+	/** The body as it will be written (fresh render, or the preserved/detached text). Empty for missing/malformed. */
+	body: string;
+}
+export interface RenderedNote {
+	content: string;
+	/** Hard conflicts: the note must not be written (not owned, malformed/duplicate/missing markers). */
+	conflicts: string[];
+	/** Soft conflicts: edited generated sections kept verbatim; the rest of the note is still rendered. */
+	softConflicts: string[];
+	/** IDs of `<!-- cmds-zotero:<id>:detached -->` blocks (user-owned, never re-rendered). */
+	detached: string[];
+	/** IDs replaced by a fresh render on request (`RenderContext.reset`). */
+	reset: string[];
+	sections: SectionInfo[];
+	images: ImagePlan[];
+}
 export interface RenderContext {
 	/** Citekeys of related Zotero items that are present in the index. */
 	related?: string[];
+	/** 0.5 R5: managed section IDs to freeze as detached (user-owned) in this render. */
+	detach?: readonly string[];
+	/** 0.5 R5: edited or detached section IDs to replace with the fresh render. */
+	reset?: readonly string[];
 }
 
 export function safeVaultPath(path: string): string {
@@ -159,6 +186,36 @@ function quoted(body: string): string { return body.split("\n").map(line => `> $
 function block(id: string, body: string): string {
 	return `<!-- cmds-zotero:${id}:${hashText(body)} -->\n${body}\n<!-- /cmds-zotero:${id} -->`;
 }
+// 0.5 R5: marker grammar. Opening `<!-- cmds-zotero:<id>:<sha256|detached> -->` may carry a same-line tail (text pasted
+// after the marker) which is moved below the block on repair; trailing spaces/tabs before the closing marker and an
+// indented closing marker are tolerated. A `detached` mark freezes the block as user-owned.
+export const DETACHED_MARK = "detached";
+const MANAGED_BLOCK = /<!-- cmds-zotero:([a-zA-Z0-9-]+):([a-f0-9]{64}|detached) -->([^\n]*)\n([\s\S]*?)[ \t]*\n[ \t]*<!-- \/cmds-zotero:\1 -->/g;
+const MARKER = /<!-- (\/?)cmds-zotero:([a-zA-Z0-9-]+)/g;
+function detachedBlock(id: string, body: string): string {
+	return `<!-- cmds-zotero:${id}:${DETACHED_MARK} -->\n${body}\n<!-- /cmds-zotero:${id} -->`;
+}
+function storedBlock(id: string, mark: string, body: string): string {
+	return `<!-- cmds-zotero:${id}:${mark} -->\n${body}\n<!-- /cmds-zotero:${id} -->`;
+}
+/** A non-blank tail after the opening marker is re-emitted on its own line right after the closing marker. */
+function withTail(rendered: string, tail: string): string {
+	const text = tail.trim();
+	return text ? `${rendered}\n${text}` : rendered;
+}
+/** Freezes the listed managed blocks as detached (`<!-- cmds-zotero:<id>:detached -->`); other text is untouched. Idempotent. */
+export function detachSections(text: string, ids: Iterable<string>): string {
+	const wanted = new Set(ids);
+	return text.replace(MANAGED_BLOCK, (whole: string, id: string, _mark: string, tail: string, body: string) => wanted.has(id) ? withTail(detachedBlock(id, body), tail) : whole);
+}
+/** Replaces the listed managed or detached blocks with fresh bodies (missing bodies leave the block untouched). */
+export function resetSections(text: string, ids: Iterable<string>, bodies: ReadonlyMap<string, string>): string {
+	const wanted = new Set(ids);
+	return text.replace(MANAGED_BLOCK, (whole: string, id: string, _mark: string, tail: string) => {
+		const fresh = bodies.get(id);
+		return wanted.has(id) && fresh !== undefined ? withTail(block(id, fresh), tail) : whole;
+	});
+}
 /**
  * New annotation blocks go after the last existing `annotation-*` closing marker, else after the `## Annotations` heading,
  * else at the end of the file — never after user prose written below the annotation list.
@@ -244,8 +301,12 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, settings: CmdsZoteroSettings, previous: string | null, imageHashes: ReadonlyMap<string, string> = new Map(), context: RenderContext = {}): RenderedNote {
 	const owner = ownerMarker(entry.id);
 	const conflicts: string[] = [];
+	const softConflicts: string[] = [];
+	const detached: string[] = [];
+	const reset: string[] = [];
+	const report: SectionInfo[] = [];
 	const images: ImagePlan[] = [];
-	if (previous !== null && !previous.includes(owner)) return { content: previous, conflicts: ["Existing note is not owned by this Zotero item"], images };
+	if (previous !== null && !previous.includes(owner)) return { content: previous, conflicts: ["Existing note is not owned by this Zotero item"], softConflicts, detached, reset, sections: report, images };
 	const creators = creatorNames(entry);
 	const authors = creators.filter(c => c.role === "author").map(c => c.name);
 	const authorList = authors.length ? authors : creators.length ? creators.map(c => c.name) : entry.authors;
@@ -317,26 +378,82 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		const synthesis = "## Synthesis\n\n> [!Synth]\n> **Contribution**::\n> **Related**::";
 		const details = ["metadata", "notes"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
 		const annotations = [...sections].filter(([id]) => id.startsWith("annotation-")).map(([id, body]) => block(id, body)).join("\n\n");
-		return { content: `---\n${frontmatter}\n---\n\n${owner}\n\n${intro}\n\n${synthesis}\n\n${details}\n\n## Notes\n\n## Annotations\n\n${annotations}\n`, conflicts, images };
+		for (const [id, body] of sections) report.push({ id, state: "fresh", reason: "new note", body });
+		return { content: `---\n${frontmatter}\n---\n\n${owner}\n\n${intro}\n\n${synthesis}\n\n${details}\n\n## Notes\n\n## Annotations\n\n${annotations}\n`, conflicts, softConflicts, detached, reset, sections: report, images };
 	}
+	// 0.5 R5: per-block states; edited blocks are soft conflicts (kept verbatim, note still written), detached blocks are
+	// user-owned and never re-rendered, malformed/duplicate/missing markers stay hard.
 	const matched = new Set<string>();
-	const expression = /<!-- cmds-zotero:([a-zA-Z0-9-]+):([a-f0-9]{64}) -->\n([\s\S]*?)\n<!-- \/cmds-zotero:\1 -->/g;
-	let content = previous.replace(expression, (whole: string, id: string, hash: string, body: string) => {
-		if (matched.has(id)) { conflicts.push(`Duplicate managed section: ${id}`); return whole; }
+	const detachWanted = new Set(context.detach ?? []);
+	const resetWanted = new Set(context.reset ?? []);
+	const consumed = new Set<number>();
+	const lineOf = (offset: number): number => previous.slice(0, offset).split("\n").length;
+	let content = previous.replace(MANAGED_BLOCK, (whole: string, id: string, mark: string, tail: string, body: string, offset: number) => {
+		const line = lineOf(offset);
+		consumed.add(offset);
+		consumed.add(offset + whole.lastIndexOf("<!-- /cmds-zotero:"));
+		const repaired = tail.trim() ? "; text after the opening marker was moved below the block" : "";
+		if (matched.has(id)) {
+			conflicts.push(`Duplicate managed section: ${id} (line ${line})`);
+			report.push({ id, state: "malformed", reason: "duplicate managed section", line, body: "" });
+			return whole;
+		}
 		matched.add(id);
 		const fresh = sections.get(id);
-		if (!sectionUnedited(body, hash, fresh)) { conflicts.push(`Edited generated section preserved: ${id}`); return whole; }
-		return fresh === undefined ? whole : block(id, fresh);
+		if (detachWanted.has(id) || (mark === DETACHED_MARK && !resetWanted.has(id))) {
+			detached.push(id);
+			report.push({ id, state: "detached", reason: `${mark === DETACHED_MARK ? "detached" : "detaching"}: user-owned, never updated${repaired}`, line, body });
+			return withTail(detachedBlock(id, body), tail);
+		}
+		const edited = mark === DETACHED_MARK || !sectionUnedited(body, mark, fresh);
+		if (edited && resetWanted.has(id) && fresh !== undefined) {
+			reset.push(id);
+			report.push({ id, state: "fresh", reason: `reset from Zotero${repaired}`, line, body: fresh });
+			return withTail(block(id, fresh), tail);
+		}
+		if (mark === DETACHED_MARK) {
+			detached.push(id);
+			report.push({ id, state: "detached", reason: `cannot reset: no longer in Zotero${repaired}`, line, body });
+			return withTail(detachedBlock(id, body), tail);
+		}
+		if (edited) {
+			softConflicts.push(`Edited generated section preserved: ${id}`);
+			report.push({ id, state: "edited", reason: `edited in the vault: preserved (detach to keep yours, reset to refresh)${repaired}`, line, body });
+			return withTail(storedBlock(id, mark, body), tail);
+		}
+		if (fresh === undefined) {
+			report.push({ id, state: "unchanged", reason: `no longer in Zotero: kept${repaired}`, line, body });
+			return withTail(storedBlock(id, mark, body), tail);
+		}
+		report.push({ id, state: "unchanged", reason: `not edited: refreshed from Zotero${repaired}`, line, body: fresh });
+		return withTail(block(id, fresh), tail);
 	});
-	// Missing or damaged markers must never result in duplicated generated sections.
-	const openingCount = (previous.match(/<!-- cmds-zotero:/g) ?? []).length;
-	const closingCount = (previous.match(/<!-- \/cmds-zotero:/g) ?? []).length;
-	if (openingCount !== matched.size || closingCount !== matched.size) conflicts.push("Malformed or duplicate managed markers");
+	// Markers outside any well-formed block (missing or damaged closing marker, no hash, stray duplicate) are reported per
+	// ID with a line number; a generated section is never duplicated because of them.
+	const malformed = new Set<string>();
+	let strayCount = 0;
+	for (const marker of previous.matchAll(MARKER)) {
+		strayCount++;
+		if (consumed.has(marker.index)) continue;
+		const id = marker[2];
+		if (malformed.has(id)) continue;
+		malformed.add(id);
+		const line = lineOf(marker.index);
+		conflicts.push(`Malformed managed markers for ${id} (line ${line})`);
+		if (!matched.has(id)) report.push({ id, state: "malformed", reason: "marker without a well-formed block", line, body: "" });
+	}
+	const rawCount = (previous.match(/<!-- \/?cmds-zotero:/g) ?? []).length;
+	if (rawCount !== strayCount) conflicts.push("Malformed managed markers without a section ID");
 	const additions: string[] = [];
-	for (const [id, body] of sections) if (!matched.has(id)) {
-		if (id.startsWith("annotation-") && !previous.includes(`cmds-zotero:${id}:`)) additions.push(block(id, body));
-		else conflicts.push(`Missing managed section: ${id}`);
+	for (const [id, body] of sections) if (!matched.has(id) && !malformed.has(id)) {
+		if (id.startsWith("annotation-") && !previous.includes(`cmds-zotero:${id}:`)) {
+			additions.push(block(id, body));
+			report.push({ id, state: "fresh", reason: "new annotation", body });
+		} else {
+			conflicts.push(`Missing managed section: ${id}`);
+			report.push({ id, state: "missing", reason: "managed block not found", body: "" });
+		}
 	}
 	if (additions.length) content = spliceAnnotations(content, additions);
-	return { content, conflicts, images };
+	return { content, conflicts, softConflicts, detached, reset, sections: report, images };
 }

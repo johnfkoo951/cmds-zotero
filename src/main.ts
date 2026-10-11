@@ -455,12 +455,13 @@ export default class CMDSZoteroPlugin extends Plugin {
 		await this.run(async () => {
 			const { index } = await this.service.ensureIndex();
 			const preview = await this.importer.preview(entry, index);
-			new ImportPreviewModal(this.app, preview, async () => {
-				const result = await this.importer.apply(preview);
+			new ImportPreviewModal(this.app, preview, async choices => {
+				// 0.5 R5: detach/reset choices travel with the apply; edited sections no longer block the note.
+				const result = await this.importer.apply(preview, choices);
 				if (result.conflicts.length) throw new Error(result.conflicts.join("; "));
 				await this.app.workspace.openLinkText(result.path, "", true);
 				this.scheduleMap();
-				new Notice("Literature note imported. User-written sections were preserved.");
+				new Notice(result.preserved.length ? `Literature note imported. Edited sections kept: ${result.preserved.join(", ")}.` : "Literature note imported. User-written sections were preserved.");
 			}).open();
 		});
 	}
@@ -484,6 +485,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			catch (error) { throw new Error(`${describeBbtError(error)} Updating literature notes needs Better BibTeX for bibliography text; no note was changed.`); }
 			const notice = new Notice(`Updating ${owned.length} literature notes…`, 0);
 			const updated: string[] = [];
+			const partial: string[] = [];
 			const unchanged: string[] = [];
 			const skipped: string[] = [];
 			try {
@@ -493,13 +495,15 @@ export default class CMDSZoteroPlugin extends Plugin {
 						if (preview.conflicts.length) { skipped.push(`@${entry.citekey}: ${preview.conflicts.join("; ")}`); continue; }
 						if (!preview.exists) { skipped.push(`@${entry.citekey}: note was not created by this plugin; use Import literature note`); continue; }
 						const result = await this.importer.apply(preview);
+						// 0.5 R5: edited sections are preserved while the rest of the note is refreshed (partial), never skipped.
 						if (result.conflicts.length) skipped.push(`@${entry.citekey}: ${result.conflicts.join("; ")}`);
+						else if (result.preserved.length) partial.push(`${result.path}: preserved ${result.preserved.join(", ")}${result.changed ? "" : " (no other changes)"}`);
 						else (result.changed ? updated : unchanged).push(result.path);
 					} catch (error) { skipped.push(`@${entry.citekey}: ${error instanceof Error ? error.message : "failed"}`); }
 				}
 			} finally { notice.hide(); }
 			this.scheduleMap();
-			new ReportModal(this.app, "Literature note batch update", [`Updated: ${updated.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`, ownershipSummary(partition), "", ...updated.map(path => `updated  ${path}`), ...skipped.map(line => `skipped  ${line}`)].join("\n")).open();
+			new ReportModal(this.app, "Literature note batch update", [`Updated: ${updated.length}`, `Partial (edited sections preserved): ${partial.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`, ownershipSummary(partition), "", ...updated.map(path => `updated  ${path}`), ...partial.map(line => `partial  ${line}`), ...skipped.map(line => `skipped  ${line}`)].join("\n")).open();
 		});
 	}
 
