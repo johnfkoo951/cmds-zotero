@@ -82,16 +82,44 @@ export function textFromHTML(value: unknown): string {
 }
 
 /** Markdown from a converter, made safe inside a managed block under `## Zotero notes`. */
-export function safeNoteMarkdown(markdown: string): string {
-	return stripControl(markdown)
-		// A converted note must never open or close a managed marker.
-		.replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;")
+/** Link and image labels: escaped and nested brackets included (`[see \[1\]]`, `[a [b] c]`). */
+const LABEL = String.raw`\[((?:\\.|\[[^\]\n]*\]|[^\]\\\n])*)\]`;
+const SAFE_LINK_TARGET = /^<?(?:https?|zotero|obsidian|mailto):/i;
+const SAFE_IMAGE_TARGET = /^<?https?:/i;
+
+/** Heading nesting and link/image rewrites for prose lines; fenced code is passed through untouched. */
+function rewriteNoteProse(segment: string): string {
+	return segment
 		// Nest the note's own headings under "## Zotero notes".
 		.replace(/^(#{1,6})(?=[ \t])/gm, hashes => "#".repeat(Math.min(6, hashes.length + 2)))
 		// Images embedded in a Zotero note have no vault file; say so instead of leaving a broken embed.
-		.replace(/!\[([^\]\n]*)\]\((?!https?:)[^)\n]*\)/g, (_, alt: string) => `*(image in the Zotero note${alt.trim() ? `: ${alt.trim()}` : ""})*`)
+		.replace(new RegExp(String.raw`!${LABEL}\(([^)\n]*)\)`, "g"), (whole: string, alt: string, target: string) => SAFE_IMAGE_TARGET.test(target.trim()) ? whole : `*(image in the Zotero note${alt.trim() ? `: ${alt.trim()}` : ""})*`)
 		// Links keep only web, Zotero, Obsidian and mail targets; any other scheme or relative target becomes plain text.
-		.replace(/\[([^\]\n]*)\]\((?!(?:https?|zotero|obsidian|mailto):)[^)\n]*\)/gi, "$1")
+		.replace(new RegExp(String.raw`(^|[^!])${LABEL}\(([^)\n]*)\)`, "g"), (whole: string, lead: string, label: string, target: string) => SAFE_LINK_TARGET.test(target.trim()) ? whole : `${lead}${label}`)
+		// Any destination the patterns above did not see still loses an unsafe target.
+		.replace(/\]\(([^)\n]*)\)/g, (whole: string, target: string) => SAFE_LINK_TARGET.test(target.trim()) ? whole : "]")
+		.replace(/<([a-z][a-z0-9+.-]*):[^>\s]*>/gi, (whole: string, scheme: string) => /^(?:https?|zotero|obsidian|mailto)$/i.test(scheme) ? whole : whole.slice(1, -1));
+}
+
+/**
+ * Markdown from a converter, made safe inside a managed block under `## Zotero notes`. Rewrites run first, outside fenced
+ * code; comment delimiters are escaped last, across the whole text, so no earlier step can rebuild a marker.
+ */
+export function safeNoteMarkdown(markdown: string): string {
+	const out: string[] = [];
+	let fence: string | null = null;
+	let prose: string[] = [];
+	const flush = (): void => { if (prose.length) { out.push(rewriteNoteProse(prose.join("\n"))); prose = []; } };
+	for (const line of stripControl(markdown).split("\n")) {
+		const opener = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+		if (fence === null && opener) { flush(); fence = opener[0]; out.push(line); continue; }
+		if (fence !== null) { out.push(line); if (opener && opener[0] === fence) fence = null; continue; }
+		prose.push(line);
+	}
+	flush();
+	return out.join("\n")
+		// A converted note must never open or close a managed marker: escaped last, after every rewrite.
+		.replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;")
 		.replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -101,15 +129,22 @@ export function noteBody(html: string, convert?: (html: string) => string): stri
 	const cleaned = html.replace(/<(script|style|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<(script|style|iframe|object|embed)\b[^>]*\/?>/gi, "");
 	let markdown: string;
 	try { markdown = convert(cleaned); } catch { return textFromHTML(html); }
-	return typeof markdown === "string" ? safeNoteMarkdown(markdown) : textFromHTML(html);
+	if (typeof markdown !== "string") return textFromHTML(html);
+	const safe = safeNoteMarkdown(markdown);
+	// Belt and braces: converted text that still spells a managed marker is never used.
+	return /<!--\s*\/?\s*cmds-zotero/i.test(safe) ? textFromHTML(html) : safe;
 }
 
 /** Zotero reading order: attachments as listed, annotations by `annotationSortIndex` (stable when it is absent). */
 export function readingOrder(entry: ZoteroIndexEntry): { attachment: ZoteroIndexEntry["attachments"][number]; annotation: Annotation }[] {
-	return entry.attachments.flatMap(attachment => attachment.annotations
-		.map((annotation, position) => ({ annotation, position }))
-		.sort((a, b) => (a.annotation.sortIndex && b.annotation.sortIndex && a.annotation.sortIndex !== b.annotation.sortIndex ? (a.annotation.sortIndex < b.annotation.sortIndex ? -1 : 1) : a.position - b.position))
-		.map(({ annotation }) => ({ attachment, annotation })));
+	return entry.attachments.flatMap(attachment => {
+		// Sort only when every annotation of the attachment has a sort index; a partial set keeps the listed order (a
+		// mixed comparator would not be transitive).
+		const sortable = attachment.annotations.every(annotation => annotation.sortIndex);
+		const ordered = attachment.annotations.map((annotation, position) => ({ annotation, position }));
+		if (sortable) ordered.sort((a, b) => a.annotation.sortIndex === b.annotation.sortIndex ? a.position - b.position : (a.annotation.sortIndex ?? "") < (b.annotation.sortIndex ?? "") ? -1 : 1);
+		return ordered.map(({ annotation }) => ({ attachment, annotation }));
+	});
 }
 
 /** Single-line text for callout titles and inline fields. */
@@ -272,8 +307,13 @@ function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: s
 		let before: number | null = null;
 		if (position !== undefined) for (const match of result.matchAll(ANNOTATION_OPENING)) {
 			const other = rank.get(match[1]);
-			// Insert at the start of the marker's line, so text a user wrote before the marker on that line stays intact.
-			if (other !== undefined && other > position) { before = result.lastIndexOf("\n", match.index - 1) + 1; break; }
+			// Insert at the start of the marker's line, so text a user wrote before the marker on that line stays intact; if a
+			// closing marker shares that line, insert right at the opening marker instead (never inside the previous block).
+			if (other !== undefined && other > position) {
+				const lineStart = result.lastIndexOf("\n", match.index - 1) + 1;
+				before = /<!--\s*\/cmds-zotero:/.test(result.slice(lineStart, match.index)) ? match.index : lineStart;
+				break;
+			}
 		}
 		result = before === null ? spliceAnnotations(result, [block.text]) : `${result.slice(0, before)}${block.text}\n\n${result.slice(before)}`;
 	}

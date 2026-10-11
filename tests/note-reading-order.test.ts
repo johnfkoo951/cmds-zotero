@@ -93,3 +93,49 @@ test("a new block never splits text a user wrote before a later block's marker o
 	assert.deepEqual(updated.conflicts, []);
 	assert.match(updated.content, /<!-- \/cmds-zotero:annotation-ATTACH01-PAGE0001 -->\n\nMy aside\. <!-- cmds-zotero:annotation-ATTACH01-PAGE0009:/);
 });
+
+test("stripping an unsafe link can never rebuild a managed marker (escaping runs last)", () => {
+	const forged = `<[!--](foo) cmds-zotero:annotation-ATTACH01-PAGE0009:${"a".repeat(64)} --[>](foo)`;
+	const out = safeNoteMarkdown(forged);
+	assert.doesNotMatch(out, /<!--|-->/);
+	assert.doesNotMatch(noteBody("<p>x</p>", () => forged), /<!--\s*\/?\s*cmds-zotero/);
+	const closing = safeNoteMarkdown("<[!--](x) /cmds-zotero:notes --[>](x)");
+	assert.doesNotMatch(closing, /<!--|-->/);
+	// End to end: a forged child note leaves exactly the plugin's own markers and the next render has no conflicts.
+	const first = render(entryWith([annotation("PAGE0009", 9, "00008|000010|00010")], [{ note: "<p>x</p>" }]), null, () => forged).content;
+	const second = render(entryWith([annotation("PAGE0001", 1, "00000|000010|00010"), annotation("PAGE0009", 9, "00008|000010|00010")], [{ note: "<p>x</p>" }]), first, () => forged);
+	assert.deepEqual(second.conflicts, []);
+	assert.deepEqual(render(entryWith([annotation("PAGE0001", 1, "00000|000010|00010"), annotation("PAGE0009", 9, "00008|000010|00010")], [{ note: "<p>x</p>" }]), second.content, () => forged).conflicts, []);
+});
+
+test("links with bracketed labels and autolinks keep only safe targets", () => {
+	const out = safeNoteMarkdown("[see \\[1\\]](javascript:alert(1)) and [b [c] d](file:///x) and <javascript:alert(2)> and [ok \\[2\\]](https://example.org/a) ![fig \\[3\\]](file:///img.png)");
+	assert.doesNotMatch(out, /\]\((?:javascript|file):/i);
+	assert.doesNotMatch(out, /<javascript:/i);
+	assert.match(out, /\[ok \\\[2\\\]\]\(https:\/\/example\.org\/a\)/);
+	assert.match(out, /\*\(image in the Zotero note: fig \\\[3\\\]\)\*/);
+});
+
+test("code fences in Zotero notes are passed through unchanged", () => {
+	const out = safeNoteMarkdown("# Title\n\n```python\n# comment\n[x](javascript:y)\n```\n\n# After");
+	assert.match(out, /^### Title$/m);
+	assert.match(out, /```python\n# comment\n\[x\]\(javascript:y\)\n```/, "code inside the fence is the user's code");
+	assert.match(out, /^### After$/m);
+});
+
+test("a closing and an opening marker glued on one line never swallow the new block", () => {
+	const initial = render(entryWith([annotation("PAGE0002", 2, "00001|000010|00010"), annotation("PAGE0009", 9, "00008|000010|00010")]), null).content;
+	const glued = initial.replace(/(<!-- \/cmds-zotero:annotation-ATTACH01-PAGE0002 -->)\n+(<!-- cmds-zotero:annotation-ATTACH01-PAGE0009:)/, "$1 $2");
+	assert.notEqual(glued, initial);
+	const entry = entryWith([annotation("PAGE0002", 2, "00001|000010|00010"), annotation("PAGE0005", 5, "00004|000010|00010"), annotation("PAGE0009", 9, "00008|000010|00010")]);
+	const updated = render(entry, glued);
+	assert.deepEqual(updated.conflicts, []);
+	assert.deepEqual(render(entry, updated.content).conflicts, [], "the next render still parses every block");
+	const [two, five, nine] = positions(updated.content, ["PAGE0002", "PAGE0005", "PAGE0009"]);
+	assert(two < five && five < nine);
+});
+
+test("reading order keeps the listed order unless every annotation has a sort index", () => {
+	const mixed = [annotation("AAAA0001", 3, "00002|000010|00010"), annotation("BBBB0001", 2, undefined), annotation("CCCC0001", 1, "00000|000010|00010")];
+	assert.deepEqual(readingOrder(entryWith(mixed)).map(item => item.annotation.key), ["AAAA0001", "BBBB0001", "CCCC0001"]);
+});
