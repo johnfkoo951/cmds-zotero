@@ -8641,14 +8641,8 @@ function scanCitations(text4) {
       continue;
     }
     if (fenced) continue;
-    const bracketDepth = (offset) => {
-      let depth = 0;
-      for (let i = 0; i < offset; i++) {
-        if (line[i] === "[") depth++;
-        else if (line[i] === "]" && depth > 0) depth--;
-      }
-      return depth;
-    };
+    let depth = 0;
+    let folded = 0;
     CITATION.lastIndex = 0;
     let match;
     while ((match = CITATION.exec(line)) !== null) {
@@ -8658,8 +8652,12 @@ function scanCitations(text4) {
       }
       const prefix = match[2] ?? "";
       const column = match.index + prefix.length;
-      if (line.slice(0, column).endsWith("[[")) continue;
-      const form = bracketDepth(column) > 0 ? "pandoc" : "bare";
+      if (column >= 2 && line[column - 1] === "[" && line[column - 2] === "[") continue;
+      for (; folded < column; folded++) {
+        if (line[folded] === "[") depth++;
+        else if (line[folded] === "]" && depth > 0) depth--;
+      }
+      const form = depth > 0 ? "pandoc" : "bare";
       occurrences.push({ citekey: match[3], line: index, column, form });
     }
   }

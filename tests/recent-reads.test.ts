@@ -220,3 +220,67 @@ test("an unknown citekey without a matching item key is reported, not guessed", 
 		service.dispose();
 	} finally { await bbt.close(); }
 });
+
+// 0.6 PERF-12: recent rows resolve through the per-generation item-key and id maps, with the 0.5.0 results.
+import { recentFirst } from "../src/recent/recent-reads";
+
+/** 0.5.0 `indexEntryFor`: a scan of every entry per read. */
+function indexEntryFor050(read: { itemKey: string; libraryType: string; groupID?: number }, entries: readonly ZoteroIndexEntry[]): ZoteroIndexEntry | null {
+	return entries.find(entry => entry.itemKey === read.itemKey && entry.libraryType === read.libraryType && (entry.groupID ?? 0) === (read.groupID ?? 0)) ?? null;
+}
+
+/** 0.5.0 picker ordering (`pick()` in main.ts). */
+function pickOrder050(entries: ZoteroIndexEntry[], reads: { itemKey: string; libraryType: "user" | "group"; groupID?: number; readOn: string | null }[]): { ordered: ZoteroIndexEntry[]; readOn: Map<string, string | null> } {
+	const readOn = new Map<string, string | null>();
+	for (const read of reads) {
+		const entry = indexEntryFor050(read, entries);
+		if (entry && !readOn.has(entry.id)) readOn.set(entry.id, read.readOn);
+	}
+	const recent = [...readOn.keys()].flatMap(id => entries.filter(entry => entry.id === id));
+	return { ordered: [...recent, ...entries.filter(entry => !readOn.has(entry.id))], readOn };
+}
+
+function libraryEntries(): ZoteroIndexEntry[] {
+	const base = entryWith([]);
+	const make = (libraryID: number, itemKey: string, group?: number): ZoteroIndexEntry => ({ ...base, id: `${libraryID}:${itemKey}`, libraryID, itemKey, libraryType: group === undefined ? "user" : "group", ...(group === undefined ? {} : { groupID: group }), citekey: `c${libraryID}${itemKey}` });
+	const entries: ZoteroIndexEntry[] = [];
+	for (let i = 0; i < 40; i++) {
+		const key = `K${String(i % 15).padStart(3, "0")}2345`;
+		entries.push(i % 3 === 0 ? make(2, `${key.slice(0, 4)}${i}`.padEnd(8, "Z").slice(0, 8), 4242) : i % 3 === 1 ? make(1, key) : make(3 + (i % 2), key, 900 + (i % 2)));
+	}
+	// The same key in the user library and in two groups; a group whose ID collides with "no group" (0) is not the user library.
+	entries.push(make(5, "SAME2345", 7), make(1, "SAME2345"), make(6, "SAME2345", 8), make(7, "ZERO2345", 0));
+	return entries;
+}
+
+test("0.6 PERF-12: indexEntryFor through the item-key map returns the 0.5.0 entry for every library scope", () => {
+	const entries = libraryEntries();
+	const reads = [
+		...entries.map(entry => ({ itemKey: entry.itemKey, libraryType: entry.libraryType, ...(entry.groupID === undefined ? {} : { groupID: entry.groupID }) })),
+		{ itemKey: "SAME2345", libraryType: "group", groupID: 8 }, { itemKey: "SAME2345", libraryType: "group" }, { itemKey: "SAME2345", libraryType: "user", groupID: 0 },
+		{ itemKey: "ZERO2345", libraryType: "user" }, { itemKey: "ZERO2345", libraryType: "group" }, { itemKey: "ZERO2345", libraryType: "group", groupID: 0 },
+		{ itemKey: "NONE2345", libraryType: "user" }, { itemKey: "K0012345", libraryType: "group", groupID: 900 }, { itemKey: "K0012345", libraryType: "group", groupID: 901 },
+	];
+	for (const read of reads) assert.equal(indexEntryFor(read, entries), indexEntryFor050(read, entries), JSON.stringify(read));
+	assert.equal(indexEntryFor({ itemKey: "ZERO2345", libraryType: "group" }, entries)?.id, "7:ZERO2345", "groupID 0 and an absent groupID compare equal, as before");
+});
+
+test("0.6 PERF-12: recentFirst orders the picker exactly as 0.5.0 did: recent reads first, once each, then index order", () => {
+	const entries = libraryEntries();
+	const reads = [
+		{ itemKey: "SAME2345", libraryType: "group" as const, groupID: 8, readOn: "2026-10-12" },
+		{ itemKey: "NONE2345", libraryType: "user" as const, readOn: "2026-10-12" },
+		{ itemKey: "K0042345", libraryType: "user" as const, readOn: "2026-10-11" },
+		{ itemKey: "SAME2345", libraryType: "group" as const, groupID: 8, readOn: "2026-10-01" },
+		{ itemKey: "K0052345", libraryType: "group" as const, groupID: 901, readOn: null },
+		{ itemKey: "SAME2345", libraryType: "user" as const, readOn: "2026-09-30" },
+	];
+	const expected = pickOrder050(entries, reads);
+	const actual = recentFirst(entries, reads);
+	assert.deepEqual(actual.ordered.map(entry => entry.id), expected.ordered.map(entry => entry.id));
+	actual.ordered.forEach((entry, index) => assert.equal(entry, expected.ordered[index]));
+	assert.deepEqual([...actual.readOn], [...expected.readOn]);
+	assert.deepEqual([...actual.readOn.values()], ["2026-10-12", "2026-10-11", null, "2026-09-30"], "the first read of an entry keeps its day");
+	assert.deepEqual(recentFirst(entries, []).ordered, entries);
+	assert.equal(recentFirst(entries, reads).ordered.length, entries.length, "every entry is listed once");
+});

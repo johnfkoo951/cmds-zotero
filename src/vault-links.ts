@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 import { compareNoteRows, listsAdvancedUri, obsidianOpenURI, peerNoteURI } from "./uris";
-import { buildAliasIndex, noteIdentity } from "./note-aliases";
+import { noteIdentity } from "./note-aliases";
+import { indexDerived } from "./index-derived";
 import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory, relativePath } from "./vault-storage";
 
 const MAP_PATH = ".cmds-zotero/note-map.json";
@@ -30,10 +31,11 @@ export class VaultLinks {
 
 	/**
 	 * 0.5 R13/F06: every Markdown note this plugin recognizes as a literature note, grouped by index entry id, in one pass
-	 * over the vault (one alias index, one metadata-cache lookup per file). Paths within an entry are sorted.
+	 * over the vault (one alias index, one metadata-cache lookup per file). Paths within an entry are sorted. The alias
+	 * index is built once per index generation (0.6 PERF-05), not on every publication after an edit.
 	 */
 	localFilesByEntry(index: ZoteroIndex): Map<string, TFile[]> {
-		const lookup = buildAliasIndex(index.entries);
+		const lookup = indexDerived(index.entries).aliasIndex;
 		const byEntry = new Map<string, TFile[]>();
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			const fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(file)?.frontmatter;

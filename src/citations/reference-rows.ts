@@ -1,6 +1,7 @@
 import type { ZoteroIndexEntry } from "../types";
 import { scanCitations } from "./scan";
 import { formatIndexAge } from "../index-service";
+import { indexDerived } from "../index-derived";
 import type { BibliographyDetail } from "../bibliography-store"; // 0.5 R12
 
 /** `unchecked`: no index snapshot is loaded, so the row makes no claim about the citekey. */
@@ -21,17 +22,17 @@ export interface SnapshotState { loaded: boolean; stale: boolean; ageMinutes: nu
  * Resolves every distinct citekey in `text` against the published entries (current citekeys and history). Without a
  * loaded snapshot every row is `unchecked`; a negative (`not-found`) is only ever claimed against a loaded snapshot.
  */
-export function resolveReferenceRows(text: string, entries: ZoteroIndexEntry[], loaded: boolean): ReferenceRow[] {
-	const byKey = new Map<string, ZoteroIndexEntry[]>();
-	for (const entry of entries) for (const alias of new Set([entry.citekey, ...entry.citekeyHistory])) (byKey.get(alias) ?? byKey.set(alias, []).get(alias))?.push(entry);
+export function resolveReferenceRows(text: string, entries: readonly ZoteroIndexEntry[], loaded: boolean): ReferenceRow[] {
+	// 0.6 PERF-05: the citekey map (current keys and history) is built once per index generation, not on every render.
+	const derived = indexDerived(entries);
 	const rows: ReferenceRow[] = [];
 	const seen = new Set<string>();
 	for (const occurrence of scanCitations(text)) {
 		if (seen.has(occurrence.citekey)) continue;
 		seen.add(occurrence.citekey);
-		const matches = byKey.get(occurrence.citekey) ?? [];
+		const matches = derived.entriesWithCitekey(occurrence.citekey);
 		if (matches.length === 1) rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "resolved", entry: matches[0] });
-		else if (matches.length > 1) rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "ambiguous", candidates: matches });
+		else if (matches.length > 1) rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "ambiguous", candidates: [...matches] });
 		else rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: loaded ? "not-found" : "unchecked" });
 	}
 	return rows;
