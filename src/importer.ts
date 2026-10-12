@@ -128,7 +128,7 @@ export class ImportService {
 			for (const image of pending) {
 				await this.ensureParent(image.path);
 				await this.checkPath(image.path);
-				await this.app.vault.createBinary(image.path, image.bytes.buffer as ArrayBuffer);
+				await this.app.vault.createBinary(image.path, image.bytes.buffer);
 			}
 			await this.ensureParent(path);
 			await this.checkPath(path);

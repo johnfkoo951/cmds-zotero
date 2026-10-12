@@ -116,7 +116,7 @@ export async function runAction(input: OfflineRunInput): Promise<Record<string, 
 	const action = input.action as AgentAction;
 	const host = await offlineHost(input, action);
 	if ("failure" in host) return host.failure;
-	try { return await dispatch(host, action, input.request ?? {}) as Record<string, unknown>; }
+	try { return await dispatch(host, action, input.request ?? {}); }
 	catch (error) {
 		const message = error instanceof Error ? error.message : "Offline action failed.";
 		// 0.5 R13/F08: typed local-file refusals map by code before any message pattern.

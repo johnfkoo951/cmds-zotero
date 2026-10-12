@@ -464,7 +464,7 @@ export async function diagnosticsAction(host: ActionHost, request: CommonRequest
 	const view = index.view;
 	const diagnostics: (Diagnostic | AgentDiagnostic)[] = [...view.index.diagnostics];
 	const listed = await host.reader.listNotes();
-	for (const note of listed) if (note.frontmatter?.citekeyProvisional === true) diagnostics.push({ code: "provisional-citekey", severity: "warning", message: `Provisional citekey: ${note.path}. Pin it in Zotero; do not rename the note automatically.`, path: note.path } as AgentDiagnostic);
+	for (const note of listed) if (note.frontmatter?.citekeyProvisional === true) diagnostics.push({ code: "provisional-citekey", severity: "warning", message: `Provisional citekey: ${note.path}. Pin it in Zotero; do not rename the note automatically.`, path: note.path });
 	const { result } = await reconcileDryRun(host, { allowStale: request.allowStale }, listed);
 	diagnostics.push(...result.diagnostics);
 	const citing = listed.filter(note => typeof note.frontmatter?.type === "string" && ["research-question", "synthesis"].includes(note.frontmatter.type));
