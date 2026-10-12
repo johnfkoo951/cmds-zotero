@@ -41,7 +41,7 @@ function offlineService(port: number, stored: ZoteroIndex | null): { bbt: BbtSer
 	return { bbt, index };
 }
 
-/** The live host's refresh handler, as main.ts and ingest-api.ts rebuild it: a stale-fallback is a refusal carrying the outcome's cause. */
+/** The live host's refresh handler, as plugin/agent-host.ts and ingest-api.ts rebuild it: a stale-fallback is a refusal carrying the outcome's cause. */
 function hostFor(index: IndexService, stored: ZoteroIndex): ActionHost {
 	const now = new Date();
 	const connection = buildConnection({ mode: "live", obsidian: "ok", pluginVersion: "0.5.0", pluginApiVersions: [1, 2], pluginEnabled: true, bbt: { reachable: null }, index: { source: "plugin", path: "80. References/zotero-index.json", generatedAt: stored.generatedAt, count: 1, complete: true, schemaVersion: 2 }, maxAgeMinutes: 60, legacyPluginEnabled: false, git: null, now });

@@ -1,6 +1,6 @@
 /**
- * 0.5 R13/F08: the one guarded read-and-hash of a vault PDF shared by the live host (main.ts) and the offline CLI
- * (cli/core.ts), so both classify a present-but-refused file identically. Pure Node: never imports `obsidian`.
+ * 0.5 R13/F08: the one guarded read-and-hash of a vault PDF shared by the live host (plugin/agent-host.ts) and the
+ * offline CLI (cli/core.ts), so both classify a present-but-refused file identically. Pure Node: never imports `obsidian`.
  */
 import { createHash } from "node:crypto";
 import { LocalFileError, readLocalFile } from "../local-file";
