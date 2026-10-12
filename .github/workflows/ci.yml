@@ -12,8 +12,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
@@ -23,9 +23,11 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node scripts/sanitize.mjs
+      - name: Generated files match the committed ones
+        run: git diff --exit-code -- scripts/ingest-core.mjs && node scripts/sync-contract.mjs --check
       - name: Validate version files
         run: node scripts/verify-release.mjs "$(node -p 'require("./manifest.json").version')"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: cmds-zotero-build
           if-no-files-found: error

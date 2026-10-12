@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { migrate } from '../scripts/migrate-local.mjs';
 import { bumpVersion } from '../scripts/version-bump.mjs';
 import { verifyRelease } from '../scripts/verify-release.mjs';
+import { changelogSection } from '../scripts/release-notes.mjs';
 import { scanText, sanitize } from '../scripts/sanitize.mjs';
 
 const OLD = 'cmds-link-zotero';
@@ -148,6 +149,17 @@ test('version bump and release verification synchronize all four files', async t
   await assert.rejects(verifyRelease('v0.2.1', f.source), /semver/);
   await assert.rejects(verifyRelease('0.2.0', f.source), /differ/);
   await assert.rejects(bumpVersion(f.source, '01.2.1'), /semver/);
+});
+
+test('release notes are the dated CHANGELOG section of the tag', () => {
+  const changelog = '# Changelog\n\n## 0.6.0 — 2026-10-13\n\n- New.\n\n### Fixes\n\n- Fixed.\n\n## 0.5.0 — 2026-10-12\n\n- Old.\n';
+  assert.equal(changelogSection(changelog, '0.6.0'), '- New.\n\n### Fixes\n\n- Fixed.');
+  assert.equal(changelogSection(changelog, '0.5.0'), '- Old.');
+  assert.throws(() => changelogSection(changelog, '0.6.1'), /no "## 0.6.1" section/);
+  assert.throws(() => changelogSection('## 0.6.0-beta.1 — 2026-10-13\n\n- Beta.\n', '0.6.0'), /no "## 0.6.0" section/);
+  assert.throws(() => changelogSection('## 0.6.0 — Development, unreleased\n\n- Draft.\n', '0.6.0'), /unreleased/);
+  assert.throws(() => changelogSection('## 0.6.0 — 2026-10-13\n\n## 0.5.0 — 2026-10-12\n\n- Old.\n', '0.6.0'), /empty/);
+  assert.throws(() => changelogSection(changelog, 'v0.6.0'), /semver/);
 });
 
 test('sanitizer detects concrete sensitive strings without reporting itself', async () => {
