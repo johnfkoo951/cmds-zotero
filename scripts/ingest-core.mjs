@@ -6918,14 +6918,14 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs5 = this.flowScalar(this.type);
+              const fs6 = this.flowScalar(this.type);
               if (atNextItem || it.value) {
-                map.items.push({ start, key: fs5, sep: [] });
+                map.items.push({ start, key: fs6, sep: [] });
                 this.onKeyLine = true;
               } else if (it.sep) {
-                this.stack.push(fs5);
+                this.stack.push(fs6);
               } else {
-                Object.assign(it, { key: fs5, sep: [] });
+                Object.assign(it, { key: fs6, sep: [] });
                 this.onKeyLine = true;
               }
               return;
@@ -7053,13 +7053,13 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs5 = this.flowScalar(this.type);
+              const fs6 = this.flowScalar(this.type);
               if (!it || it.value)
-                fc.items.push({ start: [], key: fs5, sep: [] });
+                fc.items.push({ start: [], key: fs6, sep: [] });
               else if (it.sep)
-                this.stack.push(fs5);
+                this.stack.push(fs6);
               else
-                Object.assign(it, { key: fs5, sep: [] });
+                Object.assign(it, { key: fs6, sep: [] });
               return;
             }
             case "flow-map-end":
@@ -7368,8 +7368,8 @@ var require_dist = __commonJS({
 });
 
 // src/cli/core.ts
-import { promises as fs4 } from "node:fs";
-import { basename as basename2, join as join3, relative as relative2, sep as sep2 } from "node:path";
+import { promises as fs5 } from "node:fs";
+import { basename as basename2, join as join4, relative as relative2, sep as sep2 } from "node:path";
 
 // src/identity.ts
 import { createHash } from "crypto";
@@ -9699,6 +9699,16 @@ function reconcileNotes(notes, index, vault, opts) {
   return { folders, scanned: { hubs, rawSources, parseErrors }, notes: results, summary: { hubs: summary }, diagnostics };
 }
 
+// src/agent/note-lookup.ts
+function notePathCandidates(path) {
+  const clean = path.replace(/^\/+|\/+$/g, "");
+  return [clean, `${clean}.md`];
+}
+function findNote(notes, path) {
+  const [clean, withExtension] = notePathCandidates(path);
+  return notes.find((note) => note.path === clean || note.path === withExtension) ?? null;
+}
+
 // src/pdf/cache.ts
 import { createHash as createHash2 } from "node:crypto";
 var PDF_TEXT_CACHE_DIR = ".cmds-zotero/pdf-text";
@@ -10170,10 +10180,6 @@ function toRefMaps(indexes, vault) {
   const convert = (source) => new Map([...source].map(([key, records]) => [key, records.map((record2) => noteRef(vault, record2.path))]));
   return { hubByCitekey: convert(indexes.hubByCitekey), rawByCitekey: convert(indexes.rawByCitekey), hubByDoi: convert(indexes.hubByDoi), rawByDoi: convert(indexes.rawByDoi), skipped: indexes.skipped };
 }
-function findNote(notes, path) {
-  const clean = path.replace(/^\/+|\/+$/g, "");
-  return notes.find((note) => note.path === clean || note.path === `${clean}.md`) ?? null;
-}
 function outsideVault(path) {
   return /^[a-z]+:/i.test(path) || path.includes("\\") || path.includes("\0") || path.split("/").some((part) => part === "..");
 }
@@ -10442,7 +10448,7 @@ async function locateAction(host, request) {
   if (request.path) {
     const cleanPath = request.path.replace(/^\/+|\/+$/g, "");
     if (outsideVault(cleanPath)) return { ...envelope(host, "locate", 2, { reason: "path-outside-vault", message: `Note path is outside the vault: ${request.path}` }) };
-    const note = findNote(await host.reader.listNotes(), cleanPath);
+    const note = host.reader.findNote ? await host.reader.findNote(cleanPath) : findNote(await host.reader.listNotes(), cleanPath);
     if (!note) return { ...envelope(host, "locate", 2, { reason: "invalid-request", message: `Note not found: ${request.path}` }) };
     const body = await host.reader.readNote(note.path);
     const fmKey = typeof note.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;
@@ -10726,9 +10732,9 @@ async function probeBbt(endpoint, timeoutMs = 5e3) {
 
 // src/cli/fs-vault.ts
 var import_yaml = __toESM(require_dist());
-import { promises as fs2 } from "node:fs";
+import { promises as fs3 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute as isAbsolute2, join, relative, resolve as resolve2, sep } from "node:path";
+import { basename, isAbsolute as isAbsolute2, join as join2, relative, resolve as resolve2, sep } from "node:path";
 
 // src/local-file.ts
 import { constants, promises as fs } from "fs";
@@ -10793,19 +10799,74 @@ function parseNoteText(text4, parse) {
   }
 }
 
+// src/vault-scan.ts
+import { promises as fs2 } from "node:fs";
+import { join } from "node:path";
+var SCAN_CONCURRENCY = 8;
+async function* each(items) {
+  yield* items;
+}
+function startSettled(start, item) {
+  let work;
+  try {
+    work = start(item);
+  } catch (error) {
+    return Promise.resolve({ ok: false, error });
+  }
+  return work ? work.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error })) : null;
+}
+async function scanInOrder(source, concurrency, start, visit) {
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Concurrency must be a positive integer");
+  const iterator = Symbol.asyncIterator in source ? source[Symbol.asyncIterator]() : each(source);
+  const queue = [];
+  let inFlight = 0;
+  let exhausted = false;
+  try {
+    for (; ; ) {
+      while (!exhausted && inFlight < concurrency) {
+        const next = await iterator.next();
+        if (next.done) {
+          exhausted = true;
+          break;
+        }
+        const outcome2 = startSettled(start, next.value);
+        if (outcome2) inFlight++;
+        queue.push({ item: next.value, outcome: outcome2 });
+      }
+      const head = queue.shift();
+      if (!head) return;
+      let outcome = null;
+      if (head.outcome) {
+        outcome = await head.outcome;
+        inFlight--;
+      }
+      if (!visit(head.item, outcome)) return;
+    }
+  } finally {
+    await Promise.all(queue.flatMap((entry) => entry.outcome ? [entry.outcome] : []));
+    if (!exhausted) await iterator.return?.();
+  }
+}
+
 // src/cli/fs-vault.ts
 var MAX_LISTED_NOTES = 2e4;
 var MAX_NOTE_BYTES = 2 * 1024 * 1024;
+var DEFAULT_CONFIG_DIR = ".obsidian";
+function configDirOf(value) {
+  if (value === null || value === void 0) return DEFAULT_CONFIG_DIR;
+  if (!/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
+  return value;
+}
 async function locateVault(name, explicitPath, home = homedir()) {
   if (explicitPath) {
     if (!isAbsolute2(explicitPath)) throw new Error("--vault-path must be absolute");
-    const real = await fs2.realpath(explicitPath);
+    const real = await fs3.realpath(explicitPath);
     return { location: { name, path: real }, ambiguous: false, candidates: [real] };
   }
-  const registry = join(home, "Library", "Application Support", "obsidian", "obsidian.json");
+  const registry = join2(home, "Library", "Application Support", "obsidian", "obsidian.json");
   let raw;
   try {
-    raw = JSON.parse(await fs2.readFile(registry, "utf8"));
+    raw = JSON.parse(await fs3.readFile(registry, "utf8"));
   } catch {
     return { location: null, ambiguous: false, candidates: [] };
   }
@@ -10818,15 +10879,17 @@ async function locateVault(name, explicitPath, home = homedir()) {
     }
   }
   if (candidates.length !== 1) return { location: null, ambiguous: candidates.length > 1, candidates };
-  return { location: { name, path: await fs2.realpath(candidates[0]) }, ambiguous: false, candidates };
+  return { location: { name, path: await fs3.realpath(candidates[0]) }, ambiguous: false, candidates };
 }
 function parseFrontmatter(text4) {
   return parseNoteText(text4, import_yaml.parse);
 }
 var FsVaultReader = class {
-  constructor(root, name) {
+  /** `limit` is the note cap of one scan (MAX_LISTED_NOTES); tests lower it. */
+  constructor(root, name, limit = MAX_LISTED_NOTES) {
     this.root = root;
     this.name = name;
+    this.limit = limit;
     this.report = { skipped: [], truncated: false };
   }
   scanWarnings() {
@@ -10840,60 +10903,94 @@ var FsVaultReader = class {
     const target = resolve2(this.root, path);
     const rel = relative(this.root, target);
     if (!rel || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute2(rel)) throw new Error("Path escapes the vault.");
-    const real = await fs2.realpath(target);
+    const real = await fs3.realpath(target);
     if (real !== target) throw new Error("Path resolves outside the vault.");
     return target;
+  }
+  /**
+   * The scan order: depth first, each folder sorted by name, one event per folder visit and per entry (every event is
+   * where the note cap is checked). An unreadable folder and a symbolic link are skipped; dot-folders are not entered.
+   */
+  async *walk(dir) {
+    yield { kind: "pass" };
+    let entries;
+    try {
+      entries = await fs3.readdir(dir, { withFileTypes: true });
+    } catch {
+      yield { kind: "skip", path: relative(this.root, dir) };
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const full = join2(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        yield { kind: "skip", path: relative(this.root, full) };
+        continue;
+      }
+      if (entry.isDirectory()) {
+        yield { kind: "pass" };
+        if (!entry.name.startsWith(".")) yield* this.walk(full);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".md")) {
+        yield { kind: "pass" };
+        continue;
+      }
+      yield { kind: "note", path: relative(this.root, full).split(sep).join("/"), basename: entry.name.replace(/\.md$/, "") };
+    }
   }
   async listNotes() {
     const notes = [];
     this.report = { skipped: [], truncated: false };
-    const walk = async (dir) => {
-      if (notes.length >= MAX_LISTED_NOTES) {
+    await scanInOrder(this.walk(this.root), SCAN_CONCURRENCY, (event) => event.kind === "note" ? this.readNote(event.path).then(parseFrontmatter) : null, (event, outcome) => {
+      if (notes.length >= this.limit) {
         this.report.truncated = true;
-        return;
+        return false;
       }
-      let entries;
-      try {
-        entries = await fs2.readdir(dir, { withFileTypes: true });
-      } catch {
-        this.report.skipped.push(relative(this.root, dir));
-        return;
+      if (event.kind === "skip") {
+        this.report.skipped.push(event.path);
+        return true;
       }
-      entries.sort((a, b) => a.name.localeCompare(b.name));
-      for (const entry of entries) {
-        if (notes.length >= MAX_LISTED_NOTES) {
-          this.report.truncated = true;
-          return;
-        }
-        if (entry.isSymbolicLink()) {
-          this.report.skipped.push(relative(this.root, join(dir, entry.name)));
-          continue;
-        }
-        const full = join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (!entry.name.startsWith(".")) await walk(full);
-          continue;
-        }
-        if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-        const relPath = relative(this.root, full).split(sep).join("/");
-        let text4;
-        try {
-          text4 = await this.readNote(relPath);
-        } catch {
-          this.report.skipped.push(relPath);
-          continue;
-        }
-        const parsed = parseFrontmatter(text4);
-        if (parsed.frontmatterParse === "error") this.report.skipped.push(relPath);
-        notes.push({ path: relPath, basename: entry.name.replace(/\.md$/, ""), frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse });
+      if (event.kind === "pass") return true;
+      if (!outcome?.ok) {
+        this.report.skipped.push(event.path);
+        return true;
       }
-    };
-    await walk(this.root);
+      if (outcome.value.frontmatterParse === "error") this.report.skipped.push(event.path);
+      notes.push({ path: event.path, basename: event.basename, frontmatter: outcome.value.frontmatter, frontmatterParse: outcome.value.frontmatterParse });
+      return true;
+    });
     return notes;
+  }
+  /**
+   * PERF-07: the answer of `findNote(await this.listNotes(), path)` without reading every note. A candidate that is not a
+   * regular file cannot be listed; otherwise the walk runs only up to it (no reads) and reads just that file. Notes the
+   * walk passes are counted, so a candidate that a capped scan could miss is answered by the scan itself (the only case
+   * that updates the scan report).
+   */
+  async findNote(path) {
+    const candidates = notePathCandidates(path);
+    const present2 = await Promise.all(candidates.map((candidate2) => fs3.lstat(join2(this.root, candidate2)).then((stat) => stat.isFile(), () => false)));
+    if (!present2.some(Boolean)) return null;
+    const wanted = new Set(candidates);
+    let passed = 0;
+    for await (const event of this.walk(this.root)) {
+      if (event.kind !== "note") continue;
+      if (wanted.has(event.path)) {
+        if (passed >= this.limit) return findNote(await this.listNotes(), path);
+        try {
+          const parsed = parseFrontmatter(await this.readNote(event.path));
+          return { path: event.path, basename: event.basename, frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse };
+        } catch {
+        }
+      }
+      passed++;
+    }
+    return null;
   }
   async readNote(path) {
     const full = await this.resolveInside(path);
-    const stat = await fs2.stat(full);
+    const stat = await fs3.stat(full);
     if (!stat.isFile()) throw new Error(`Note not found: ${path}`);
     if (stat.size > MAX_NOTE_BYTES) throw new Error(`Note exceeds ${MAX_NOTE_BYTES / 1024 / 1024} MiB: ${path}`);
     return Buffer.from((await readLocalFile(full, { maxBytes: MAX_NOTE_BYTES, minBytes: 0, magic: () => true })).bytes).toString("utf8");
@@ -10901,7 +10998,7 @@ var FsVaultReader = class {
   async exists(path) {
     try {
       const full = await this.resolveInside(path);
-      return (await fs2.stat(full)).isFile();
+      return (await fs3.stat(full)).isFile();
     } catch {
       return false;
     }
@@ -10909,7 +11006,7 @@ var FsVaultReader = class {
   async readText(path, maxBytes) {
     try {
       const full = await this.resolveInside(path);
-      const stat = await fs2.stat(full);
+      const stat = await fs3.stat(full);
       if (!stat.isFile() || stat.size > maxBytes) return null;
       return Buffer.from((await readLocalFile(full, { maxBytes, minBytes: 0, magic: () => true })).bytes).toString("utf8");
     } catch {
@@ -10919,7 +11016,7 @@ var FsVaultReader = class {
   async statFile(path) {
     try {
       const full = await this.resolveInside(path);
-      const stat = await fs2.stat(full);
+      const stat = await fs3.stat(full);
       return stat.isFile() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null;
     } catch {
       return null;
@@ -10928,7 +11025,7 @@ var FsVaultReader = class {
   async listDir(path) {
     try {
       const full = await this.resolveInside(path);
-      return (await fs2.readdir(full)).sort();
+      return (await fs3.readdir(full)).sort();
     } catch {
       return [];
     }
@@ -10936,31 +11033,31 @@ var FsVaultReader = class {
   async isDirectory(path) {
     try {
       const full = await this.resolveInside(path);
-      return (await fs2.stat(full)).isDirectory();
+      return (await fs3.stat(full)).isDirectory();
     } catch {
       return false;
     }
   }
 };
-async function readPluginSettings(root) {
+async function readPluginSettings(root, configDir = DEFAULT_CONFIG_DIR) {
   try {
-    const raw = JSON.parse(await fs2.readFile(join(root, ".obsidian", "plugins", "cmds-zotero", "data.json"), "utf8"));
+    const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
     return { settings: normalizeSettings(raw), present: true };
   } catch {
     return { settings: normalizeSettings({}), present: false };
   }
 }
-async function readEnabledPlugins(root) {
+async function readEnabledPlugins(root, configDir = DEFAULT_CONFIG_DIR) {
   try {
-    const raw = JSON.parse(await fs2.readFile(join(root, ".obsidian", "community-plugins.json"), "utf8"));
+    const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "community-plugins.json"), "utf8"));
     return Array.isArray(raw) ? raw.filter((v) => typeof v === "string") : null;
   } catch {
     return null;
   }
 }
-async function readInstalledPluginVersion(root) {
+async function readInstalledPluginVersion(root, configDir = DEFAULT_CONFIG_DIR) {
   try {
-    const raw = JSON.parse(await fs2.readFile(join(root, ".obsidian", "plugins", "cmds-zotero", "manifest.json"), "utf8"));
+    const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "manifest.json"), "utf8"));
     const version = raw && typeof raw === "object" ? raw.version : void 0;
     return typeof version === "string" ? version : null;
   } catch {
@@ -10970,21 +11067,22 @@ async function readInstalledPluginVersion(root) {
 
 // src/git-probe.ts
 import { execFile } from "node:child_process";
-import { promises as fs3 } from "node:fs";
-import { join as join2 } from "node:path";
+import { promises as fs4 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join3 } from "node:path";
 import { promisify } from "node:util";
 var execute = promisify(execFile);
 var MAX_IGNORE_BYTES = 256 * 1024;
 async function ignoreText(root, name) {
   try {
-    return Buffer.from((await readLocalFile(join2(root, name), { maxBytes: MAX_IGNORE_BYTES, minBytes: 0, magic: () => true })).bytes).toString("utf8");
+    return Buffer.from((await readLocalFile(join3(root, name), { maxBytes: MAX_IGNORE_BYTES, minBytes: 0, magic: () => true })).bytes).toString("utf8");
   } catch {
     return null;
   }
 }
 async function probeGit(root, indexPath) {
   try {
-    await fs3.lstat(join2(root, ".git"));
+    await fs4.lstat(join3(root, ".git"));
   } catch {
     return { repo: false, indexIgnored: null, cacheIgnored: null, indexTracked: null, cacheTracked: null };
   }
@@ -11059,8 +11157,8 @@ function cacheReader(reader) {
     read: (path) => reader.readText(path, 32 * 1024 * 1024),
     statLocal: async (path) => {
       try {
-        if (await fs4.realpath(path) !== path) return null;
-        const stat = await fs4.lstat(path);
+        if (await fs5.realpath(path) !== path) return null;
+        const stat = await fs5.lstat(path);
         return stat.isFile() && !stat.isSymbolicLink() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null;
       } catch {
         return null;
@@ -11083,13 +11181,13 @@ async function pdfPaths(root) {
     if (output.length >= 2e4) return;
     let entries;
     try {
-      entries = await fs4.readdir(dir, { withFileTypes: true });
+      entries = await fs5.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of entries) {
       if (entry.isSymbolicLink() || entry.name.startsWith(".")) continue;
-      const full = join3(dir, entry.name);
+      const full = join4(dir, entry.name);
       if (entry.isDirectory()) await walk(full);
       else if (entry.isFile() && entry.name.toLowerCase().endsWith(".pdf")) output.push(relative2(root, full).split(sep2).join("/"));
     }
@@ -11099,6 +11197,7 @@ async function pdfPaths(root) {
 }
 async function offlineHost(input, action) {
   const now = input.now ?? /* @__PURE__ */ new Date();
+  const configDir = configDirOf(input.configDir);
   const located = await locateVault(input.vault, input.vaultPath ?? null);
   if (!located.location) {
     const reason = located.ambiguous ? "ambiguous-vault-path" : "path-outside-vault";
@@ -11108,7 +11207,7 @@ async function offlineHost(input, action) {
   }
   const root = located.location.path;
   const reader = new FsVaultReader(root, input.vault);
-  const [{ settings, present: settingsPresent }, enabled, version] = await Promise.all([readPluginSettings(root), readEnabledPlugins(root), readInstalledPluginVersion(root)]);
+  const [{ settings, present: settingsPresent }, enabled, version] = await Promise.all([readPluginSettings(root, configDir), readEnabledPlugins(root, configDir), readInstalledPluginVersion(root, configDir)]);
   const loaded = await readIndex(root, settings.zoteroIndexPath);
   const bbt = action === "connection" ? await probeBbt(settings.bbtEndpoint) : { reachable: null };
   const connection = buildConnection({

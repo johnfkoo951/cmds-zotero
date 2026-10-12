@@ -9,8 +9,11 @@
 // A submission with unknown outcome is never repeated. After acceptance every bridge failure (empty output or a
 // transport error) is retried until the --timeout deadline, then reported as timeout.
 // Completed results persist in the plugin until this script acknowledges them (p.service.ackJob) or their TTL.
-// CMDS_ZOTERO_POLL_MS overrides the poll deadline in milliseconds instead of --timeout seconds. It is honoured only
-// inside the node test runner (NODE_TEST_CONTEXT set) so user shells cannot bypass the --timeout bounds.
+// Job polls back off (PERF-09): 50, 100, 200 and 400 ms after the first four polls, then every 500 ms until the deadline;
+// pre-submission discovery retries keep their fixed 500 ms.
+// CMDS_ZOTERO_POLL_MS overrides the poll deadline in milliseconds instead of --timeout seconds, and CMDS_ZOTERO_DELAY_MS
+// replaces every discovery-retry and poll delay (PERF-10). Both are honoured only inside the node test runner
+// (NODE_TEST_CONTEXT set) so user shells cannot bypass the --timeout bounds or the polling pace.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -34,6 +37,7 @@ const LIVE_ONLY = new Set(['refresh', 'pdf-text', 'recent', 'import']);
 const FLAGS = {
 	'--vault': { type: 'string', actions: null, help: 'Vault name (required)' },
 	'--vault-path': { type: 'string', actions: null, help: 'Absolute vault path for offline mode (else resolved from obsidian.json)' },
+	'--config-dir': { type: 'string', actions: null, help: "The vault's configuration folder for offline mode when it is not .obsidian (one name starting with a dot)" },
 	'--action': { type: 'string', actions: null, help: V1_ACTIONS.concat(V2_ACTIONS).join('|') },
 	'--offline': { type: 'boolean', actions: null, help: 'Skip the Obsidian bridge and answer from the index file' },
 	'--allow-stale': { type: 'boolean', actions: ['resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'import'], help: 'Accept negative verdicts from a stale index; import: use the saved index when Zotero cannot be read fresh' },
@@ -137,6 +141,8 @@ if (action === 'import') {
 	if (given.length !== 1) fail('import needs exactly one selector: --citekey | --item-key --library.');
 	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
 }
+// HYG-02: the offline core joins this name onto the vault root, so it must stay a single dot-folder segment.
+if ('--config-dir' in parsed.values && (!/^\.[^/\\]+$/.test(parsed.values['--config-dir']) || parsed.values['--config-dir'] === '..' || parsed.values['--config-dir'].includes('\0'))) fail('--config-dir must be one folder name that starts with a dot.');
 // 0.5 R10
 const BIBLIOGRAPHY_FORMATS = ['text', 'markdown', 'csl-json', 'bibtex', 'biblatex'];
 if (action === 'cites' && '--format' in parsed.values && !BIBLIOGRAPHY_FORMATS.includes(parsed.values['--format'])) fail(`--format must be one of ${BIBLIOGRAPHY_FORMATS.join(', ')}.`);
@@ -147,12 +153,18 @@ const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
 const pollOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
+const delayOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_DELAY_MS ?? '') ? Number(process.env.CMDS_ZOTERO_DELAY_MS) : null;
 const timeoutMs = pollOverride ?? (parsed.values['--timeout'] ?? (action === 'pdf-text' ? 900 : 300)) * 1000;
 const offline = parsed.values['--offline'] === true;
 // 0.5 R10: a cites request that writes a sidecar is a live write, like reconcile --apply.
 const liveWrite = LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply === true) || (action === 'cites' && request.out !== undefined);
 const TRANSIENT_DELAY_MS = 500;
 const DISCOVERY_RETRIES = 3;
+// PERF-09: most jobs finish within a few hundred milliseconds, so the first polls come quickly; the 500 ms ceiling keeps
+// the steady pace at two obsidian CLI spawns per second, as before.
+const POLL_DELAYS_MS = [50, 100, 200, 400, 500];
+const discoveryDelay = () => delayOverride ?? TRANSIENT_DELAY_MS;
+const pollDelay = polls => delayOverride ?? POLL_DELAYS_MS[Math.min(polls, POLL_DELAYS_MS.length) - 1];
 // Throws raised by the eval wrapper itself or by the plugin's lifecycle/capacity guards: the plugin is not (usably)
 // present, so they stay requires-obsidian. Every other startJob throw is the plugin validating the request.
 const LIFECYCLE_ERROR = /is not loaded|Wrong vault|was unloaded|Too many active/;
@@ -184,7 +196,7 @@ function evaluate(expression) {
 async function evaluateBeforeSubmission(expression) {
 	let outcome = evaluate(expression);
 	for (let retry = 0; retry < DISCOVERY_RETRIES && outcome.kind === 'bridge-failure' && outcome.transient; retry++) {
-		await delay(TRANSIENT_DELAY_MS);
+		await delay(discoveryDelay());
 		outcome = evaluate(expression);
 	}
 	return outcome;
@@ -215,8 +227,10 @@ async function runLive() {
 	}
 	const deadline = Date.now() + timeoutMs;
 	let lastBridgeFailure = null;
+	let polls = 0;
 	while (true) {
 		const job = evaluate(`p.service.getJob(${JSON.stringify(id)})`);
+		polls++;
 		if (job.kind === 'result') {
 			lastBridgeFailure = null;
 			// A host-side per-action timeout is reported as reason 'timeout' (uncertain outcome), never as a missing Obsidian.
@@ -237,14 +251,14 @@ async function runLive() {
 			const detail = lastBridgeFailure ? ` The last poll failed: ${lastBridgeFailure}.` : '';
 			return { bridge: { kind: 'timeout', message: `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for the plugin job.${detail}` }, phase: 'accepted' };
 		}
-		await delay(TRANSIENT_DELAY_MS);
+		await delay(pollDelay(polls));
 	}
 }
 
 async function runOffline(obsidianError) {
 	if (!existsSync(CORE)) return { apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'bundle-missing', message: 'scripts/ingest-core.mjs is missing; run npm run build:core.', checkedAt: new Date().toISOString(), connection: unknownConnection('Offline core bundle is missing.', 'offline') };
 	const core = await import(pathToFileURL(CORE).href);
-	return core.runAction({ action, vault, vaultPath: parsed.values['--vault-path'] ?? null, request, obsidianError: obsidianError ?? null, now: new Date() });
+	return core.runAction({ action, vault, vaultPath: parsed.values['--vault-path'] ?? null, configDir: parsed.values['--config-dir'] ?? null, request, obsidianError: obsidianError ?? null, now: new Date() });
 }
 
 function unknownConnection(obsidianError, mode = offline ? 'offline' : 'live') {

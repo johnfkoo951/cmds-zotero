@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, type Stats } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { CACHE_DIR, gitCoverage } from "./agent/git-ignore";
@@ -35,4 +36,64 @@ export async function probeGit(root: string, indexPath: string): Promise<GitInfo
 		if (typeof error === "object" && error !== null && "code" in error && error.code === 1) result.indexIgnored = false;
 	}
 	return result;
+}
+
+export type GitProbe = (root: string, indexPath: string) => Promise<GitInfo>;
+
+/** PERF-09: how long a cached answer may stand even when no watched file changed (bounds what the watch list cannot see). */
+export const GIT_PROBE_MAX_AGE_MS = 60_000;
+
+/**
+ * Files whose content decides `probeGit` for one vault: the Git index (`ls-files`), every ignore file `check-ignore`
+ * and the pure coverage check consult for the index path and the private cache folder, the repository and user
+ * configuration (which can move or redefine the excludes file), and the default user excludes file.
+ */
+export function gitProbeInputs(root: string, indexPath: string, home = homedir(), env: NodeJS.ProcessEnv = process.env): string[] {
+	const nested: string[] = [];
+	let folder = root;
+	for (const part of indexPath.split("/").slice(0, -1)) { folder = join(folder, part); nested.push(join(folder, ".gitignore")); }
+	const config = env.XDG_CONFIG_HOME ? env.XDG_CONFIG_HOME : join(home, ".config");
+	return [
+		join(root, ".git", "index"), join(root, ".gitignore"), ...nested, join(root, CACHE_DIR, ".gitignore"),
+		join(root, ".git", "info", "exclude"), join(root, ".git", "config"),
+		join(home, ".gitconfig"), join(config, "git", "config"), join(config, "git", "ignore"),
+	];
+}
+
+/** Identity, size and times of every input, or null when `.git` is not a directory (absent, or a linked worktree's pointer file). */
+async function inputSignature(root: string, inputs: string[]): Promise<string | null> {
+	let git: Stats;
+	try { git = await fs.lstat(join(root, ".git")); } catch { return null; }
+	if (!git.isDirectory()) return null;
+	const parts = await Promise.all(inputs.map(path => fs.lstat(path).then(
+		stat => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`,
+		(error: unknown) => typeof error === "object" && error !== null && "code" in error ? String(error.code) : "error",
+	)));
+	return `${git.dev}:${git.ino}|${parts.join("|")}`;
+}
+
+interface CachedProbe { signature: string; at: number; answer: Promise<GitInfo> }
+
+/**
+ * PERF-09: `probeGit` for one plugin session. An answer is reused while every file in `gitProbeInputs` keeps its lstat
+ * signature, for at most `maxAgeMs`; concurrent callers share one probe. A vault whose `.git` is not a directory keeps
+ * the uncached probe (absent: the probe spawns nothing; a worktree pointer: its index lives elsewhere). Callers get a
+ * copy, never the cached object.
+ */
+export function cachedGitProbe(options: { probe?: GitProbe; maxAgeMs?: number; now?: () => number; home?: string; env?: NodeJS.ProcessEnv } = {}): GitProbe {
+	const probe = options.probe ?? probeGit;
+	const maxAgeMs = options.maxAgeMs ?? GIT_PROBE_MAX_AGE_MS;
+	const now = options.now ?? Date.now;
+	const cache = new Map<string, CachedProbe>();
+	return async (root, indexPath) => {
+		const key = `${root}\0${indexPath}`;
+		const signature = await inputSignature(root, gitProbeInputs(root, indexPath, options.home, options.env));
+		if (signature === null) { cache.delete(key); return probe(root, indexPath); }
+		const hit = cache.get(key);
+		if (hit && hit.signature === signature && now() - hit.at < maxAgeMs) return { ...(await hit.answer) };
+		const entry: CachedProbe = { signature, at: now(), answer: probe(root, indexPath) };
+		cache.set(key, entry);
+		try { return { ...(await entry.answer) }; }
+		catch (error) { if (cache.get(key) === entry) cache.delete(key); throw error; }
+	};
 }

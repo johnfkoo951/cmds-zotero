@@ -19,6 +19,7 @@ import { BIBLIOGRAPHY_FORMATS, DEFAULT_REFERENCES_HEADING, defaultSidecarPath, g
 import type { BibliographyExporter, BibliographyFormat, ReferencesPayload, StructuredExport, StructuredReferencesPayload } from "./cites-core";
 import { reconcileNotes } from "./reconcile-core";
 import type { ReconcileResult } from "./reconcile-core";
+import { findNote } from "./note-lookup";
 import { diagnostic } from "../diagnostics";
 import type { AgentDiagnostic } from "../diagnostics";
 import { cachePrefix, parseCacheName, pickNewest, validateCache, verifyCache, PDF_TEXT_CACHE_DIR } from "../pdf/cache";
@@ -31,6 +32,8 @@ import { bbtErrorPayload } from "../api/transport";
 import { IndexRefusalError } from "../index-service";
 import { textLayerReport, textLayerWarning } from "../pdf/text-layer";
 import { describeNoteStatus, describeSendOutcome, localDay, needsSending, readLabel, type ImportNoteResult, type RecentReport } from "../recent/recent-reads";
+
+export { findNote };
 
 export const MAX_CITES_FILES = 2000;
 
@@ -273,12 +276,6 @@ function toRefMaps(indexes: ReturnType<typeof buildNoteIndexes>, vault: string):
 	// 0.5 R15: one canonical obsidian://open builder for every NoteRef.
 	const convert = (source: Map<string, NoteRecord[]>): Map<string, NoteRef[]> => new Map([...source].map(([key, records]) => [key, records.map(record => noteRef(vault, record.path))]));
 	return { hubByCitekey: convert(indexes.hubByCitekey), rawByCitekey: convert(indexes.rawByCitekey), hubByDoi: convert(indexes.hubByDoi), rawByDoi: convert(indexes.rawByDoi), skipped: indexes.skipped };
-}
-
-/** 0.5 R13/F14: one note by vault-relative path, with or without its `.md` extension; shared by cites and locate. */
-export function findNote(notes: NoteRecord[], path: string): NoteRecord | null {
-	const clean = path.replace(/^\/+|\/+$/g, "");
-	return notes.find(note => note.path === clean || note.path === `${clean}.md`) ?? null;
 }
 
 /**
@@ -555,7 +552,8 @@ export async function locateAction(host: ActionHost, request: LocateRequestArgs)
 		// an unknown note is a structured refusal, never a thrown error.
 		const cleanPath = request.path.replace(/^\/+|\/+$/g, "");
 		if (outsideVault(cleanPath)) return { ...envelope(host, "locate", 2, { reason: "path-outside-vault", message: `Note path is outside the vault: ${request.path}` }) };
-		const note = findNote(await host.reader.listNotes(), cleanPath);
+		// PERF-07: a reader that can find one note without reading the whole vault answers exactly as the listing would.
+		const note = host.reader.findNote ? await host.reader.findNote(cleanPath) : findNote(await host.reader.listNotes(), cleanPath);
 		if (!note) return { ...envelope(host, "locate", 2, { reason: "invalid-request", message: `Note not found: ${request.path}` }) };
 		const body = await host.reader.readNote(note.path);
 		const fmKey = typeof note.frontmatter?.citekey === "string" ? note.frontmatter.citekey : null;

@@ -84,6 +84,24 @@ test("F14: locate --path accepts an extension-less note path exactly like cites 
 	assert.deepEqual((fromHub.item as { citekey: string }).citekey, "smith2020");
 });
 
+test("PERF-07: locate --path asks the reader's findNote instead of listing the vault, with the listing's exact answer", async () => {
+	const withLookup = (): ReturnType<typeof host> & { lookups: string[] } => {
+		const value = host();
+		const lookups: string[] = [];
+		value.reader = { ...value.reader, findNote: async (path: string) => { lookups.push(path); return findNote(notes, path); } };
+		return Object.assign(value, { lookups });
+	};
+	for (const path of [`/${HUB.slice(0, -3)}`, HUB, "Questions/Q", "Nowhere/Missing"]) {
+		const fast = withLookup();
+		const listed = host();
+		const viaLookup = await runAction(fast, "locate", { path });
+		assert.deepEqual(viaLookup, await runAction(listed, "locate", { path }), path);
+		assert.equal(fast.calls.listNotes, 0, `${path}: the vault was not listed`);
+		assert.equal(fast.lookups.length, 1);
+		assert.equal(listed.calls.listNotes, 1, "a reader without findNote keeps the listing");
+	}
+});
+
 test("F14: a missing or outside note path is a structured refusal, never a thrown error", async () => {
 	const missing = await runAction(host(), "locate", { path: "40. Paper Analyses/nobody/Nobody - S00 Hub" });
 	assert.equal(missing.ok, false);
