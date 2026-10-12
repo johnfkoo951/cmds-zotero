@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — Development, unreleased
+## 0.5.0 — 2026-10-12
 
 Recently read papers to literature notes (the reading → metadata note flow, centred on what was actually read):
 

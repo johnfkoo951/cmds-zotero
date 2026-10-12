@@ -4,7 +4,7 @@
 
 검증된 Zotero 원문·인용·주석·문헌노트를 로컬 중심 연구 볼트에 연결합니다. By CMDSPACE.
 
-**0.5.0은 로컬 개발 버전이며 공개·커뮤니티 승인 릴리스가 아닙니다.** 0.5는 **Send recently read papers to notes**를 추가합니다. Zotero 리더로 연 논문(Zotero 10의 읽기 기록)을 각 문헌노트의 상태와 함께 보여 주고, 최신 주석을 담아 노트로 보냅니다. 에이전트 액션 `recent`·`import`, 읽기 순서대로 놓이는 주석 블록, 구조를 유지하는 Zotero 자식 노트, 한글(CJK)·스캔 PDF 텍스트 처리도 포함합니다. **0.4.0은** UI 추가 없이 10개 액션의 에이전트 계약으로 identity·인용 검사·보호된 허브 정합성 갱신·PDF 텍스트·인용 페이지 탐색을 제공합니다. [계약 정본](docs/agent-contract-v2/contract.md)과 [구현 상태](docs/0.4-agent-contract-plan.md)를 참고하세요. 아래 0.3.0 설명과 실측은 과거 기록이며 0.4.0 인수 검증을 의미하지 않습니다. 0.3.0은 ZotLit 2.1.4와 아카이브된 Zotero Integration을 검토한 뒤 인라인 citekey 자동완성, 참고문헌·주석 사이드바, 일괄 노트 갱신, 콜아웃 기반 문헌노트 레이아웃을 추가했습니다. 채택한 것과 의도적으로 제외한 것은 [`docs/plugin-landscape-2026-09.md`](docs/plugin-landscape-2026-09.md)에 기록했습니다. 아래 0.2.0 기준선은 실측 검증된 범위를 설명합니다. Obsidian 1.13.7, Zotero 9.0.6 / Better BibTeX 9.0.63의 두 데스크톱 볼트에서 인덱스 재구축, APA 참고문헌, 텍스트/이미지 가져오기, 재가져오기 보존, 이름 변경 후 노트 딥링크 및 교차 볼트 조회를 실측했습니다. 그룹 라이브러리, 대화형 인용 선택창, 복사한 각 링크 형식으로 만든 Hookmark hook은 본인 환경에서의 수동 인수 검증이 남아 있습니다. 본인 워크플로우 검증 전에는 기존 통합 도구를 유지하세요.
+**0.5.0(2026-10-12)은 첫 GitHub 릴리스입니다.** [0.5.0 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.5.0)에서 `main.js`, `manifest.json`, `styles.css`를 받거나 BRAT로 `johnfkoo951/cmds-zotero`를 설치합니다. Community Plugins에는 아직 등록하지 않았습니다. 0.5는 **Send recently read papers to notes**(Zotero 리더로 연 논문을 문헌 노트 상태와 함께 보여 주고 최신 주석과 함께 보내기), 에이전트 액션 `recent`·`import`, 읽기 순서대로 놓이는 주석 블록, 구조를 유지하는 Zotero 자식 노트, 한글(CJK)·스캔 PDF 텍스트 처리를 추가합니다. 사용설명서: [docs/guide.ko.md](docs/guide.ko.md) · [웹](https://apps.cmdspace.work/plugins/cmds-zotero/?lang=ko) · [English](docs/guide.md). Obsidian 1.14.4, Zotero 10.0.5, Better BibTeX 9.0.71(macOS)에서 검증했으며 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
 
 ## 범위
 
