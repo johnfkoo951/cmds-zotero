@@ -9918,9 +9918,6 @@ function isAnnotationColor(value) {
   return ANNOTATION_COLORS.includes(value);
 }
 
-// src/note-writer.ts
-var LABEL = String.raw`\[((?:\\.|\[[^\]\n]*\]|[^\]\\\n])*)\]`;
-
 // src/recent/recent-reads.ts
 function pad(value) {
   return String(value).padStart(2, "0");

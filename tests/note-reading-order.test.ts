@@ -139,3 +139,16 @@ test("reading order keeps the listed order unless every annotation has a sort in
 	const mixed = [annotation("AAAA0001", 3, "00002|000010|00010"), annotation("BBBB0001", 2, undefined), annotation("CCCC0001", 1, "00000|000010|00010")];
 	assert.deepEqual(readingOrder(entryWith(mixed)).map(item => item.annotation.key), ["AAAA0001", "BBBB0001", "CCCC0001"]);
 });
+
+test("the child-note sanitiser stays linear on hostile bracket and marker input", () => {
+	for (const input of ["[".repeat(20000), "[a[b]".repeat(5000) + "](x)", "[" + "\\[".repeat(10000) + "](javascript:x)", "<a:".repeat(8000), "](".repeat(10000)]) {
+		const started = Date.now();
+		const out = safeNoteMarkdown(input);
+		assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms for ${input.slice(0, 12)}…`);
+		assert.doesNotMatch(out, /\]\(javascript:/i);
+	}
+	const marker = `<!-- cmds-zotero:annotation-${"A".repeat(50000)}`;
+	const started = Date.now();
+	render(entryWith([annotation("PAGE0001", 1, "00000|000010|00010")]), null, () => marker);
+	assert.ok(Date.now() - started < 3000);
+});

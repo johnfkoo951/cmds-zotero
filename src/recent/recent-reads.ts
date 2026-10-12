@@ -135,7 +135,8 @@ export interface NoteStatus {
 	annotations: number;
 }
 
-const ANNOTATION_MARKER = /<!-- cmds-zotero:(annotation-[A-Za-z0-9]+-[A-Za-z0-9]+):(?:[a-f0-9]{64}|detached) -->/g;
+// Key parts are bounded (Zotero keys are 8 characters) so a damaged marker cannot make the scan quadratic.
+const ANNOTATION_MARKER = /<!-- cmds-zotero:(annotation-[A-Za-z0-9]{1,32}-[A-Za-z0-9]{1,32}):(?:[a-f0-9]{64}|detached) -->/g;
 
 /** Annotation section IDs present in a literature note, detached blocks included. */
 export function noteAnnotationIDs(text: string): Set<string> {

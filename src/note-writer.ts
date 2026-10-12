@@ -82,23 +82,69 @@ export function textFromHTML(value: unknown): string {
 }
 
 /** Markdown from a converter, made safe inside a managed block under `## Zotero notes`. */
-/** Link and image labels: escaped and nested brackets included (`[see \[1\]]`, `[a [b] c]`). */
-const LABEL = String.raw`\[((?:\\.|\[[^\]\n]*\]|[^\]\\\n])*)\]`;
 const SAFE_LINK_TARGET = /^<?(?:https?|zotero|obsidian|mailto):/i;
 const SAFE_IMAGE_TARGET = /^<?https?:/i;
+/** Bounds for the link scanner: label and destination lengths it inspects (keeps it linear on hostile input). */
+const MAX_LABEL = 1000;
+const MAX_TARGET = 2048;
+
+/** Index of the `]` closing the label that opens at `open` (escapes skipped, nesting counted), or -1 within MAX_LABEL. */
+function labelEnd(line: string, open: number): number {
+	let depth = 0;
+	for (let j = open; j < line.length && j - open <= MAX_LABEL; j++) {
+		const c = line[j];
+		if (c === "\\") { j++; continue; }
+		if (c === "[") depth++;
+		else if (c === "]" && --depth === 0) return j;
+	}
+	return -1;
+}
+/** Index of the `)` closing a destination that starts at `from`, or -1 within MAX_TARGET (no newline inside). */
+function targetEnd(line: string, from: number): number {
+	for (let j = from; j < line.length && j - from <= MAX_TARGET; j++) if (line[j] === ")") return j;
+	return -1;
+}
+
+/**
+ * Links keep only web, Zotero, Obsidian and mail targets (an unsafe link becomes its label); images keep only web
+ * targets (a note-embedded image, which has no vault file, becomes a short placeholder). One bounded pass per line.
+ */
+function rewriteLinks(line: string): string {
+	let out = "";
+	let i = 0;
+	while (i < line.length) {
+		const image = line[i] === "!" && line[i + 1] === "[";
+		const open = image ? i + 1 : i;
+		const escaped = open > 0 && line[open - 1] === "\\" && !image;
+		const close = line[open] === "[" && !escaped ? labelEnd(line, open) : -1;
+		const end = close >= 0 && line[close + 1] === "(" ? targetEnd(line, close + 2) : -1;
+		if (end < 0) { out += line[i]; i++; continue; }
+		const label = line.slice(open + 1, close);
+		const target = line.slice(close + 2, end).trim();
+		if (image) out += SAFE_IMAGE_TARGET.test(target) ? line.slice(i, end + 1) : `*(image in the Zotero note${label.trim() ? `: ${label.trim()}` : ""})*`;
+		else out += SAFE_LINK_TARGET.test(target) ? line.slice(i, end + 1) : label;
+		i = end + 1;
+	}
+	// Safety net for destinations the scanner did not pair with a label (label longer than MAX_LABEL): drop unsafe ones.
+	let swept = "";
+	let from = 0;
+	for (let at = out.indexOf("](", from); at >= 0; at = out.indexOf("](", from)) {
+		const stop = targetEnd(out, at + 2);
+		if (stop < 0) break;
+		swept += out.slice(from, at + 1) + (SAFE_LINK_TARGET.test(out.slice(at + 2, stop).trim()) ? out.slice(at + 1, stop + 1) : "");
+		from = stop + 1;
+	}
+	return swept + out.slice(from);
+}
 
 /** Heading nesting and link/image rewrites for prose lines; fenced code is passed through untouched. */
 function rewriteNoteProse(segment: string): string {
-	return segment
+	return segment.split("\n").map(line => rewriteLinks(line)
 		// Nest the note's own headings under "## Zotero notes".
-		.replace(/^(#{1,6})(?=[ \t])/gm, hashes => "#".repeat(Math.min(6, hashes.length + 2)))
-		// Images embedded in a Zotero note have no vault file; say so instead of leaving a broken embed.
-		.replace(new RegExp(String.raw`!${LABEL}\(([^)\n]*)\)`, "g"), (whole: string, alt: string, target: string) => SAFE_IMAGE_TARGET.test(target.trim()) ? whole : `*(image in the Zotero note${alt.trim() ? `: ${alt.trim()}` : ""})*`)
-		// Links keep only web, Zotero, Obsidian and mail targets; any other scheme or relative target becomes plain text.
-		.replace(new RegExp(String.raw`(^|[^!])${LABEL}\(([^)\n]*)\)`, "g"), (whole: string, lead: string, label: string, target: string) => SAFE_LINK_TARGET.test(target.trim()) ? whole : `${lead}${label}`)
-		// Any destination the patterns above did not see still loses an unsafe target.
-		.replace(/\]\(([^)\n]*)\)/g, (whole: string, target: string) => SAFE_LINK_TARGET.test(target.trim()) ? whole : "]")
-		.replace(/<([a-z][a-z0-9+.-]*):[^>\s]*>/gi, (whole: string, scheme: string) => /^(?:https?|zotero|obsidian|mailto)$/i.test(scheme) ? whole : whole.slice(1, -1));
+		.replace(/^(#{1,6})(?=[ \t])/, hashes => "#".repeat(Math.min(6, hashes.length + 2)))
+		// Autolinks with another scheme lose their angle brackets (plain text, not a link).
+		.replace(/<([a-z][a-z0-9+.-]{0,31}):[^>\s]{0,2048}>/gi, (whole: string, scheme: string) => /^(?:https?|zotero|obsidian|mailto)$/i.test(scheme) ? whole : whole.slice(1, -1)))
+		.join("\n");
 }
 
 /**
@@ -293,7 +339,7 @@ export function resetSections(text: string, ids: Iterable<string>, bodies: Reado
  * New annotation blocks go after the last existing `annotation-*` closing marker, else after the `## Annotations` heading,
  * else at the end of the file — never after user prose written below the annotation list.
  */
-const ANNOTATION_OPENING = /<!-- cmds-zotero:(annotation-[A-Za-z0-9]+-[A-Za-z0-9]+):(?:[a-f0-9]{64}|detached) -->/g;
+const ANNOTATION_OPENING = /<!-- cmds-zotero:(annotation-[A-Za-z0-9]{1,32}-[A-Za-z0-9]{1,32}):(?:[a-f0-9]{64}|detached) -->/g;
 /**
  * New annotation blocks in Zotero's reading order: each goes right before the first existing annotation block that Zotero
  * orders after it (detached blocks included); a block with no later neighbour is appended as before. `order` lists every
