@@ -24,13 +24,22 @@ export function normalizeIdentity(raw: Record<string, unknown>): ItemIdentity {
 	return { ...scope, libraryID: raw.libraryID };
 }
 
-export function normalizeEntry(raw: Record<string, unknown>, previous?: ZoteroIndexEntry): ZoteroIndexEntry {
+/**
+ * The normalized parent with an empty `contentHash`, for collectors that add attachments next and hash the entry once
+ * after that last change (`sealEntry`).
+ */
+export function normalizeEntryUnhashed(raw: Record<string, unknown>, previous?: ZoteroIndexEntry): ZoteroIndexEntry {
 	const identity = normalizeIdentity(raw);
 	const citekey = text(raw.citationKey);
 	if (!citekey.trim() || !text(raw.itemType) || ["attachment", "annotation", "note"].includes(text(raw.itemType))) throw new Error("Export is not a citable parent");
 	const authors = Array.isArray(raw.creators) ? raw.creators.filter(record).map(creator => text(creator.name) || [text(creator.firstName), text(creator.lastName)].filter(Boolean).join(" ")).filter(Boolean) : [];
 	const history = previous?.id === identityKey(identity) ? [...new Set([...previous.citekeyHistory, previous.citekey].filter(key => key !== citekey))] : [];
-	const entry: ZoteroIndexEntry = { ...identity, id: identityKey(identity), citekey, citekeyHistory: history, title: text(raw.title), authors, year: /\b\d{4}\b/.exec(text(raw.date))?.[0] ?? "", doi: text(raw.DOI), url: text(raw.url), collections: tags(raw.collections), tags: tags(raw.tags), attachmentPath: "", zoteroSelectURI: selectURI(identity), attachments: [], attachmentStatus: "complete", contentHash: "", metadata: raw };
+	return { ...identity, id: identityKey(identity), citekey, citekeyHistory: history, title: text(raw.title), authors, year: /\b\d{4}\b/.exec(text(raw.date))?.[0] ?? "", doi: text(raw.DOI), url: text(raw.url), collections: tags(raw.collections), tags: tags(raw.tags), attachmentPath: "", zoteroSelectURI: selectURI(identity), attachments: [], attachmentStatus: "complete", contentHash: "", metadata: raw };
+}
+
+/** The normalized parent without attachments, hashed. */
+export function normalizeEntry(raw: Record<string, unknown>, previous?: ZoteroIndexEntry): ZoteroIndexEntry {
+	const entry = normalizeEntryUnhashed(raw, previous);
 	entry.contentHash = entryHash(entry);
 	return entry;
 }

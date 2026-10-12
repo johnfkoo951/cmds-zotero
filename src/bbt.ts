@@ -1,13 +1,25 @@
 import type { Capabilities, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 import { BbtTransportError, httpRequest, isBbtTransportError, mapBounded, rpc, type BbtTransportReason } from "./api/transport";
-import { normalizeAttachments, normalizeEntry, parseItemURI, text } from "./api/normalize";
-import { entryHash, record, validateEntry, validateIndex } from "./identity";
+import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, text } from "./api/normalize";
+import { record, sealEntry, verifyEntry, verifyIndex } from "./identity";
 import { indexDiagnostics } from "./diagnostics";
 import { positiveInteger } from "./uris";
 import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentItem, recentKey, windowTerms, type RecentRead } from "./recent/recent-reads";
 
 /** Calendar days probed concurrently while dating recent reads; the probes are single indexed SQLite queries in Zotero. */
 const RECENT_DAY_BATCH = 7;
+
+/**
+ * Parallel `item.attachments` calls during an index refresh: twice the configured parallel requests, at most 8 (the
+ * `mapBounded` limit). A refresh makes one such call per parent item; each is a short read whose time is mostly the round
+ * trip, so keeping more in flight shortens the refresh while bibliography batches, reading history and the export batches
+ * keep the configured value. Doubling keeps the setting meaningful: the default 2 gives 4, a value lowered to 1 for a slow
+ * Zotero still gives only 2. An out-of-range value is passed through so `mapBounded` rejects it as before.
+ */
+export function attachmentConcurrency(concurrency: number): number {
+	return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
+}
+
 /**
  * Identity a fresh single-item collection must reproduce; the cached citekey is only the lookup handle. `libraryID` is the
  * local library ID when the saved index knows the item; an item added since then is addressed by its BBT library name.
@@ -135,7 +147,8 @@ export class BbtService {
 			for (let offset = 0; offset < keys.length; offset += 50) batches.push({ library, keys: keys.slice(offset, offset + 50) });
 		}
 		const libraryIDs = new Map<string, number>();
-		const validPrevious = previous && validateIndex(previous) ? new Map(previous.entries.map(entry => [entry.id, entry])) : new Map<string, ZoteroIndexEntry>();
+		// The previous index is the host's validated snapshot: its sealed entries are not hashed again.
+		const validPrevious = previous && verifyIndex(previous) ? new Map(previous.entries.map(entry => [entry.id, entry])) : new Map<string, ZoteroIndexEntry>();
 		const exports = await mapBounded(batches, settings.concurrency, async ({ library, keys }) => {
 			const serialized = await call("item.export", [keys, "BetterBibTeX JSON", library]);
 			if (typeof serialized !== "string") throw new Error("BBT export must return a JSON string");
@@ -147,7 +160,8 @@ export class BbtService {
 				if (priorID !== undefined && priorID !== item.libraryID) throw new Error("Named library has inconsistent local IDs");
 				libraryIDs.set(library, item.libraryID);
 				const id = `${item.libraryID}:${text(item.itemKey)}`;
-				const entry = normalizeEntry(item, validPrevious.get(id));
+				// Hashed once below, after the attachments step changed it for the last time.
+				const entry = normalizeEntryUnhashed(item, validPrevious.get(id));
 				const searched = libraries.get(library)?.get(entry.citekey);
 				if (!keys.includes(entry.citekey) || !searched || searched.itemKey !== entry.itemKey || searched.libraryType !== entry.libraryType || searched.groupID !== entry.groupID) throw new Error("Export differs from searched item identity");
 				return entry;
@@ -155,34 +169,34 @@ export class BbtService {
 			if (entries.length !== keys.length || new Set(entries.map(entry => entry.citekey)).size !== keys.length) throw new Error("BBT export did not cover the requested parents");
 			return entries;
 		});
-		const entries = await mapBounded(exports.flat(), settings.concurrency, async entry => {
+		// Each entry is structure-checked and hashed once, after its last change (sealEntry): with attachments, or with the
+		// previous attachments (or none) when this item's attachments could not be read.
+		const entries = await mapBounded(exports.flat(), attachmentConcurrency(settings.concurrency), async entry => {
 			try {
 				const attachments = await call("item.attachments", [entry.citekey, entry.libraryID], settings.attachmentTimeoutMs);
 				entry.attachments = normalizeAttachments(attachments, entry);
 				entry.attachmentPath = entry.attachments.find(attachment => attachment.path?.toLowerCase().endsWith(".pdf"))?.path ?? "";
-				entry.contentHash = entryHash(entry);
-				if (!validateEntry(entry)) throw new Error("Invalid enriched attachment data");
+				if (!sealEntry(entry)) throw new Error("Invalid enriched attachment data");
 			} catch (error) {
 				if (signal.aborted) throw error;
 				const old = validPrevious.get(entry.id);
 				entry.attachments = old && old.libraryType === entry.libraryType && old.groupID === entry.groupID ? old.attachments : [];
 				entry.attachmentPath = old && entry.attachments === old.attachments ? old.attachmentPath : "";
 				entry.attachmentStatus = "unavailable";
+				if (!sealEntry(entry)) throw new Error("Invalid normalized parent item");
 			}
-			entry.contentHash = entryHash(entry);
-			if (!validateEntry(entry)) throw new Error("Invalid normalized parent item");
 			return entry;
 		});
 		if (signal.aborted) throw new Error("BBT collection cancelled");
 		entries.sort((left, right) => left.id.localeCompare(right.id));
 		const index: ZoteroIndex = { schemaVersion: 2, generatedAt: new Date().toISOString(), source: "better-bibtex", count: entries.length, entries, capabilities, diagnostics: indexDiagnostics(entries), complete: entries.every(entry => entry.attachmentStatus === "complete") };
-		if (!validateIndex(index)) throw new Error("Invalid collected Zotero index");
+		if (!verifyIndex(index)) throw new Error("Invalid collected Zotero index");
 		return index;
 	}
 
 	/** CSL bibliography text for one entry; `style` defaults to the configured style (0.5 R4: every style is observed and typed). */
 	async bibliography(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle, signal?: AbortSignal): Promise<string> {
-		if (!validateEntry(entry)) throw new Error("Bibliography requires a validated item");
+		if (!verifyEntry(entry)) throw new Error("Bibliography requires a validated item");
 		// 0.5 R12: a caller's signal (per-render abort) joins the service signal; the call stays observed.
 		const output = await this.call("item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID], this.settings.requestTimeoutMs, signal);
 		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
@@ -270,14 +284,13 @@ export class BbtService {
 			raw = current === target.citekey && raw ? raw : await exportOne(current);
 			if (!raw) throw new Error(`Better BibTeX could not export @${current}.`);
 		}
-		const entry = normalizeEntry(raw, previous);
+		const entry = normalizeEntryUnhashed(raw, previous);
 		if (entry.itemKey !== target.itemKey || (target.libraryID !== undefined && entry.libraryID !== target.libraryID) || entry.libraryType !== target.libraryType || (entry.groupID ?? 0) !== (target.groupID ?? 0)) throw new Error("The fresh Better BibTeX export is a different Zotero item; refresh the index.");
 		const attachments = await this.call("item.attachments", [entry.citekey, entry.libraryID], this.settings.attachmentTimeoutMs, signal);
 		entry.attachments = normalizeAttachments(attachments, entry);
 		entry.attachmentPath = entry.attachments.find(attachment => attachment.path?.toLowerCase().endsWith(".pdf"))?.path ?? "";
 		entry.attachmentStatus = "complete";
-		entry.contentHash = entryHash(entry);
-		if (!validateEntry(entry)) throw new Error("Invalid fresh Zotero item data");
+		if (!sealEntry(entry)) throw new Error("Invalid fresh Zotero item data");
 		return entry;
 	}
 

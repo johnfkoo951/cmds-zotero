@@ -30,7 +30,11 @@ export function entryHash(entry: ZoteroIndexEntry): string {
 	return contentHash(rest);
 }
 
-export function validateEntry(value: unknown): value is ZoteroIndexEntry {
+/**
+ * Every check of `validateEntry` except the content hash: identity, field types, attachment and annotation URIs. An entry
+ * this process builds is checked with this and then hashed once by `sealEntry`.
+ */
+export function validateEntryStructure(value: unknown): value is ZoteroIndexEntry {
 	if (!record(value) || !validateIdentity(value)) return false;
 	const item = value as unknown as ZoteroIndexEntry;
 	if (item.id !== identityKey(item) || item.zoteroSelectURI !== selectURI(item)) return false;
@@ -51,15 +55,63 @@ export function validateEntry(value: unknown): value is ZoteroIndexEntry {
 				if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
 			}
 		}
-		if (item.attachmentPath && !item.attachments.some(attachment => attachment.path === item.attachmentPath)) return false;
-		return /^[a-f0-9]{64}$/.test(item.contentHash) && entryHash(item) === item.contentHash;
+		return !item.attachmentPath || item.attachments.some(attachment => attachment.path === item.attachmentPath);
 	} catch { return false; }
 }
 
-export function validateIndex(value: unknown): value is ZoteroIndex {
-	if (!record(value) || value.schemaVersion !== 2 || value.source !== "better-bibtex" || typeof value.generatedAt !== "string" || !Number.isFinite(Date.parse(value.generatedAt)) || typeof value.complete !== "boolean" || !Array.isArray(value.entries) || value.count !== value.entries.length || !value.entries.every(validateEntry)) return false;
+/** A complete entry: valid structure and a content hash that matches its bytes. Every trust boundary uses this check. */
+export function validateEntry(value: unknown): value is ZoteroIndexEntry {
+	if (!validateEntryStructure(value)) return false;
+	try { return /^[a-f0-9]{64}$/.test(value.contentHash) && entryHash(value) === value.contentHash; } catch { return false; }
+}
+
+/**
+ * Entries this process hashed after their last change (`sealEntry`) or verified in full when it read a snapshot
+ * (`validateAndSealIndex`). Index entries are never changed after hashing (a changed entry is a new object), so a sealed
+ * entry needs no second hash. Membership is by object identity: parsed and copied objects are never sealed.
+ */
+const sealedEntries = new WeakSet<object>();
+
+/**
+ * Hashes an entry built in this process once, after its last change, and seals it. Returns false, leaving the entry
+ * unsealed and its hash untouched, when the structure is invalid.
+ */
+export function sealEntry(entry: ZoteroIndexEntry): boolean {
+	if (!validateEntryStructure(entry)) return false;
+	entry.contentHash = entryHash(entry);
+	sealedEntries.add(entry);
+	return true;
+}
+
+/** `validateEntry` for entries handed around inside this process: a sealed entry is trusted without hashing it again. */
+export function verifyEntry(value: unknown): value is ZoteroIndexEntry {
+	return (record(value) && sealedEntries.has(value)) || validateEntry(value);
+}
+
+function validateIndexWith(value: unknown, validEntry: (entry: unknown) => entry is ZoteroIndexEntry): value is ZoteroIndex {
+	if (!record(value) || value.schemaVersion !== 2 || value.source !== "better-bibtex" || typeof value.generatedAt !== "string" || !Number.isFinite(Date.parse(value.generatedAt)) || typeof value.complete !== "boolean" || !Array.isArray(value.entries) || value.count !== value.entries.length || !value.entries.every(validEntry)) return false;
 	if (new Set(value.entries.map(entry => entry.id)).size !== value.entries.length || !record(value.capabilities) || !Array.isArray(value.diagnostics)) return false;
 	const caps = value.capabilities;
 	if (typeof caps.zotero !== "string" || typeof caps.betterbibtex !== "string" || [caps.metadata, caps.attachments, caps.annotations, caps.bibliography].some(flag => typeof flag !== "boolean")) return false;
 	return value.diagnostics.every(diagnostic => record(diagnostic) && typeof diagnostic.code === "string" && typeof diagnostic.message === "string" && ["info", "warning", "error"].includes(String(diagnostic.severity)) && (diagnostic.itemID === undefined || typeof diagnostic.itemID === "string") && (diagnostic.citekey === undefined || typeof diagnostic.citekey === "string"));
+}
+
+/** Full validation, every entry hashed again: for bytes that cross a trust boundary (a file read, another process). */
+export function validateIndex(value: unknown): value is ZoteroIndex {
+	return validateIndexWith(value, validateEntry);
+}
+
+/**
+ * `validateIndex` for an index this process built or read: sealed entries are not hashed again, any other entry is
+ * validated in full, and the index-level checks (count, unique IDs, capabilities, diagnostics) always run.
+ */
+export function verifyIndex(value: unknown): value is ZoteroIndex {
+	return validateIndexWith(value, verifyEntry);
+}
+
+/** `validateIndex` for a snapshot read from disk that seals its entries when it passes, so later in-process checks skip the hash. */
+export function validateAndSealIndex(value: unknown): value is ZoteroIndex {
+	if (!validateIndex(value)) return false;
+	for (const entry of value.entries) sealedEntries.add(entry);
+	return true;
 }
