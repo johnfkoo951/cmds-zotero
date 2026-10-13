@@ -59,3 +59,45 @@ test("the author-year fallback line truncates after three authors and marks a mi
 	assert.equal(fallbackCitation({ authors: ["A", "B", "C", "D"], year: "2020", title: "T" }), "A, B, C et al. (2020). T");
 	assert.equal(fallbackCitation({ authors: ["A"], year: "", title: "T" }), "A (n.d.). T");
 });
+
+// 0.6 PERF-05: the citekey map comes from the per-generation cache; rows stay exactly what 0.5.0 built per render.
+import { scanCitations } from "../src/citations/scan";
+import type { ReferenceRow } from "../src/citations/reference-rows";
+
+/** 0.5.0 `resolveReferenceRows`: the citekey map rebuilt from every entry on each call. */
+function resolve050(source: string, entries: ZoteroIndexEntry[], loaded: boolean): ReferenceRow[] {
+	const byKey = new Map<string, ZoteroIndexEntry[]>();
+	for (const item of entries) for (const alias of new Set([item.citekey, ...item.citekeyHistory])) (byKey.get(alias) ?? byKey.set(alias, []).get(alias))?.push(item);
+	const rows: ReferenceRow[] = [];
+	const seen = new Set<string>();
+	for (const occurrence of scanCitations(source)) {
+		if (seen.has(occurrence.citekey)) continue;
+		seen.add(occurrence.citekey);
+		const matches = byKey.get(occurrence.citekey) ?? [];
+		if (matches.length === 1) rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "resolved", entry: matches[0] });
+		else if (matches.length > 1) rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: "ambiguous", candidates: matches });
+		else rows.push({ citekey: occurrence.citekey, line: occurrence.line, status: loaded ? "not-found" : "unchecked" });
+	}
+	return rows;
+}
+
+test("0.6 PERF-05: rows from the cached citekey map equal the 0.5.0 per-render rows, across renders and generations", () => {
+	const entries = Array.from({ length: 60 }, (_, i) => entry(`${i % 5 === 0 ? 2 : 1}:K${String(i).padStart(7, "0")}`, `key${i % 45}`, i % 7 === 0 ? [`old${i}`, `key${(i + 1) % 45}`] : []));
+	const note = Array.from({ length: 80 }, (_, i) => `Line ${i} cites [@key${i % 50}; @old${i % 63}] and [[@key${(i * 7) % 50}]] and @missing${i % 4}.`).join("\n");
+	for (const loaded of [true, false]) {
+		assert.deepEqual(resolveReferenceRows(note, entries, loaded), resolve050(note, entries, loaded));
+		assert.deepEqual(resolveReferenceRows(note, entries, loaded), resolve050(note, entries, loaded), "a second render on the same generation");
+	}
+	const next = entries.map(item => item.citekey === "key3" ? { ...item, citekey: "key3renamed", citekeyHistory: ["key3"] } : item);
+	assert.deepEqual(resolveReferenceRows(note, next, true), resolve050(note, next, true), "a new generation is resolved against its own entries");
+	assert.ok(resolveReferenceRows(note, entries, true).some(row => row.status === "ambiguous"));
+});
+
+test("0.6 PERF-05: ambiguous candidates are a fresh array per call, so a caller cannot alter the shared map", () => {
+	const entries = [entry("1:B", "dup2021"), entry("2:C", "dup2021")];
+	const first = resolveReferenceRows(text, entries, true).find(row => row.status === "ambiguous");
+	first?.candidates?.push(entry("3:D", "dup2021"));
+	const second = resolveReferenceRows(text, entries, true).find(row => row.status === "ambiguous");
+	assert.equal(second?.candidates?.length, 2);
+	assert.notEqual(first?.candidates, second?.candidates);
+});

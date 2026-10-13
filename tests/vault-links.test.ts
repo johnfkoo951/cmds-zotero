@@ -183,3 +183,21 @@ test('0.5 F07: the published map is deterministic across file order and a new in
   assert.equal(writes.length,2);
   assert.deepEqual(JSON.parse(writes[1]).notes,first.notes);
 });
+
+test('0.6 PERF-05: the alias index is cached per entries array; vault notes are still read live and a new generation re-resolves them',async()=>{
+  const VaultLinks=await loadVaultLinks();
+  const files:Fake[]=[file('Lit/@a.md'),file('Lit/hub.md',{type:'paper-hub',citekey:'b'}),file('Lit/plain.md')];
+  const app={boundary:async()=>{},vault:{getName:()=>'Research',getMarkdownFiles:()=>files,adapter:{write:async()=>{},exists:async()=>false,read:async()=>''}},metadataCache:{getFileCache:(f:Fake)=>f.frontmatter?{frontmatter:f.frontmatter}:undefined}};
+  const links=new VaultLinks(app,()=>({peerVaults:[]}));
+  const paths=(index:{entries:ZoteroIndexEntry[]})=>Object.fromEntries([...(links.localFilesByEntry(index) as Map<string,Fake[]>)].map(([id,list])=>[id,list.map(f=>f.path)]));
+  const g1={entries:[entry('1:AAAA0001','a'),entry('1:BBBB0001','b')],generatedAt:'g1'};
+  assert.deepEqual(paths(g1),{'1:AAAA0001':['Lit/@a.md'],'1:BBBB0001':['Lit/hub.md']});
+  // An edit that gives a note an identity is seen on the same generation: only the index side is cached.
+  files[2].frontmatter={type:'paper-hub',citekey:'a'};
+  assert.deepEqual(paths(g1),{'1:AAAA0001':['Lit/@a.md','Lit/plain.md'],'1:BBBB0001':['Lit/hub.md']});
+  // A new generation (new array): a renamed to a2 keeps a in its history, b left the index.
+  const g2={entries:[entry('1:AAAA0001','a2',['a'])],generatedAt:'g2'};
+  assert.deepEqual(paths(g2),{'1:AAAA0001':['Lit/@a.md','Lit/plain.md']});
+  assert.deepEqual(links.localFiles(g2.entries[0],g2).map((f:Fake)=>f.path),['Lit/@a.md','Lit/plain.md']);
+  assert.deepEqual(paths(g1),{'1:AAAA0001':['Lit/@a.md','Lit/plain.md'],'1:BBBB0001':['Lit/hub.md']},'an older generation still answers for its own entries');
+});

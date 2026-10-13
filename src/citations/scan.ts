@@ -20,20 +20,24 @@ export function scanCitations(text: string): CitationOccurrence[] {
 		if (frontmatter) { if (index > 0 && line.trim() === "---") frontmatter = false; continue; }
 		if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
 		if (fenced) continue;
-		const bracketDepth = (offset: number): number => {
-			let depth = 0;
-			for (let i = 0; i < offset; i++) { if (line[i] === "[") depth++; else if (line[i] === "]" && depth > 0) depth--; }
-			return depth;
-		};
+		// Bracket depth before a column ("[" opens, "]" closes an open bracket) is a left fold over the line. Matches come in
+		// increasing column order, so the fold resumes where the previous match left it instead of restarting at column 0:
+		// a long line with many citations stays linear (0.6 PERF-13).
+		let depth = 0;
+		let folded = 0;
 		CITATION.lastIndex = 0;
 		let match: RegExpExecArray | null;
 		while ((match = CITATION.exec(line)) !== null) {
 			if (match[1]) { occurrences.push({ citekey: match[1], line: index, column: match.index, form: "wikilink" }); continue; }
 			const prefix = match[2] ?? "";
 			const column = match.index + prefix.length;
-			if (line.slice(0, column).endsWith("[[")) continue;
+			if (column >= 2 && line[column - 1] === "[" && line[column - 2] === "[") continue;
+			for (; folded < column; folded++) {
+				if (line[folded] === "[") depth++;
+				else if (line[folded] === "]" && depth > 0) depth--;
+			}
 			// Email-like tokens have a word character immediately before the @ and are excluded by the prefix class.
-			const form = bracketDepth(column) > 0 ? "pandoc" : "bare";
+			const form = depth > 0 ? "pandoc" : "bare";
 			occurrences.push({ citekey: match[3], line: index, column, form });
 		}
 	}

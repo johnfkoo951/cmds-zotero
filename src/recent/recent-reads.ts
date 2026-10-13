@@ -8,6 +8,7 @@ import type { ItemIdentity, ZoteroIndexEntry } from "../types";
 import { parseItemURI, text } from "../api/normalize";
 import { record } from "../identity";
 import { ownerMarker } from "../note-writer";
+import { indexDerived } from "../index-derived";
 
 export const RECENT_WINDOW_CHOICES: readonly number[] = [7, 30, 90, 365];
 export const DEFAULT_RECENT_DAYS = 30;
@@ -112,9 +113,28 @@ export function readLabel(readOn: string | null, today: string): string {
 	return `read on ${readOn}`;
 }
 
-/** The index entry for a recent row: same item key and library scope, or null when the saved index predates the item. */
+/**
+ * The index entry for a recent row: same item key and library scope, or null when the saved index predates the item.
+ * The first such entry in index order; candidates come from the generation's item-key map (0.6 PERF-12), not a scan.
+ */
 export function indexEntryFor(row: { itemKey: string; libraryType: string; groupID?: number }, entries: readonly ZoteroIndexEntry[]): ZoteroIndexEntry | null {
-	return entries.find(entry => entry.itemKey === row.itemKey && entry.libraryType === row.libraryType && (entry.groupID ?? 0) === (row.groupID ?? 0)) ?? null;
+	return indexDerived(entries).entriesWithItemKey(row.itemKey).find(entry => entry.itemKey === row.itemKey && entry.libraryType === row.libraryType && (entry.groupID ?? 0) === (row.groupID ?? 0)) ?? null;
+}
+
+/**
+ * The literature picker's order: entries read recently first (in the order of `reads`, each entry once, with the day of
+ * its first read in that list), then every other entry in index order. Reads the saved index does not know are skipped.
+ * Lookups go through the generation's maps (0.6 PERF-12) instead of a scan of every entry per read.
+ */
+export function recentFirst(entries: readonly ZoteroIndexEntry[], reads: readonly Pick<RecentRead, "itemKey" | "libraryType" | "groupID" | "readOn">[]): { ordered: ZoteroIndexEntry[]; readOn: Map<string, string | null> } {
+	const readOn = new Map<string, string | null>();
+	for (const read of reads) {
+		const entry = indexEntryFor(read, entries);
+		if (entry && !readOn.has(entry.id)) readOn.set(entry.id, read.readOn);
+	}
+	const derived = indexDerived(entries);
+	const recent = [...readOn.keys()].flatMap(id => derived.entriesWithId(id));
+	return { ordered: [...recent, ...entries.filter(entry => !readOn.has(entry.id))], readOn };
 }
 
 /**

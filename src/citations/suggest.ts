@@ -1,7 +1,8 @@
 import { Editor, EditorPosition, EditorSuggest, EditorSuggestContext, EditorSuggestTriggerInfo, TFile } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
-import { matchScore } from "./score";
+import { indexDerived } from "../index-derived";
+import { rankCompletions } from "./score";
 
 const KEY_CHARS = /^[A-Za-z0-9_:.+/-]*$/;
 
@@ -30,8 +31,8 @@ export class CitekeySuggest extends EditorSuggest<ZoteroIndexEntry> {
 		const entries = this.plugin.cachedEntries();
 		// Empty means "not loaded", never "no matches": warm up (peek-first, no BBT call while backing off) and offer nothing yet.
 		if (!entries.length) { if (!this.plugin.warmBackoffActive()) void this.plugin.warmIndex(); return []; }
-		return entries.map(entry => ({ entry, score: matchScore(entry, context.query) })).filter(item => item.score > 0)
-			.sort((a, b) => b.score - a.score || a.entry.citekey.localeCompare(b.entry.citekey)).slice(0, 30).map(item => item.entry);
+		// 0.6 PERF-04: the lower-cased rows are prepared once per index generation; a keystroke is one pass over them.
+		return rankCompletions(indexDerived(entries).completionRows, context.query);
 	}
 
 	renderSuggestion(entry: ZoteroIndexEntry, el: HTMLElement): void {

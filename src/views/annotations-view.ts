@@ -1,12 +1,19 @@
 import { ItemView, Notice, TFile, WorkspaceLeaf, debounce, setIcon } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../types";
-import { buildAliasIndex, noteIdentity } from "../note-aliases";
+import { noteIdentity } from "../note-aliases";
+import { indexDerived } from "../index-derived";
 import { annotationBody, annotationURI } from "../note-writer";
 import { colorName } from "../annotations/colors";
+import { annotationHaystack, annotationQuery, annotationsByPage, annotationVisibility, emptyAnnotationsText } from "../annotations/filter";
 import { markdownLink } from "../uris";
 
 export const VIEW_TYPE_ANNOTATIONS = "cmds-zotero-annotations";
+/** Hides a card, attachment heading or message the filter does not show (0.6 PERF-15). */
+const FILTERED_OUT = "cmds-zotero-filtered-out";
+
+/** One attachment's cards in display order, with the lower-cased text the filter matches. */
+interface CardGroup { heading: HTMLElement | null; cards: HTMLElement[]; haystacks: string[] }
 
 /** Sidebar listing the indexed annotations of the active literature note, or of a pinned item. */
 export class AnnotationsView extends ItemView {
@@ -14,7 +21,12 @@ export class AnnotationsView extends ItemView {
 	private entry: ZoteroIndexEntry | null = null;
 	private filter = "";
 	private status: HTMLElement | null = null; // 0.5 R4
+	// 0.6 PERF-15: cards are built once per render; typing in the filter only toggles their visibility, debounced.
+	private list: HTMLElement | null = null;
+	private groups: CardGroup[] = [];
+	private message: HTMLElement | null = null;
 	private readonly refresh = debounce(() => this.render(), 300, true);
+	private readonly filterSoon = debounce(() => this.applyFilter(), 100, true);
 
 	constructor(leaf: WorkspaceLeaf, private plugin: CMDSZoteroPlugin) { super(leaf); }
 	getViewType(): string { return VIEW_TYPE_ANNOTATIONS; }
@@ -36,11 +48,16 @@ export class AnnotationsView extends ItemView {
 		const file = this.app.workspace.getActiveFile();
 		if (!(file instanceof TFile) || file.extension !== "md" || !entries.length) return null;
 		const fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(file)?.frontmatter;
-		const id = noteIdentity(file.basename, fm, buildAliasIndex(entries));
-		return id ? entries.find(entry => entry.id === id) ?? null : null;
+		// 0.6 PERF-05: the alias index and id map are built once per index generation, not on every render.
+		const derived = indexDerived(entries);
+		const id = noteIdentity(file.basename, fm, derived.aliasIndex);
+		return id ? derived.entryById(id) : null;
 	}
 
 	render(): void {
+		this.filterSoon.cancel();
+		this.groups = [];
+		this.message = null;
 		const container = this.contentEl;
 		container.empty();
 		container.addClass("cmds-zotero-sidebar");
@@ -52,32 +69,49 @@ export class AnnotationsView extends ItemView {
 		choose.addEventListener("click", () => { if (this.pinned) this.pin(null); else void this.plugin.pick(entry => this.pin(entry)); });
 		const search = toolbar.createEl("input", { type: "search", placeholder: "Filter text, comment, tag, page", attr: { "aria-label": "Filter annotations" } });
 		search.value = this.filter;
-		search.addEventListener("input", () => { this.filter = search.value; this.renderList(list); });
+		search.addEventListener("input", () => { this.filter = search.value; this.filterSoon(); });
 		// One warm-up per render; skipped while the plugin backs off after a failed refresh.
 		if (!this.plugin.indexLoaded() && !this.plugin.warmBackoffActive()) void this.plugin.warmIndex();
 		const list = container.createDiv({ cls: "cmds-zotero-annotation-list" });
+		this.list = list;
 		if (!this.entry) { list.createEl("p", { cls: "setting-item-description", text: "Open a literature note, or pin a Zotero item, to see its annotations." }); return; }
 		header.createEl("div", { cls: "cmds-zotero-sidebar-title", text: this.entry.title });
 		header.createEl("div", { cls: "setting-item-description", text: `@${this.entry.citekey} · ${this.entry.attachments.reduce((n, a) => n + a.annotations.length, 0)} annotations` });
 		this.renderList(list);
 	}
 
+	/** Every card of the entry, in page order per attachment, then the list's message; the filter decides what shows. */
 	private renderList(list: HTMLElement): void {
-		list.empty();
 		const entry = this.entry;
 		if (!entry) return;
-		const query = this.filter.trim().toLowerCase();
-		let shown = 0;
 		for (const attachment of entry.attachments) {
-			const annotations = [...attachment.annotations].sort((a, b) => a.page - b.page).filter(a => !query || `${a.text} ${a.comment} ${a.tags.join(" ")} ${a.pageLabel} ${a.page}`.toLowerCase().includes(query));
+			const annotations = annotationsByPage(attachment);
 			if (!annotations.length) continue;
-			if (entry.attachments.length > 1) list.createEl("h6", { text: attachment.title || attachment.key });
-			for (const annotation of annotations) { this.renderAnnotation(list, entry, attachment, annotation); shown++; }
+			const heading = entry.attachments.length > 1 ? list.createEl("h6", { text: attachment.title || attachment.key }) : null;
+			this.groups.push({ heading, cards: annotations.map(annotation => this.renderAnnotation(list, entry, attachment, annotation)), haystacks: annotations.map(annotationHaystack) });
 		}
-		if (!shown) list.createEl("p", { cls: "setting-item-description", text: query ? "No annotations match the filter." : entry.attachmentStatus === "unavailable" ? "Attachment lookup failed at the last refresh. Refresh the index." : "No annotations are indexed for this item." });
+		this.message = list.createEl("p", { cls: "setting-item-description" });
+		this.applyFilter();
 	}
 
-	private renderAnnotation(list: HTMLElement, entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation): void {
+	/** Shows the cards (and attachment headings) the current filter matches, or the list's message when none is shown. */
+	private applyFilter(): void {
+		const list = this.list;
+		if (!list) return;
+		const entry = this.entry;
+		// Unchanged from 0.5: typing in the filter while no item is followed clears the list, hint included.
+		if (!entry || !this.message) { list.empty(); return; }
+		const query = annotationQuery(this.filter);
+		const visibility = annotationVisibility(this.groups.map(group => group.haystacks), query);
+		this.groups.forEach((group, index) => {
+			group.heading?.toggleClass(FILTERED_OUT, !visibility.headings[index]);
+			group.cards.forEach((card, position) => card.toggleClass(FILTERED_OUT, !visibility.cards[index][position]));
+		});
+		this.message.setText(emptyAnnotationsText(query, entry.attachmentStatus));
+		this.message.toggleClass(FILTERED_OUT, visibility.shown > 0);
+	}
+
+	private renderAnnotation(list: HTMLElement, entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation): HTMLElement {
 		const color = colorName(annotation.color);
 		const card = list.createDiv({ cls: `cmds-zotero-annotation${color ? ` cmds-zotero-annotation-${color}` : ""}` });
 		const head = card.createDiv({ cls: "cmds-zotero-annotation-head" });
@@ -93,6 +127,7 @@ export class AnnotationsView extends ItemView {
 		this.action(actions, "text-cursor-input", "Insert at cursor", () => this.insert(entry, attachment, annotation));
 		this.action(actions, "link", "Copy annotation link", () => this.plugin.copyLink(`${entry.title} — p. ${annotation.pageLabel || annotation.page}`, uri));
 		this.action(actions, "clipboard-copy", "Copy annotation text", async () => { await navigator.clipboard.writeText(annotation.text || annotation.comment); new Notice("Annotation text copied."); });
+		return card;
 	}
 
 	private action(parent: HTMLElement, icon: string, label: string, run: () => Promise<void> | void): void {
@@ -110,7 +145,15 @@ export class AnnotationsView extends ItemView {
 		void this.app.workspace.revealLeaf(view.leaf);
 	}
 
-	onClose(): Promise<void> { this.contentEl.empty(); this.status = null; return Promise.resolve(); }
+	onClose(): Promise<void> {
+		this.filterSoon.cancel();
+		this.contentEl.empty();
+		this.status = null;
+		this.list = null;
+		this.groups = [];
+		this.message = null;
+		return Promise.resolve();
+	}
 
 	// 0.5 R4: the shared status line in the header, updated by the plugin without a full re-render.
 	renderStatus(line: string): void { this.status?.setText(line); }

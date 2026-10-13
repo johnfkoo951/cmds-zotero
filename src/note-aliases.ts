@@ -10,15 +10,16 @@ import type { ZoteroIndexEntry } from "./types";
 import { ZOTERO_NOTE_TYPES } from "./agent/types";
 import { ITEM_KEY, parseZoteroURI } from "./uris";
 
+/** Read-only: one alias index is shared by every reader of an index generation (0.6 PERF-05, `indexDerived`). */
 export interface AliasIndex {
-	ids: Set<string>;
+	readonly ids: ReadonlySet<string>;
 	/** Current citekeys and history → entry id; `null` once two items claim the same key. */
-	aliases: Map<string, string | null>;
+	readonly aliases: ReadonlyMap<string, string | null>;
 	/** `libraryType/groupID/itemKey` (the identity a `zotero://select` URI carries) → entry id; `null` on collision. */
-	selects: Map<string, string | null>;
+	readonly selects: ReadonlyMap<string, string | null>;
 	/** Bare item key → entry id; usable as ZotLit evidence only while `singleLibrary` holds. */
-	itemKeys: Map<string, string | null>;
-	singleLibrary: boolean;
+	readonly itemKeys: ReadonlyMap<string, string | null>;
+	readonly singleLibrary: boolean;
 }
 
 const FOREIGN_LINK = /\b(?:bookends|x-devonthink-item):\/\//;
@@ -33,7 +34,7 @@ function selectKey(libraryType: string, groupID: number | undefined, itemKey: st
 	return `${libraryType}/${groupID ?? 0}/${itemKey}`;
 }
 
-export function buildAliasIndex(entries: ZoteroIndexEntry[]): AliasIndex {
+export function buildAliasIndex(entries: readonly ZoteroIndexEntry[]): AliasIndex {
 	const ids = new Set(entries.map(entry => entry.id));
 	const aliases = new Map<string, string | null>();
 	const selects = new Map<string, string | null>();
