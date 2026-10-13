@@ -102,6 +102,9 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		});
 	};
 	host.importNote = (importRequest: ImportRequest) => plugin.literature.importForAgent(importRequest, index);
+	// 0.6 annotations: a fresh read of one item, and the day's reading history. Neither touches the saved index, the recent-reads cache or any vault file.
+	host.freshEntry = async subject => "entry" in subject ? plugin.literature.freshEntry(subject.entry) : plugin.literature.entryForRecent(subject.read, index);
+	host.readOnDay = async day => (await plugin.bbt.recentlyRead(1, { now })).filter(read => read.readOn === day);
 	host.extractPdf = async (target, pdfRequest: PdfTextRequest) => {
 		if (!target.localPath) throw new Error("The PDF file is unavailable.");
 		if (target.item && target.attachment.key) {

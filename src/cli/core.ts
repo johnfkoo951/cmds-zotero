@@ -4,7 +4,7 @@ import { basename, join, relative, sep } from "node:path";
 import { validateIndex } from "../identity";
 import { buildConnection, buildEnvelope } from "../agent/connection";
 import { ACTION_API_VERSION, AGENT_ACTIONS, runAction as dispatch, type ActionHost, type AgentAction, type PdfCacheReader } from "../agent/actions";
-import type { FailureReason, IndexView } from "../agent/types";
+import type { FailureReason, IndexView, NoteRecord, VaultReader } from "../agent/types";
 import { probeBbt } from "./bbt-direct";
 import { configDirOf, FsVaultReader, locateVault, readPluginSettings, readEnabledPlugins, readInstalledPluginVersion } from "./fs-vault";
 import { probeGit } from "../git-probe";
@@ -25,8 +25,8 @@ export function pluginApiVersionsFor(version: string | null): number[] | null {
 }
 
 
-/** `configDir` (HYG-02) is the vault's configuration folder name (`--config-dir`); null or absent means Obsidian's default. */
-export interface OfflineRunInput { action: string; vault: string; vaultPath?: string | null; configDir?: string | null; request?: unknown; obsidianError?: string | null; now?: Date }
+/** `configDir` (HYG-02) is the vault's configuration folder name: `--config-dir`, or the default the command line wrapper supplies. */
+export interface OfflineRunInput { action: string; vault: string; vaultPath?: string | null; configDir: string; request?: unknown; obsidianError?: string | null; now?: Date }
 
 async function readIndex(root: string, path: string): Promise<{ index: ZoteroIndex | null; failure: { reason: FailureReason; message: string } | null; present: boolean }> {
 	let full: string;
@@ -113,16 +113,53 @@ async function offlineHost(input: OfflineRunInput, action: AgentAction): Promise
 	};
 }
 
+/** Maps a thrown error of an offline action to its structured failure envelope. */
+function offlineFailure(host: ActionHost, action: AgentAction, error: unknown): Record<string, unknown> {
+	const message = error instanceof Error ? error.message : "Offline action failed.";
+	// 0.5 R13/F08: typed local-file refusals map by code before any message pattern.
+	const reason: FailureReason = error instanceof LocalFileError ? (error.code === "too-large" ? "pdf-too-large" : "pdf-invalid") : /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
+	return { ...buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, host.now, { reason, message }), ...(ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {}) };
+}
+
 export async function runAction(input: OfflineRunInput): Promise<Record<string, unknown>> {
 	if (!AGENT_ACTIONS.includes(input.action as AgentAction)) throw new Error(`Unsupported action: ${input.action}`);
 	const action = input.action as AgentAction;
 	const host = await offlineHost(input, action);
 	if ("failure" in host) return host.failure;
 	try { return await dispatch(host, action, input.request ?? {}); }
-	catch (error) {
-		const message = error instanceof Error ? error.message : "Offline action failed.";
-		// 0.5 R13/F08: typed local-file refusals map by code before any message pattern.
-		const reason: FailureReason = error instanceof LocalFileError ? (error.code === "too-large" ? "pdf-too-large" : "pdf-invalid") : /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
-		return { ...buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, host.now, { reason, message }), ...(ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {}) };
+	catch (error) { return offlineFailure(host, action, error); }
+}
+
+/** A reader whose vault listing is taken once; reads of single notes pass through. For a batch of read-only requests of one action. */
+function sharedListing(reader: VaultReader): VaultReader {
+	let listing: Promise<NoteRecord[]> | null = null;
+	const scanWarnings = reader.scanWarnings?.bind(reader);
+	const findNote = reader.findNote?.bind(reader);
+	return {
+		vaultName: () => reader.vaultName(),
+		listNotes: () => (listing ??= reader.listNotes()).then(notes => [...notes]),
+		readNote: path => reader.readNote(path),
+		exists: path => reader.exists(path),
+		...(scanWarnings ? { scanWarnings } : {}),
+		...(findNote ? { findNote } : {}),
+	};
+}
+
+/**
+ * `runAction` for many requests of one action (`resolve --stdin`): the host (vault location, settings, index, git probe) is
+ * built once and the vault is listed once, so a batch costs little more than a single request. Each request is answered on its
+ * own, in order; a failing request becomes its own failure envelope and never stops the others.
+ */
+export async function runActions(input: Omit<OfflineRunInput, "request"> & { requests: readonly unknown[] }): Promise<Record<string, unknown>[]> {
+	if (!AGENT_ACTIONS.includes(input.action as AgentAction)) throw new Error(`Unsupported action: ${input.action}`);
+	const action = input.action as AgentAction;
+	const host = await offlineHost(input, action);
+	if ("failure" in host) return input.requests.map(() => host.failure);
+	const shared: ActionHost = { ...host, reader: sharedListing(host.reader) };
+	const results: Record<string, unknown>[] = [];
+	for (const request of input.requests) {
+		try { results.push(await dispatch(shared, action, request ?? {})); }
+		catch (error) { results.push(offlineFailure(shared, action, error)); }
 	}
+	return results;
 }

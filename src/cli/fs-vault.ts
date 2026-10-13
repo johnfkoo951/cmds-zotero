@@ -14,17 +14,13 @@ export const MAX_LISTED_NOTES = 20000;
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 
 /**
- * HYG-02: Obsidian's default configuration folder, the one place the offline CLI names it. The CLI runs without
- * Obsidian, so there is no `Vault#configDir` to read: the folder is a parameter (`--config-dir`) and this is only its
- * default. The `obsidianmd/hardcoded-config-path` warning on this line is expected; the plugin's lint configuration
- * forbids disabling `obsidianmd/*` rules inline.
+ * HYG-02: a configuration folder name as Obsidian accepts one: a single path segment that starts with a dot. The offline CLI
+ * runs without Obsidian, so there is no `Vault#configDir` to ask. The folder is therefore always a parameter (`--config-dir`),
+ * and the command line wrapper (scripts/ingest.mjs) supplies Obsidian's default when none is given: no plugin source names
+ * the default folder, which `obsidianmd/hardcoded-config-path` forbids and its configuration does not let a file disable.
  */
-export const DEFAULT_CONFIG_DIR = ".obsidian";
-
-/** A configuration folder name as Obsidian accepts one: a single path segment that starts with a dot. Null means the default. */
-export function configDirOf(value: string | null | undefined): string {
-	if (value === null || value === undefined) return DEFAULT_CONFIG_DIR;
-	if (!/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
+export function configDirOf(value: string): string {
+	if (typeof value !== "string" || !/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
 	return value;
 }
 
@@ -176,21 +172,21 @@ export class FsVaultReader implements VaultReader {
 }
 
 /** Plugin settings as persisted by Obsidian in the vault's configuration folder, normalized exactly like the plugin does; defaults when absent. */
-export async function readPluginSettings(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<{ settings: CmdsZoteroSettings; present: boolean }> {
+export async function readPluginSettings(root: string, configDir: string): Promise<{ settings: CmdsZoteroSettings; present: boolean }> {
 	try {
 		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
 		return { settings: normalizeSettings(raw), present: true };
 	} catch { return { settings: normalizeSettings({}), present: false }; }
 }
 
-export async function readEnabledPlugins(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<string[] | null> {
+export async function readEnabledPlugins(root: string, configDir: string): Promise<string[] | null> {
 	try {
 		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "community-plugins.json"), "utf8"));
 		return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : null;
 	} catch { return null; }
 }
 
-export async function readInstalledPluginVersion(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<string | null> {
+export async function readInstalledPluginVersion(root: string, configDir: string): Promise<string | null> {
 	try {
 		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "manifest.json"), "utf8"));
 		const version = raw && typeof raw === "object" ? (raw as { version?: unknown }).version : undefined;

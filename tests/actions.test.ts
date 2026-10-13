@@ -25,9 +25,9 @@ function host(): ActionHost {
 	return value;
 }
 
-const requests: Record<string, object> = { connection: {}, info: {}, refresh: {}, resolve: { citekey: "smith2020" }, identity: { doi: "10.1000/Example", noBibliography: true }, cites: { path: "Questions/Q.md" }, reconcile: {}, diagnostics: {}, "pdf-text": { citekey: "smith2020", pages: "1" }, locate: { citekey: "smith2020", quote: "synthetic" }, recent: {}, import: { citekey: "smith2020" }};
+const requests: Record<string, object> = { connection: {}, info: {}, refresh: {}, resolve: { citekey: "smith2020" }, identity: { doi: "10.1000/Example", noBibliography: true }, cites: { path: "Questions/Q.md" }, reconcile: {}, diagnostics: {}, "pdf-text": { citekey: "smith2020", pages: "1" }, locate: { citekey: "smith2020", quote: "synthetic" }, recent: {}, import: { citekey: "smith2020" }, annotations: { citekey: "smith2020" }, citing: { citekey: "smith2020" }};
 
-test("one exhaustive dispatcher serves all ten actions with the declared payload version", async () => {
+test("one exhaustive dispatcher serves every action with the declared payload version", async () => {
 	for (const action of AGENT_ACTIONS) {
 		const result = await runAction(host(), action, requests[action]);
 		assert.equal(result.action, action);

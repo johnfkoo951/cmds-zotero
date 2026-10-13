@@ -1,6 +1,6 @@
 ---
 name: cmds-zotero
-description: Agent CLI for CMDS Zotero (contract 2). List papers recently read in Zotero and send them to their literature (metadata) notes; resolve papers by citekey, DOI, arXiv or title; produce hub identity and S01 text; validate citations and generate References; extract PDF text and locate quotes; reconcile provisional citekeys. Use for "최근 읽은 논문", "문헌노트로 보내기", paper ingest, Zotero identity, DOI lookup, page locators, quote pages, References 생성, or provisional citekey diagnostics. NOT for editing Zotero items or driving ZotLit UI.
+description: Agent CLI for CMDS Zotero (contract 2). List papers recently read in Zotero and send them to their literature (metadata) notes; resolve papers by citekey, DOI, arXiv or title (one at a time or a batch); read a paper's annotations for digests; find the notes that cite a paper; produce hub identity and S01 text; validate citations and generate References; extract PDF text and locate quotes; reconcile provisional citekeys. Use for "최근 읽은 논문", "문헌노트로 보내기", "주석 정리", "하이라이트 요약", "이 논문을 인용한 노트", paper ingest, Zotero identity, DOI lookup, verifying suggested references, page locators, quote pages, References 생성, or provisional citekey diagnostics. NOT for editing Zotero items or driving ZotLit UI.
 ---
 
 # CMDS Zotero agent CLI
@@ -36,6 +36,9 @@ Run `--help` for the complete action-specific flag list.
 | Extract PDF text | pdf-text | `--citekey KEY` or `--item-key KEY --library ID` or `--file "80. References/Attachments/example.pdf"`; optional `--attachment`, `--pages "1-5,9"`, `--force` |
 | Find exact quote pages | locate | `--citekey KEY --quote "quoted text"`, or `--path "40. Paper Analyses/example2024Graph/Atom.md"`; optional explicit PDF target |
 | Combined diagnostics | diagnostics | optional `--allow-stale` |
+| A paper's annotations for a digest (0.6) | annotations | `--citekey KEY`, `--item-key KEY --library ID` or `--today` (the one paper Zotero opened today); filters `--color yellow`, `--type highlight`, `--tag method`, `--attachment KEY`; `--fresh` reads Zotero now (live) instead of the saved index |
+| Notes that cite a paper (0.6) | citing | one selector as for resolve; current and former citekeys, each body citation with line, column and excerpt; frontmatter citations apart |
+| Many lookups in one call (0.6) | resolve | `--stdin` with NDJSON on standard input, one selector object per line (at most 500); one envelope per line, `line` names the input line |
 
 `--year` and `--author` narrow title/query selectors. Query/prefix matches rank candidates; they do not resolve by themselves.
 `--refresh` is explicit and live-only on resolve/identity. `--pages` selects text to inline, not a partial-source cache.
@@ -56,6 +59,30 @@ The References section of a note is any `##`–`######` heading titled per the p
 4. Write your own synthesis only in user-owned regions of the note: the `## Synthesis` callout (`**Contribution**::`,
    `**Related**::`), `## Notes`, or text outside `<!-- cmds-zotero:... -->` blocks. Cite quotes with `locate` so page
    links are verified. A later `import --apply` keeps all of that text.
+
+## Recipes (0.6)
+
+**Summary with page-checked quotes (요약 + 원문 쪽수).** Run `pdf-text --citekey KEY`; if `textLayer.ocrRecommended` is
+true, say the PDF needs OCR instead of summarising empty text. Quote only exact sentences from the extracted text, then run
+`locate --citekey KEY --quote "…"` for every quote. Put the verified page in the callout title (`원문 (p.N)`, linked with the
+returned open-pdf URI); a quote that `locate` cannot confirm is marked unverified or dropped, never given a guessed page.
+
+**Verify suggested references (추천 참고문헌 검증).** For references proposed by a person or a model, resolve each one by
+`--doi`, or by `--title` with `--year`/`--author`; batch them with `resolve --stdin`. `resolved` gives the citekey to cite.
+`not-found` means "not in this Zotero library" (it is not proof the work does not exist): say so and never invent a citekey.
+`ambiguous` lists candidates for a human to choose; `query` matches only rank candidates.
+
+**Annotation digest (주석·하이라이트 정리).** `annotations --citekey KEY` answers from the saved index, offline included; add
+`--fresh` while Zotero runs to include annotations made since the last refresh (`annotationsAsOf` says which). Attachments and
+annotations come in Zotero's reading order; each row has its color name and hex, page and printed label, text, comment, tags and
+an open-pdf `uri` to link. Image annotations carry `image.private: true`: their cache paths stay on this machine, and
+`vaultCopies` lists imported copies inside the vault. Filter by `--color`, `--type`, `--tag` or `--attachment` before summarising.
+
+**Where a paper is cited (이 논문을 인용한 노트).** `citing --citekey KEY` scans the vault exactly as `cites` does. Counted:
+pandoc citations `[@key]`, `[-@key]`, `[see @key, p. 4]`, bare `@key` in the body, `[[@key]]` wikilinks, and `[@key]` inside
+frontmatter strings (reported apart). Skipped: fenced code blocks, the note's References section and the note's own `citekey`
+property. Former citekeys count; a key another item also carries is listed under `keys.excluded` instead of being guessed. An
+empty list proves absence only when `scan.complete` is true.
 
 ## Response and exit interpretation
 

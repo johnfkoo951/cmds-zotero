@@ -24,13 +24,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 globalThis.require ??= createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE = join(HERE, 'ingest-core.mjs');
+// Obsidian's default configuration folder. The offline core takes the folder as a parameter and names no default itself, because
+// the plugin's lint rules forbid the literal in src/; this wrapper is where the default lives. --config-dir overrides it.
+const DEFAULT_CONFIG_DIR = '.obsidian';
 
-const ACTION_API_VERSION = { connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, 'pdf-text': 2, locate: 2, recent: 2, import: 2 };
-// Actions added after the first contract-2 host (0.4.0): an older host does not list them and is refused before submission.
-const LATER_ACTIONS = new Set(['recent', 'import']);
+const ACTION_API_VERSION = { connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, 'pdf-text': 2, locate: 2, recent: 2, import: 2, annotations: 2, citing: 2 };
+// Actions added after the first contract-2 host (0.4.0), with the plugin version that added them: an older host does not list
+// them and is refused before submission (plugin-too-old).
+const ACTION_SINCE = { recent: '0.5', import: '0.5', annotations: '0.6', citing: '0.6' };
+const LATER_ACTIONS = new Set(Object.keys(ACTION_SINCE));
 const V1_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 1);
 const V2_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 2);
-const OFFLINE_CAPABLE = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'locate']);
+const OFFLINE_CAPABLE = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'locate', 'annotations', 'citing']);
 const LIVE_ONLY = new Set(['refresh', 'pdf-text', 'recent', 'import']);
 
 // name → { type, actions (null = all), help }
@@ -40,21 +45,21 @@ const FLAGS = {
 	'--config-dir': { type: 'string', actions: null, help: "The vault's configuration folder for offline mode when it is not .obsidian (one name starting with a dot)" },
 	'--action': { type: 'string', actions: null, help: V1_ACTIONS.concat(V2_ACTIONS).join('|') },
 	'--offline': { type: 'boolean', actions: null, help: 'Skip the Obsidian bridge and answer from the index file' },
-	'--allow-stale': { type: 'boolean', actions: ['resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'import'], help: 'Accept negative verdicts from a stale index; import: use the saved index when Zotero cannot be read fresh' },
+	'--allow-stale': { type: 'boolean', actions: ['resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'import', 'annotations', 'citing'], help: 'Accept negative verdicts from a stale index; import, annotations --fresh: use the saved index when Zotero cannot be read fresh' },
 	'--refresh': { type: 'boolean', actions: ['resolve', 'identity'], help: 'Force an index refresh first (live only)' },
 	'--timeout': { type: 'integer', actions: null, min: 30, max: 3600, help: 'Seconds to wait for the plugin job (default 300; pdf-text 900)' },
 	'--strict': { type: 'boolean', actions: ['cites', 'reconcile'], help: 'Exit 1 when any error-severity diagnostic is reported' },
-	'--citekey': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import'], help: 'Citation key selector' },
-	'--item-key': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import'], help: 'Eight-character Zotero item key (requires --library)' },
-	'--library': { type: 'integer', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import'], min: 1, max: 1e9, help: 'Local library ID' },
-	'--doi': { type: 'string', actions: ['resolve', 'identity'], help: 'DOI selector' },
-	'--arxiv': { type: 'string', actions: ['resolve', 'identity'], help: 'arXiv id selector' },
-	'--title': { type: 'string', actions: ['resolve', 'identity'], help: 'Exact title selector' },
-	'--query': { type: 'string', actions: ['resolve', 'identity'], help: 'Free-text selector (never resolves; ranks candidates)' },
-	'--year': { type: 'string', actions: ['resolve', 'identity'], help: 'Narrow a title/query selector by year' },
-	'--author': { type: 'string', actions: ['resolve', 'identity'], help: 'Narrow a title/query selector by surname' },
+	'--citekey': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import', 'annotations', 'citing'], help: 'Citation key selector' },
+	'--item-key': { type: 'string', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import', 'annotations', 'citing'], help: 'Eight-character Zotero item key (requires --library)' },
+	'--library': { type: 'integer', actions: ['resolve', 'identity', 'pdf-text', 'locate', 'import', 'annotations', 'citing'], min: 1, max: 1e9, help: 'Local library ID' },
+	'--doi': { type: 'string', actions: ['resolve', 'identity', 'citing'], help: 'DOI selector' },
+	'--arxiv': { type: 'string', actions: ['resolve', 'identity', 'citing'], help: 'arXiv id selector' },
+	'--title': { type: 'string', actions: ['resolve', 'identity', 'citing'], help: 'Exact title selector' },
+	'--query': { type: 'string', actions: ['resolve', 'identity', 'citing'], help: 'Free-text selector (never resolves; ranks candidates)' },
+	'--year': { type: 'string', actions: ['resolve', 'identity', 'citing'], help: 'Narrow a title/query selector by year' },
+	'--author': { type: 'string', actions: ['resolve', 'identity', 'citing'], help: 'Narrow a title/query selector by surname' },
 	'--raw-source': { type: 'string', actions: ['identity'], help: 'Raw Source wikilink for the S01 block' },
-	'--attachment': { type: 'string', actions: ['identity', 'pdf-text', 'locate'], help: 'Attachment key when an item has several PDFs' },
+	'--attachment': { type: 'string', actions: ['identity', 'pdf-text', 'locate', 'annotations'], help: 'Attachment key when an item has several PDFs; annotations: only that attachment' },
 	'--style': { type: 'string', actions: ['identity', 'cites'], help: 'CSL style id (default from settings)' },
 	'--no-bibliography': { type: 'boolean', actions: ['identity'], help: 'Skip the BBT bibliography call' },
 	'--path': { type: 'string', actions: ['cites', 'locate'], help: 'Vault-relative file or folder' },
@@ -70,6 +75,13 @@ const FLAGS = {
 	'--format': { type: 'string', actions: ['cites'], help: 'With --bibliography: text (default) | markdown | csl-json | bibtex | biblatex' },
 	'--out': { type: 'optional-string', actions: ['cites'], help: 'With --bibliography: write the sidecar (live only). No value = .cmds-zotero/bibliography/<slug>.<ext>; a vault-relative path outside it must be absent or plugin-marked' },
 	'--quote': { type: 'string', actions: ['locate'], help: 'Quote text to locate (≤ 8 KiB)' },
+	// 0.6
+	'--stdin': { type: 'boolean', actions: ['resolve'], help: 'Read NDJSON from stdin, one JSON selector object per line (citekey | itemKey+libraryID | doi | arxiv | title [year, author] | query; allowStale), at most 500; prints one envelope per line' },
+	'--today': { type: 'boolean', actions: ['annotations'], help: 'Select the paper Zotero opened today (live; resolves only when exactly one paper qualifies)' },
+	'--fresh': { type: 'boolean', actions: ['annotations'], help: 'Read the annotations from Zotero now instead of the saved index (live only)' },
+	'--color': { type: 'string', actions: ['annotations'], help: 'Only this color: yellow|red|green|blue|purple|magenta|orange|gray, or hex like #ffd400' },
+	'--type': { type: 'string', actions: ['annotations'], help: 'Only this annotation type: highlight|underline|note|text|image|ink' },
+	'--tag': { type: 'string', actions: ['annotations'], help: 'Only annotations carrying this tag (case-insensitive)' },
 	'--if-older-than': { type: 'integer', actions: ['refresh'], min: 1, max: 10080, help: 'Refresh only when the index is older than N minutes' },
 };
 
@@ -117,11 +129,17 @@ if (!V1_ACTIONS.concat(V2_ACTIONS).includes(action)) fail(`Unsupported action: $
 for (const [name, flag] of Object.entries(FLAGS)) if (name in parsed.values && flag.actions && !flag.actions.includes(action)) fail(`${name} does not apply to --action ${action}.`);
 
 const SELECTORS = ['--citekey', '--item-key', '--doi', '--arxiv', '--title', '--query'];
-if (['resolve', 'identity'].includes(action)) {
+// 0.6: resolve --stdin takes its selectors from the input lines, so no selector flag (and no per-batch refresh) may accompany it.
+const stdin = parsed.values['--stdin'] === true;
+if (stdin) {
+	const foreign = [...SELECTORS, '--library', '--year', '--author', '--refresh'].filter(name => name in parsed.values);
+	if (foreign.length) fail(`--stdin takes the selectors from the input lines; remove ${foreign.join(', ')} (refresh once with --action refresh).`);
+}
+if (['resolve', 'identity', 'citing'].includes(action)) {
 	const given = SELECTORS.filter(name => name in parsed.values);
 	// identity may pair --citekey (vault key) with one other selector; resolve takes exactly one.
 	const distinct = action === 'identity' ? given.filter(name => name !== '--citekey') : given;
-	if (action === 'resolve' && given.length !== 1) fail('resolve needs exactly one selector: --citekey | --item-key --library | --doi | --arxiv | --title | --query.');
+	if ((action === 'resolve' || action === 'citing') && given.length !== 1 && !stdin) fail(`${action} needs exactly one selector: --citekey | --item-key --library | --doi | --arxiv | --title | --query${action === 'resolve' ? ' (or --stdin)' : ''}.`);
 	if (action === 'identity' && given.length === 0) fail('identity needs a selector: --citekey | --item-key --library | --doi | --arxiv | --title | --query.');
 	if (action === 'identity' && distinct.length > 1) fail('identity accepts --citekey plus at most one other selector.');
 	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('Stable resolution requires an eight-character item key and --library.');
@@ -141,6 +159,17 @@ if (action === 'import') {
 	if (given.length !== 1) fail('import needs exactly one selector: --citekey | --item-key --library.');
 	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
 }
+// 0.6
+const ANNOTATION_COLORS = ['yellow', 'red', 'green', 'blue', 'purple', 'magenta', 'orange', 'gray'];
+const ANNOTATION_TYPES = ['highlight', 'underline', 'note', 'text', 'image', 'ink'];
+if (action === 'annotations') {
+	if (['--citekey', '--item-key', '--today'].filter(name => name in parsed.values).length !== 1) fail('annotations needs exactly one selector: --citekey | --item-key --library | --today.');
+	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
+	if ('--attachment' in parsed.values && !/^[A-Za-z0-9]{8}$/.test(parsed.values['--attachment'])) fail('--attachment must be an eight-character attachment key.');
+	if ('--color' in parsed.values && !(ANNOTATION_COLORS.includes(parsed.values['--color'].trim().toLowerCase()) || /^(#[0-9a-fA-F]{3}|#?[0-9a-fA-F]{6})$/.test(parsed.values['--color'].trim()))) fail(`--color must be one of ${ANNOTATION_COLORS.join(', ')} or a hex value such as #ffd400.`);
+	if ('--type' in parsed.values && !ANNOTATION_TYPES.includes(parsed.values['--type'].trim().toLowerCase())) fail(`--type must be one of ${ANNOTATION_TYPES.join(', ')}.`);
+	if ('--tag' in parsed.values && !parsed.values['--tag'].trim()) fail('--tag must not be empty.');
+}
 // HYG-02: the offline core joins this name onto the vault root, so it must stay a single dot-folder segment.
 if ('--config-dir' in parsed.values && (!/^\.[^/\\]+$/.test(parsed.values['--config-dir']) || parsed.values['--config-dir'] === '..' || parsed.values['--config-dir'].includes('\0'))) fail('--config-dir must be one folder name that starts with a dot.');
 // 0.5 R10
@@ -148,16 +177,16 @@ const BIBLIOGRAPHY_FORMATS = ['text', 'markdown', 'csl-json', 'bibtex', 'biblate
 if (action === 'cites' && '--format' in parsed.values && !BIBLIOGRAPHY_FORMATS.includes(parsed.values['--format'])) fail(`--format must be one of ${BIBLIOGRAPHY_FORMATS.join(', ')}.`);
 if (action === 'cites' && ('--format' in parsed.values || '--out' in parsed.values || '--force' in parsed.values) && !('--bibliography' in parsed.values)) fail('--format, --out and --force need --bibliography.');
 
-const request = {};
-const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict' };
+let request = {};
+const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict', '--today': 'today', '--fresh': 'fresh', '--color': 'color', '--type': 'type', '--tag': 'tag' };
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
 const pollOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
 const delayOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_DELAY_MS ?? '') ? Number(process.env.CMDS_ZOTERO_DELAY_MS) : null;
 const timeoutMs = pollOverride ?? (parsed.values['--timeout'] ?? (action === 'pdf-text' ? 900 : 300)) * 1000;
 const offline = parsed.values['--offline'] === true;
-// 0.5 R10: a cites request that writes a sidecar is a live write, like reconcile --apply.
-const liveWrite = LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply === true) || (action === 'cites' && request.out !== undefined);
+// 0.5 R10: a cites request that writes a sidecar is a live write, like reconcile --apply. 0.6: annotations --fresh and --today ask Zotero.
+const liveWrite = LIVE_ONLY.has(action) || (action === 'reconcile' && request.apply === true) || (action === 'cites' && request.out !== undefined) || (action === 'annotations' && (request.fresh === true || request.today === true));
 const TRANSIENT_DELAY_MS = 500;
 const DISCOVERY_RETRIES = 3;
 // PERF-09: most jobs finish within a few hundred milliseconds, so the first polls come quickly; the 500 ms ceiling keeps
@@ -258,7 +287,7 @@ async function runLive() {
 async function runOffline(obsidianError) {
 	if (!existsSync(CORE)) return { apiVersion: V1_ACTIONS.includes(action) ? 1 : 2, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'bundle-missing', message: 'scripts/ingest-core.mjs is missing; run npm run build:core.', checkedAt: new Date().toISOString(), connection: unknownConnection('Offline core bundle is missing.', 'offline') };
 	const core = await import(pathToFileURL(CORE).href);
-	return core.runAction({ action, vault, vaultPath: parsed.values['--vault-path'] ?? null, configDir: parsed.values['--config-dir'] ?? null, request, obsidianError: obsidianError ?? null, now: new Date() });
+	return core.runAction({ action, vault, vaultPath: parsed.values['--vault-path'] ?? null, configDir: parsed.values['--config-dir'] ?? DEFAULT_CONFIG_DIR, request, obsidianError: obsidianError ?? null, now: new Date() });
 }
 
 function unknownConnection(obsidianError, mode = offline ? 'offline' : 'live') {
@@ -293,28 +322,112 @@ async function emit(payload) {
 	}
 }
 
-async function main() {
+// Set when the live host could not be used and the offline core answered; the batch then answers its remaining lines offline too.
+let fellBackOffline = false;
+let lastBridgeMessage = null;
+
+async function produce() {
 	if (!offline) {
 		const live = await runLive();
-		if (live.result) { await emit(legacyEnvelope(live.result)); return; }
+		if (live.result) return legacyEnvelope(live.result);
 		const bridge = live.bridge;
 		if (live.phase === 'accepted' || live.phase === 'submission-uncertain') {
-			await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', `${bridge.message ?? 'The job result is unavailable.'} The submission may have been accepted; do not resubmit automatically.`)); return;
+			return structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', `${bridge.message ?? 'The job result is unavailable.'} The submission may have been accepted; do not resubmit automatically.`);
 		}
-		if (bridge.kind === 'invalid-request') { await emit(structuredFailure('invalid-request', bridge.message, true, presentPluginConnection(bridge.apiVersions))); return; }
-		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') { await emit(structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message)); return; }
-		if (bridge.kind === 'too-old-action') { await emit(structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not provide the ${action} action; install CMDS Zotero 0.5 or later and reload it.`, true, presentPluginConnection(bridge.apiVersions))); return; }
+		if (bridge.kind === 'invalid-request') return structuredFailure('invalid-request', bridge.message, true, presentPluginConnection(bridge.apiVersions));
+		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') return structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message);
+		if (bridge.kind === 'too-old-action') return structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not provide the ${action} action; install CMDS Zotero ${ACTION_SINCE[action]} or later and reload it.${OFFLINE_CAPABLE.has(action) && !liveWrite ? ' Add --offline to answer from the saved index file instead.' : ''}`, true, presentPluginConnection(bridge.apiVersions));
 		if (bridge.kind === 'too-old' || bridge.kind === 'too-old-read') {
-			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !liveWrite) { await emit(await runOffline(`Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`)); return; }
-			await emit(structuredFailure('plugin-too-old', `The loaded plugin supports API versions ${bridge.apiVersions.join(',')}; ${action} needs contract 2.`, true)); return;
+			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !liveWrite) { fellBackOffline = true; lastBridgeMessage = `Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`; return runOffline(lastBridgeMessage); }
+			return structuredFailure('plugin-too-old', `The loaded plugin supports API versions ${bridge.apiVersions.join(',')}; ${action} needs contract 2.`, true);
 		}
-		if (liveWrite) { await emit(structuredFailure('requires-obsidian', bridge.message)); return; }
-		await emit(await runOffline(bridge.message)); return;
+		if (liveWrite) return structuredFailure('requires-obsidian', bridge.message);
+		fellBackOffline = true;
+		lastBridgeMessage = bridge.message;
+		return runOffline(bridge.message);
 	}
-	if (liveWrite) { await emit(structuredFailure('requires-obsidian', `${action}${request.apply ? ' --apply' : request.out !== undefined ? ' --out' : ''} requires the live host${action === 'recent' ? ' and a running Zotero' : ''}.`, true)); return; }
+	if (liveWrite) return structuredFailure('requires-obsidian', `${action}${request.apply ? ' --apply' : request.out !== undefined ? ' --out' : request.fresh ? ' --fresh' : request.today ? ' --today' : ''} requires the live host${action === 'recent' || action === 'annotations' ? ' and a running Zotero' : ''}.`, true);
 	if (!OFFLINE_CAPABLE.has(action)) fail(`${action} is not available offline.`);
-	await emit(await runOffline(null));
+	return runOffline(null);
 }
 
-try { await main(); }
+async function main() { await emit(await produce()); }
+
+// --- resolve --stdin (0.6): NDJSON selectors in, one envelope per line out --------------------------------------------------
+const MAX_STDIN_LINES = 500;
+const MAX_STDIN_BYTES = 1024 * 1024;
+const STDIN_FIELDS = new Set(['citekey', 'itemKey', 'libraryID', 'doi', 'arxiv', 'title', 'year', 'author', 'query', 'allowStale']);
+
+async function readStdin() {
+	if (process.stdin.isTTY) fail('--stdin needs NDJSON on standard input (pipe or redirect a file into the command).');
+	const chunks = [];
+	let size = 0;
+	for await (const chunk of process.stdin) {
+		size += chunk.length;
+		if (size > MAX_STDIN_BYTES) fail(`--stdin input is larger than ${MAX_STDIN_BYTES / 1024} KiB.`);
+		chunks.push(chunk);
+	}
+	return Buffer.concat(chunks).toString('utf8');
+}
+
+/** One entry per non-empty input line: `{ line, request }`, or `{ line, error }` for a line that is not a usable selector object. Line numbers are 1-based. */
+function parseSelectorLines(text) {
+	const entries = [];
+	text.split(/\r?\n/).forEach((raw, index) => {
+		const line = index + 1;
+		if (!raw.trim()) return;
+		let value;
+		try { value = JSON.parse(raw); } catch (error) { entries.push({ line, error: `Line ${line} is not valid JSON: ${error instanceof Error ? error.message : 'parse error'}.` }); return; }
+		if (!value || typeof value !== 'object' || Array.isArray(value)) { entries.push({ line, error: `Line ${line} must be a JSON object holding one selector.` }); return; }
+		const unknown = Object.keys(value).filter(key => !STDIN_FIELDS.has(key));
+		if (unknown.length) { entries.push({ line, error: `Line ${line} has unsupported field(s): ${unknown.join(', ')}. Use ${[...STDIN_FIELDS].join(', ')}.` }); return; }
+		entries.push({ line, request: value });
+	});
+	return entries;
+}
+
+async function loadCore() { return import(pathToFileURL(CORE).href); }
+
+async function mainStdin() {
+	const entries = parseSelectorLines(await readStdin());
+	if (!entries.length) fail('--stdin received no input lines.');
+	if (entries.length > MAX_STDIN_LINES) fail(`--stdin accepts at most ${MAX_STDIN_LINES} lines per call.`);
+	const base = parsed.values['--allow-stale'] ? { allowStale: true } : {};
+	const payloads = new Array(entries.length).fill(null);
+	const failedLine = entry => structuredFailure('invalid-request', entry.error, true, unknownConnection(null));
+	// Live first, line by line: the host stays the source of truth while it answers. Once a line had to fall back to the offline
+	// core the host is gone, and every remaining line is answered together by one offline batch (one index load, one vault scan).
+	let offlineFrom = offline ? 0 : entries.length;
+	for (let i = 0; i < offlineFrom; i++) {
+		if (entries[i].error) { payloads[i] = failedLine(entries[i]); continue; }
+		request = { ...base, ...entries[i].request };
+		fellBackOffline = false;
+		payloads[i] = await produce();
+		if (fellBackOffline) offlineFrom = i + 1;
+	}
+	const rest = [];
+	for (let i = offlineFrom; i < entries.length; i++) {
+		if (entries[i].error) payloads[i] = failedLine(entries[i]); else rest.push(i);
+	}
+	if (rest.length) {
+		if (!existsSync(CORE)) for (const i of rest) payloads[i] = { apiVersion: 1, contract: 2, apiVersions: [1, 2], action, vault, ok: false, reason: 'bundle-missing', status: 'unavailable', message: 'scripts/ingest-core.mjs is missing; run npm run build:core.', checkedAt: new Date().toISOString(), connection: unknownConnection('Offline core bundle is missing.', 'offline') };
+		else {
+			const core = await loadCore();
+			const answers = await core.runActions({ action, vault, vaultPath: parsed.values['--vault-path'] ?? null, configDir: parsed.values['--config-dir'] ?? DEFAULT_CONFIG_DIR, requests: rest.map(i => ({ ...base, ...entries[i].request })), obsidianError: lastBridgeMessage, now: new Date() });
+			rest.forEach((i, position) => { payloads[i] = answers[position]; });
+		}
+	}
+	let failed = false;
+	for (let i = 0; i < entries.length; i++) {
+		const payload = payloads[i];
+		await new Promise((resolve, reject) => process.stdout.write(JSON.stringify({ line: entries[i].line, ...payload }) + '\n', error => error ? reject(error) : resolve()));
+		if (payload.ok === false || payload.status === 'unavailable') {
+			failed = true;
+			process.stderr.write(`line ${entries[i].line} reason: ${payload.reason ?? 'unavailable'}\n`);
+		}
+	}
+	if (failed) process.exitCode = 1;
+}
+
+try { await (stdin ? mainStdin() : main()); }
 catch (error) { await emit(structuredFailure('requires-obsidian', error instanceof Error ? error.message : 'CLI request failed.')); }

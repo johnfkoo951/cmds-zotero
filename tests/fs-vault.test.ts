@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { configDirOf, DEFAULT_CONFIG_DIR, FsVaultReader, parseFrontmatter, MAX_LISTED_NOTES, MAX_NOTE_BYTES, readEnabledPlugins, readInstalledPluginVersion, readPluginSettings } from "../src/cli/fs-vault";
+import { configDirOf, FsVaultReader, parseFrontmatter, MAX_LISTED_NOTES, MAX_NOTE_BYTES, readEnabledPlugins, readInstalledPluginVersion, readPluginSettings } from "../src/cli/fs-vault";
 import { findNote } from "../src/agent/note-lookup";
 import type { NoteRecord, ScanSkip } from "../src/agent/types";
 import { probeGit } from "../src/git-probe";
@@ -157,7 +157,7 @@ test("PERF-07: findNote gives the listing's answer for every spelling without re
 	assert.deepEqual(reader.scanWarnings(), { skipped: [], truncated: false, skippedDetail: [] });
 });
 
-test("HYG-02: the offline readers take the vault's configuration folder; the default stays Obsidian's", async t => {
+test("HYG-02: the offline readers take the vault's configuration folder as a parameter; no plugin source names a default", async t => {
 	const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "zotero-config-")));
 	t.after(() => fs.rm(root, { recursive: true, force: true }));
 	const custom = join(root, ".config-custom");
@@ -170,10 +170,9 @@ test("HYG-02: the offline readers take the vault's configuration folder; the def
 	assert.equal(read.settings.zoteroIndexPath, "Custom/index.json");
 	assert.deepEqual(await readEnabledPlugins(root, ".config-custom"), ["cmds-zotero"]);
 	assert.equal(await readInstalledPluginVersion(root, ".config-custom"), "0.5.0");
-	assert.equal((await readPluginSettings(root)).present, false, "the default folder is not the custom one");
-	assert.equal(await readEnabledPlugins(root), null);
-	assert.equal(configDirOf(null), DEFAULT_CONFIG_DIR);
-	assert.equal(configDirOf(undefined), DEFAULT_CONFIG_DIR);
+	assert.equal((await readPluginSettings(root, ".obsidian")).present, false, "another folder name reads nothing from this vault");
+	assert.equal(await readEnabledPlugins(root, ".obsidian"), null);
 	assert.equal(configDirOf(".config-custom"), ".config-custom");
-	for (const bad of ["", ".", "..", "plain", ".a/b", "../.obsidian", ".a\\b", ".a\0b", "/.obsidian"]) assert.throws(() => configDirOf(bad), /--config-dir/, JSON.stringify(bad));
+	// The folder is never defaulted here: the command line wrapper supplies Obsidian's default (tests/cli-offline.test.ts).
+	for (const bad of ["", ".", "..", "plain", ".a/b", "../.obsidian", ".a\\b", ".a\0b", "/.obsidian", null, undefined]) assert.throws(() => configDirOf(bad as never), /--config-dir/, JSON.stringify(bad));
 });

@@ -44,7 +44,7 @@ const PDF_EXTRACT_REASON: Readonly<Record<PdfExtractErrorCode, FailureReason>> =
 
 export const JOB_TIMEOUT_MS: Readonly<Record<IngestAction, number>> = {
 	connection: 300_000, info: 300_000, refresh: 300_000, resolve: 300_000, identity: 300_000, cites: 300_000, reconcile: 300_000, diagnostics: 300_000, locate: 300_000,
-	"pdf-text": 900_000, recent: 300_000, import: 300_000,
+	"pdf-text": 900_000, recent: 300_000, import: 300_000, annotations: 300_000, citing: 300_000,
 };
 /** Process-level Node timers (desktop-only plugin; tests run under Node), unref'd so an idle pending job never holds a process open. */
 const defaultTimers: JobTimers = {
