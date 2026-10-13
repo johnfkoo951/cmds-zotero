@@ -99,6 +99,11 @@ export interface VaultReader {
 	/** Full text of one note; throws when absent or outside the vault. */
 	readNote(path: string): Promise<string>;
 	exists(path: string): Promise<boolean>;
+	/**
+	 * PERF-07: optional fast path with the exact answer of `findNote(await listNotes(), path)` that need not read every
+	 * note; the scan report may stay untouched. Callers use the listing when a reader does not provide it.
+	 */
+	findNote?(path: string): Promise<NoteRecord | null>;
 }
 
 export interface PluginInfo { status: "ok" | "off" | "too-old" | "unknown"; version: string | null; apiVersions: number[] | null }

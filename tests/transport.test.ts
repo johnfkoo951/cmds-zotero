@@ -234,18 +234,20 @@ test("BbtService records the last real outcome from calls only and never from it
 		assert.equal(service.lastOutcome?.ok, false);
 		assert.equal(service.lastOutcome?.reason, "rpc");
 		assert.match(service.lastOutcome?.message ?? "", /reported an error/);
-		mode = "hang";
-		const pending = service.capabilities();
-		service.updateSettings({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, requestTimeoutMs: 1000 });
-		await assert.rejects(pending, (error: unknown) => isBbtTransportError(error) && error.reason === "aborted");
-		assert.equal(service.lastOutcome?.reason, "rpc", "an aborted request is not an observation about BBT");
-		assert.equal(seen.length, 3);
 		unsubscribe();
 		mode = "ok";
 		await service.capabilities();
 		assert.equal(seen.length, 3, "unsubscribed listeners are not called");
 		assert.equal(service.lastOutcome?.ok, true);
 		assert.equal(await service.isReachable(), true);
+		mode = "rpc-error";
+		await assert.rejects(service.bibliography(entry), (error: unknown) => isBbtTransportError(error) && error.reason === "rpc");
+		// STRUCT-03: the plugin's own cancellation is dispose() (reload/unload), which aborts the request in flight.
+		mode = "hang";
+		const pending = service.capabilities();
+		service.dispose();
+		await assert.rejects(pending, (error: unknown) => isBbtTransportError(error) && error.reason === "aborted");
+		assert.equal(service.lastOutcome?.reason, "rpc", "an aborted request is not an observation about BBT");
 	} finally { service.dispose(); await api.close(); }
 	const port = await closedPort();
 	const offline = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: `http://127.0.0.1:${port}`, requestTimeoutMs: 1000 });

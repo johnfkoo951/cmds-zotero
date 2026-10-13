@@ -34,11 +34,6 @@ export class BbtService {
 	private outcome: BbtOutcome | null = null;
 	private readonly outcomeListeners = new Set<(outcome: BbtOutcome) => void>();
 	constructor(private settings: CmdsZoteroSettings) {}
-	updateSettings(settings: CmdsZoteroSettings): void {
-		this.controller.abort();
-		this.controller = new AbortController();
-		this.settings = settings;
-	}
 	dispose(): void { this.controller.abort(); this.outcomeListeners.clear(); }
 
 	/** The most recent real BBT call outcome, or null before any call completed. */

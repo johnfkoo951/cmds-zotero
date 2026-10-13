@@ -86,10 +86,6 @@ export class IndexService {
 	/** True while a BBT collection or the index write that follows it is in flight, whether forced or not. */
 	get collecting(): boolean { return this.collections > 0; }
 
-	get(force = false): Promise<ZoteroIndex> {
-		return this.refresh({ force }).then(outcome => outcome.index);
-	}
-
 	/**
 	 * Loads or refreshes with an explicit outcome. Concurrent callers share a flight only when the in-flight request is at
 	 * least as strict: a forced request never joins a non-forced flight and is chained after it instead.
@@ -167,19 +163,6 @@ export class IndexService {
 			this.cache = candidate;
 			return { index: candidate, refreshed: true, reason: options.force ? "forced" : "stale", ageMinutesBefore: ageBefore };
 		} finally { this.collections--; }
-	}
-
-	/** Resolves against a loaded index; when no index can be loaded or collected, the newest persisted snapshot is used. */
-	async resolve(query: string, options?: { libraryID?: number; itemKey?: string }): Promise<Resolution> {
-		let index: ZoteroIndex | null;
-		let failure = "Zotero index unavailable";
-		try { index = await this.get(); }
-		catch (error) {
-			failure = error instanceof Error ? error.message : failure;
-			index = await this.peek();
-		}
-		if (!index) return { status: "unavailable", message: failure };
-		return resolveInIndex(index, query, options);
 	}
 }
 

@@ -25,7 +25,7 @@ const kind = /ackJob/.test(code) ? "ackJob" : /getJob/.test(code) ? "getJob" : /
 const counts = existsSync(join(state, "counts.json")) ? JSON.parse(readFileSync(join(state, "counts.json"), "utf8")) : {};
 counts[kind] = (counts[kind] ?? 0) + 1;
 writeFileSync(join(state, "counts.json"), JSON.stringify(counts));
-appendFileSync(join(state, "calls.log"), kind + "\\n");
+appendFileSync(join(state, "calls.log"), kind + " " + Date.now() + "\\n");
 const result = { contract: 2, apiVersion: 1, apiVersions: [1, 2], action: "resolve", vault: "Research", ok: true, status: "resolved", marker: "delivered-after-empty-polls", checkedAt: new Date().toISOString(), connection: { mode: "live", obsidian: "ok", plugin: { status: "ok", version: "0.5.0", apiVersions: [1, 2] }, bbt: { reachable: true }, index: { source: "plugin", path: "", schemaVersion: 2, generatedAt: null, ageMinutes: 0, count: 1, complete: true, stale: false, maxAgeMinutes: 60 }, legacyPluginEnabled: false, git: null } };
 if (kind === "discovery") {
   // First discovery call on a busy renderer: exit 0, empty stdout.
@@ -57,7 +57,12 @@ function fakeObsidian(mode: Mode, emptyPolls = 0): { state: string; env: NodeJS.
 	writeFileSync(join(dir, "fake.cjs"), FAKE);
 	writeFileSync(join(dir, "obsidian"), `#!/bin/sh\nexec "$FAKE_NODE" "$FAKE_SCRIPT" "$@"\n`);
 	chmodSync(join(dir, "obsidian"), 0o755);
-	return { state: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_NODE: process.execPath, FAKE_SCRIPT: join(dir, "fake.cjs"), FAKE_STATE: dir, FAKE_MODE: mode, FAKE_EMPTY_POLLS: String(emptyPolls), CMDS_ZOTERO_POLL_MS: "4000" } };
+	// PERF-10: CMDS_ZOTERO_DELAY_MS shortens every retry and poll delay; like CMDS_ZOTERO_POLL_MS it is honoured only under the test runner.
+	return { state: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_NODE: process.execPath, FAKE_SCRIPT: join(dir, "fake.cjs"), FAKE_STATE: dir, FAKE_MODE: mode, FAKE_EMPTY_POLLS: String(emptyPolls), CMDS_ZOTERO_POLL_MS: "4000", CMDS_ZOTERO_DELAY_MS: "10" } };
+}
+/** Bridge calls in order with the time each fake CLI process started. */
+function calls(state: string): { kind: string; at: number }[] {
+	return readFileSync(join(state, "calls.log"), "utf8").trim().split("\n").map(line => { const [kind, at] = line.split(" "); return { kind, at: Number(at) }; });
 }
 function counts(state: string): Record<string, number> {
 	return existsSync(join(state, "counts.json")) ? JSON.parse(readFileSync(join(state, "counts.json"), "utf8")) as Record<string, number> : {};
@@ -86,21 +91,22 @@ test("empty CLI output during discovery and polling is transient: the completed 
 
 test("a bridge that never answers polls yields timeout after the deadline without resubmitting", () => {
 	const fake = fakeObsidian("poll-always-empty");
-	fake.env.CMDS_ZOTERO_POLL_MS = "1500";
+	fake.env.CMDS_ZOTERO_POLL_MS = "300";
 	const result = run(fake.env);
 	assert.equal(result.status, 1);
 	const payload = JSON.parse(result.stdout);
 	assert.equal(payload.ok, false);
 	assert.equal(payload.reason, "timeout");
 	assert.equal(payload.connection.mode, "live");
-	assert.match(payload.message, /Timed out after 2s/);
+	assert.match(payload.message, /Timed out after 0s/, "a 300 ms test deadline rounds to 0 s; real deadlines are whole --timeout seconds");
 	assert.match(payload.message, /Empty output from the Obsidian CLI/);
 	assert.match(payload.message, /do not resubmit automatically/);
 	assert.equal(result.stderr.trim(), "reason: timeout");
 	const seen = counts(fake.state);
 	assert.equal(seen.startJob, 1);
-	// One initial poll plus at least one more before the deadline is guaranteed by the loop regardless of machine load.
-	assert.ok(seen.getJob >= 2, `polled ${seen.getJob} times`);
+	// At least the first poll ran and failed; on a loaded machine one CLI spawn can outlast the short test deadline, so
+	// polling again after an empty reply is pinned by the first test (three empty polls, then the result).
+	assert.ok(seen.getJob >= 1, `polled ${seen.getJob} times`);
 	assert.equal(seen.ackJob, undefined, "nothing to acknowledge");
 });
 
@@ -133,15 +139,23 @@ test("a CLI that exits non-zero during discovery is immediate bridge loss: no re
 	assert.ok(elapsed < 1500, `finished in ${elapsed} ms without transient delays`);
 });
 
-test("CMDS_ZOTERO_POLL_MS is ignored outside the node test runner so --timeout bounds cannot be bypassed", () => {
-	// Reproduces a user shell: no NODE_TEST_CONTEXT, an override of 100 ms, and --timeout at its minimum.
+test("CMDS_ZOTERO_POLL_MS and CMDS_ZOTERO_DELAY_MS are ignored outside the node test runner; real delays back off", () => {
+	// Reproduces a user shell: no NODE_TEST_CONTEXT, a 100 ms deadline override, a zero delay override, and --timeout at
+	// its minimum. This is the one bridge test that runs with the real delays.
 	const fake = fakeObsidian("flaky", 2);
 	delete fake.env.NODE_TEST_CONTEXT;
 	fake.env.CMDS_ZOTERO_POLL_MS = "100";
+	fake.env.CMDS_ZOTERO_DELAY_MS = "0";
 	const result = run(fake.env, script, ["--vault", "Research", "--action", "resolve", "--citekey", "smith2020", "--timeout", "30"]);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(JSON.parse(result.stdout).marker, "delivered-after-empty-polls", "two empty polls exceed 100 ms yet the result still arrives");
 	assert.equal(counts(fake.state).getJob, 3);
+	// Lower bounds only (a gap also contains one CLI spawn): the discovery retry keeps its 500 ms, polls back off 50 then 100 ms.
+	const log = calls(fake.state);
+	const gap = (kind: string, index: number): number => { const of = log.filter(call => call.kind === kind); return of[index + 1].at - of[index].at; };
+	assert.ok(gap("discovery", 0) >= 495, `discovery retry after ${gap("discovery", 0)} ms`);
+	assert.ok(gap("getJob", 0) >= 45, `second poll after ${gap("getJob", 0)} ms`);
+	assert.ok(gap("getJob", 1) >= 95, `third poll after ${gap("getJob", 1)} ms`);
 });
 
 test("plugin-side request rejection is invalid-request with a present plugin, not requires-obsidian", () => {

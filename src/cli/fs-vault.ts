@@ -1,15 +1,35 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYamlText } from "yaml";
 import { readLocalFile } from "../local-file";
 import { parseNoteText } from "../frontmatter-read";
 import type { NoteRecord, VaultReader } from "../agent/types";
+import { findNote as findListedNote, notePathCandidates } from "../agent/note-lookup";
 import { normalizeSettings } from "../settings-data";
 import type { CmdsZoteroSettings } from "../types";
+import { SCAN_CONCURRENCY, scanInOrder } from "../vault-scan";
 
 export const MAX_LISTED_NOTES = 20000;
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * HYG-02: Obsidian's default configuration folder, the one place the offline CLI names it. The CLI runs without
+ * Obsidian, so there is no `Vault#configDir` to read: the folder is a parameter (`--config-dir`) and this is only its
+ * default. The `obsidianmd/hardcoded-config-path` warning on this line is expected; the plugin's lint configuration
+ * forbids disabling `obsidianmd/*` rules inline.
+ */
+export const DEFAULT_CONFIG_DIR = ".obsidian";
+
+/** A configuration folder name as Obsidian accepts one: a single path segment that starts with a dot. Null means the default. */
+export function configDirOf(value: string | null | undefined): string {
+	if (value === null || value === undefined) return DEFAULT_CONFIG_DIR;
+	if (!/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
+	return value;
+}
+
+/** One step of the scan order: a note file, an entry the scan passes without reading, or a path it reports as skipped. */
+type WalkEvent = { kind: "note"; path: string; basename: string } | { kind: "skip"; path: string } | { kind: "pass" };
 
 export interface VaultLocation { name: string; path: string }
 
@@ -42,7 +62,8 @@ export function parseFrontmatter(text: string): ReturnType<typeof parseNoteText>
 /** Offline read-only vault access over the filesystem: refuses symlinks and anything outside the vault root. */
 export class FsVaultReader implements VaultReader {
 	private report = { skipped: [] as string[], truncated: false };
-	constructor(private root: string, private name: string) {}
+	/** `limit` is the note cap of one scan (MAX_LISTED_NOTES); tests lower it. */
+	constructor(private root: string, private name: string, private limit = MAX_LISTED_NOTES) {}
 	scanWarnings(): { skipped: string[]; truncated: boolean } { return { skipped: [...this.report.skipped], truncated: this.report.truncated }; }
 
 	vaultName(): string { return this.name; }
@@ -57,32 +78,65 @@ export class FsVaultReader implements VaultReader {
 		return target;
 	}
 
+	/**
+	 * The scan order: depth first, each folder sorted by name, one event per folder visit and per entry (every event is
+	 * where the note cap is checked). An unreadable folder and a symbolic link are skipped; dot-folders are not entered.
+	 */
+	private async *walk(dir: string): AsyncGenerator<WalkEvent> {
+		yield { kind: "pass" };
+		let entries: Dirent[];
+		try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { yield { kind: "skip", path: relative(this.root, dir) }; return; }
+		entries.sort((a, b) => a.name.localeCompare(b.name));
+		for (const entry of entries) {
+			const full = join(dir, entry.name);
+			if (entry.isSymbolicLink()) { yield { kind: "skip", path: relative(this.root, full) }; continue; }
+			if (entry.isDirectory()) { yield { kind: "pass" }; if (!entry.name.startsWith(".")) yield* this.walk(full); continue; }
+			if (!entry.isFile() || !entry.name.endsWith(".md")) { yield { kind: "pass" }; continue; }
+			yield { kind: "note", path: relative(this.root, full).split(sep).join("/"), basename: entry.name.replace(/\.md$/, "") };
+		}
+	}
+
 	async listNotes(): Promise<NoteRecord[]> {
 		const notes: NoteRecord[] = [];
 		this.report = { skipped: [], truncated: false };
-		const walk = async (dir: string): Promise<void> => {
-			if (notes.length >= MAX_LISTED_NOTES) { this.report.truncated = true; return; }
-			let entries: import("node:fs").Dirent[];
-			try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { this.report.skipped.push(relative(this.root, dir)); return; }
-			entries.sort((a, b) => a.name.localeCompare(b.name));
-			for (const entry of entries) {
-				if (notes.length >= MAX_LISTED_NOTES) { this.report.truncated = true; return; }
-				if (entry.isSymbolicLink()) { this.report.skipped.push(relative(this.root, join(dir, entry.name))); continue; }
-				const full = join(dir, entry.name);
-				if (entry.isDirectory()) { if (!entry.name.startsWith(".")) await walk(full); continue; }
-				if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-				const relPath = relative(this.root, full).split(sep).join("/");
-				let text: string;
-				try {
-					text = await this.readNote(relPath);
-				} catch { this.report.skipped.push(relPath); continue; }
-				const parsed = parseFrontmatter(text);
-				if (parsed.frontmatterParse === "error") this.report.skipped.push(relPath);
-				notes.push({ path: relPath, basename: entry.name.replace(/\.md$/, ""), frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse });
-			}
-		};
-		await walk(this.root);
+		// PERF-07: up to SCAN_CONCURRENCY notes are read ahead while the walk is visited in order, so notes, skipped and
+		// truncated equal the sequential walk's (a note read past the cap is discarded).
+		await scanInOrder(this.walk(this.root), SCAN_CONCURRENCY, event => event.kind === "note" ? this.readNote(event.path).then(parseFrontmatter) : null, (event, outcome) => {
+			if (notes.length >= this.limit) { this.report.truncated = true; return false; }
+			if (event.kind === "skip") { this.report.skipped.push(event.path); return true; }
+			if (event.kind === "pass") return true;
+			if (!outcome?.ok) { this.report.skipped.push(event.path); return true; }
+			if (outcome.value.frontmatterParse === "error") this.report.skipped.push(event.path);
+			notes.push({ path: event.path, basename: event.basename, frontmatter: outcome.value.frontmatter, frontmatterParse: outcome.value.frontmatterParse });
+			return true;
+		});
 		return notes;
+	}
+
+	/**
+	 * PERF-07: the answer of `findNote(await this.listNotes(), path)` without reading every note. A candidate that is not a
+	 * regular file cannot be listed; otherwise the walk runs only up to it (no reads) and reads just that file. Notes the
+	 * walk passes are counted, so a candidate that a capped scan could miss is answered by the scan itself (the only case
+	 * that updates the scan report).
+	 */
+	async findNote(path: string): Promise<NoteRecord | null> {
+		const candidates = notePathCandidates(path);
+		const present = await Promise.all(candidates.map(candidate => fs.lstat(join(this.root, candidate)).then(stat => stat.isFile(), () => false)));
+		if (!present.some(Boolean)) return null;
+		const wanted = new Set<string>(candidates);
+		let passed = 0;
+		for await (const event of this.walk(this.root)) {
+			if (event.kind !== "note") continue;
+			if (wanted.has(event.path)) {
+				if (passed >= this.limit) return findListedNote(await this.listNotes(), path);
+				try {
+					const parsed = parseFrontmatter(await this.readNote(event.path));
+					return { path: event.path, basename: event.basename, frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse };
+				} catch { /* Unreadable: a scan skips it, so a later candidate decides. */ }
+			}
+			passed++;
+		}
+		return null;
 	}
 
 	async readNote(path: string): Promise<string> {
@@ -119,33 +173,25 @@ export class FsVaultReader implements VaultReader {
 	}
 }
 
-/** Plugin settings as persisted by Obsidian, normalized exactly like the plugin does; defaults when absent. */
-export async function readPluginSettings(root: string): Promise<{ settings: CmdsZoteroSettings; present: boolean }> {
+/** Plugin settings as persisted by Obsidian in the vault's configuration folder, normalized exactly like the plugin does; defaults when absent. */
+export async function readPluginSettings(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<{ settings: CmdsZoteroSettings; present: boolean }> {
 	try {
-		const raw: unknown = JSON.parse(await fs.readFile(join(root, ".obsidian", "plugins", "cmds-zotero", "data.json"), "utf8"));
+		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
 		return { settings: normalizeSettings(raw), present: true };
 	} catch { return { settings: normalizeSettings({}), present: false }; }
 }
 
-export async function readEnabledPlugins(root: string): Promise<string[] | null> {
+export async function readEnabledPlugins(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<string[] | null> {
 	try {
-		const raw: unknown = JSON.parse(await fs.readFile(join(root, ".obsidian", "community-plugins.json"), "utf8"));
+		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "community-plugins.json"), "utf8"));
 		return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : null;
 	} catch { return null; }
 }
 
-export async function readInstalledPluginVersion(root: string): Promise<string | null> {
+export async function readInstalledPluginVersion(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<string | null> {
 	try {
-		const raw: unknown = JSON.parse(await fs.readFile(join(root, ".obsidian", "plugins", "cmds-zotero", "manifest.json"), "utf8"));
+		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "manifest.json"), "utf8"));
 		const version = raw && typeof raw === "object" ? (raw as { version?: unknown }).version : undefined;
 		return typeof version === "string" ? version : null;
 	} catch { return null; }
-}
-
-export async function readGitignore(root: string): Promise<{ repo: boolean; text: string | null }> {
-	let repo = false;
-	// `.git` is a directory for a checkout and a file for a worktree; either means the vault is version-controlled.
-	try { await fs.stat(join(root, ".git")); repo = true; } catch { repo = false; }
-	if (!repo) return { repo: false, text: null };
-	try { return { repo: true, text: await fs.readFile(join(root, ".gitignore"), "utf8") }; } catch { return { repo: true, text: null }; }
 }

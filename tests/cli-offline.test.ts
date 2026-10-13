@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, truncateSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, renameSync, rmSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { entryHash } from "../src/identity";
@@ -60,8 +60,9 @@ function fakeObsidian(mode: "old" | "submission-fails" | "poll-fails"): { dir: s
 	const executable = join(dir, "obsidian");
 	writeFileSync(executable, `#!/bin/sh\ncode="$3"\ncase "$code" in\n  *apiVersions*) if [ "$FAKE_MODE" = old ]; then echo '=> {"apiVersion":1,"apiVersions":[1]}'; else echo '=> {"apiVersion":2,"apiVersions":[1,2]}'; fi;;\n  *startJob*) if [ "$FAKE_MODE" = submission-fails ]; then exit 1; else echo '=> "job-1"'; fi;;\n  *getJob*) exit 1;;\nesac\n`);
 	chmodSync(executable, 0o755);
-	// Poll failures are transient until the deadline; keep the deadline short so the uncertain case stays fast.
-	return { dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_MODE: mode, CMDS_ZOTERO_POLL_MS: "1500" } };
+	// Poll failures are transient until the deadline; keep the deadline and the poll delays short so the uncertain case
+	// stays fast (PERF-10: both overrides are honoured only under the test runner).
+	return { dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_MODE: mode, CMDS_ZOTERO_POLL_MS: "300", CMDS_ZOTERO_DELAY_MS: "10" } };
 }
 
 test("old read-only hosts fall back before submission, while uncertain submissions never fall back", () => {
@@ -189,4 +190,32 @@ test("offline locate --file reports pdf-too-large for an oversized PDF and pdf-i
 		assert.equal(payload.reason, reason, `${name}: ${JSON.stringify(payload)}`);
 		assert.match(payload.message, message, name);
 	}
+});
+
+// HYG-02: the offline CLI reads a custom configuration folder when told to, and only a single dot-folder name is accepted.
+
+test("--config-dir reads the plugin settings and index path from the vault's own configuration folder", () => {
+	const root = vault();
+	renameSync(join(root, ".obsidian"), join(root, ".config-custom"));
+	mkdirSync(join(root, "Custom"));
+	renameSync(join(root, "80. References", "zotero-index.json"), join(root, "Custom", "index.json"));
+	writeFileSync(join(root, ".config-custom", "plugins", "cmds-zotero", "data.json"), JSON.stringify({ zoteroIndexPath: "Custom/index.json" }));
+	writeFileSync(join(root, ".config-custom", "plugins", "cmds-zotero", "manifest.json"), JSON.stringify({ version: "0.5.0" }));
+	const custom = run(["--vault", "Research", "--vault-path", root, "--config-dir", ".config-custom", "--offline", "--action", "resolve", "--citekey", "smith2020"]);
+	assert.equal(custom.status, 0, custom.stderr);
+	const payload = JSON.parse(custom.stdout);
+	assert.equal(payload.status, "resolved");
+	assert.equal(payload.connection.index.path, "Custom/index.json");
+	assert.equal(payload.connection.plugin.version, "0.5.0");
+	const defaulted = run(["--vault", "Research", "--vault-path", root, "--offline", "--action", "resolve", "--citekey", "smith2020"]);
+	assert.equal(defaulted.status, 1, "without --config-dir the default folder is read, which this vault does not have");
+	assert.equal(JSON.parse(defaulted.stdout).reason, "index-missing");
+	// The full rule is pinned by configDirOf's unit test; the CLI repeats it before loading the core.
+	for (const bad of ["../.obsidian", ".."]) {
+		const rejected = run(["--vault", "Research", "--vault-path", root, "--config-dir", bad, "--offline", "--action", "info"]);
+		assert.equal(rejected.status, 2, bad);
+		assert.equal(rejected.stdout, "");
+		assert.match(rejected.stderr, /--config-dir must be one folder name that starts with a dot/);
+	}
+	assert.match(run(["--help"]).stdout, /--config-dir/);
 });

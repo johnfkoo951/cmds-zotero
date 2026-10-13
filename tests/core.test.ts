@@ -6,11 +6,18 @@ import { DEFAULT_SETTINGS, type ZoteroIndex } from "../src/types";
 import { contentHash, entryHash, validateEntry, validateIndex } from "../src/identity";
 import { normalizeAttachments, normalizeEntry } from "../src/api/normalize";
 import { identityKey, markdownLink, noteDeepLink, parseZoteroURI, pdfURI, selectURI } from "../src/uris";
-import { IndexRefusalError, IndexService, classifyRefreshError, describeRefreshFailure, formatIndexAge } from "../src/index-service";
+import { IndexRefusalError, IndexService, classifyRefreshError, describeRefreshFailure, formatIndexAge, resolveInIndex } from "../src/index-service";
 import { httpRequest, rpc } from "../src/api/transport";
 
 const parent = (libraryID = 1, citationKey = "Example2026", itemKey = "ABCD2345") => ({ libraryID, citationKey, itemKey, uri: libraryID === 1 ? `http://zotero.org/users/local/Example/items/${itemKey}` : `http://zotero.org/groups/12345/items/${itemKey}`, itemType: "journalArticle", title: "Synthetic example", date: "2026", creators: [{ firstName: "Example", lastName: "Author" }], tags: [{ tag: "synthetic" }], attachments: [{ select: libraryID === 1 ? "zotero://select/library/items/EFGH2345" : "zotero://select/groups/12345/items/EFGH2345", title: "Synthetic PDF" }], notes: [] });
 const fixtureIndex = (): ZoteroIndex => ({ schemaVersion: 2, generatedAt: new Date().toISOString(), source: "better-bibtex", count: 1, entries: [normalizeEntry(parent())], capabilities: { zotero: "8", betterbibtex: "9", metadata: true, attachments: true, annotations: true, bibliography: true }, diagnostics: [], complete: true });
+
+/** STRUCT-03: IndexService.get/resolve were test-only (and resolve could start a collection); reads resolve against the loaded snapshot. */
+async function resolveLoaded(service: IndexService, query: string, options?: { libraryID?: number; itemKey?: string }) {
+	const index = await service.peek();
+	assert.ok(index, "a validated snapshot is loaded");
+	return resolveInIndex(index, query, options);
+}
 
 async function serve(handler: (request: http.IncomingMessage, response: http.ServerResponse) => void): Promise<{ endpoint: string; close: () => Promise<void> }> {
 	const server = http.createServer(handler);
@@ -101,16 +108,16 @@ test("concurrent non-forced loads share one flight, persist the valid candidate 
 	const index = fixtureIndex();
 	const bbt = { collect: async () => { collections++; await new Promise(resolve => setTimeout(resolve, 10)); if (fail) throw new Error("offline"); return index; } } as unknown as BbtService;
 	const service = new IndexService(bbt, { read: async () => JSON.stringify({ entries: [], count: 0 }), writeValidated: async () => { writes++; } }, () => 60);
-	await Promise.all([service.get(), service.get()]);
+	await Promise.all([service.refresh(), service.refresh()]);
 	assert.equal(collections, 1); assert.equal(writes, 1);
-	await service.get(true);
+	await service.refresh({ force: true });
 	assert.equal(collections, 2, "a forced request always collects"); assert.equal(writes, 2);
 	fail = true;
-	await assert.rejects(service.get(true), /offline/);
-	assert.equal(await service.get(), index);
+	await assert.rejects(service.refresh({ force: true }), /offline/);
+	assert.equal((await service.refresh()).index, index);
 	assert.equal(writes, 2);
-	assert.equal((await service.resolve("Example2026")).status, "resolved");
-	assert.equal((await service.resolve("missing")).status, "not-found");
+	assert.equal((await resolveLoaded(service, "Example2026")).status, "resolved");
+	assert.equal((await resolveLoaded(service, "missing")).status, "not-found");
 });
 
 const staleIndex = (hoursOld = 3): ZoteroIndex => ({ ...fixtureIndex(), generatedAt: new Date(Date.now() - hoursOld * 3600000).toISOString() });
@@ -129,16 +136,16 @@ test("a stale validated cache is served as stale-fallback when collection fails;
 	assert.match(outcome.error ?? "", /ECONNREFUSED/);
 	assert.equal(outcome.index.generatedAt, stale.generatedAt);
 	assert.ok((outcome.ageMinutesBefore ?? 0) >= 179);
-	assert.equal((await service.get()).generatedAt, stale.generatedAt);
-	assert.equal((await service.resolve("Example2026")).status, "resolved");
-	await assert.rejects(service.get(true), (error: unknown) => error instanceof IndexRefusalError && error.reason === "bbt-unreachable" && /ECONNREFUSED/.test(error.message), "a forced request reports the same structured reason as the fallback");
+	assert.equal((await service.refresh()).index.generatedAt, stale.generatedAt);
+	assert.equal((await resolveLoaded(service, "Example2026")).status, "resolved");
+	await assert.rejects(service.refresh({ force: true }), (error: unknown) => error instanceof IndexRefusalError && error.reason === "bbt-unreachable" && /ECONNREFUSED/.test(error.message), "a forced request reports the same structured reason as the fallback");
 	assert.equal(await service.peek(), outcome.index, "the failed forced refresh leaves the cache intact");
 	assert.equal(writes, 0);
-	assert.equal(collections, 4);
+	assert.equal(collections, 3, "only the three refreshes tried to collect; resolving reads the snapshot");
 	assert.equal(service.collecting, false);
 	const none = new IndexService(bbt, { read: async () => null, writeValidated: async () => { writes++; } }, () => 60);
-	await assert.rejects(none.get(), /ECONNREFUSED/, "without any snapshot there is nothing to fall back to");
-	assert.equal((await none.resolve("Example2026")).status, "unavailable");
+	await assert.rejects(none.refresh(), /ECONNREFUSED/, "without any snapshot there is nothing to fall back to");
+	assert.equal(await none.peek(), null, "no snapshot to resolve against: readers report the index unavailable");
 	assert.equal(writes, 0);
 });
 
@@ -155,8 +162,8 @@ test("legacy-plugin gate refuses collection before contacting BBT: stale cache s
 	assert.equal(outcome.index.generatedAt, stale.generatedAt);
 	await assert.rejects(service.refresh({ force: true }), (error: unknown) => error instanceof IndexRefusalError && error.reason === "legacy-plugin-enabled" && /legacy cmds-link-zotero/.test(error.message));
 	const empty = new IndexService(bbt, { read: async () => null, writeValidated: async () => undefined }, () => 60, () => refusal);
-	await assert.rejects(empty.get(), /legacy cmds-link-zotero/, "no snapshot and a refused collection is a hard failure even for reads");
-	assert.equal((await empty.resolve("Example2026")).status, "unavailable");
+	await assert.rejects(empty.refresh(), /legacy cmds-link-zotero/, "no snapshot and a refused collection is a hard failure");
+	assert.equal(await empty.peek(), null, "no snapshot to resolve against: readers report the index unavailable");
 	assert.equal(collections, 0, "the gate is consulted before collect");
 	const fresh = new IndexService(bbt, { read: async () => JSON.stringify(fixtureIndex()), writeValidated: async () => undefined }, () => 60, () => refusal);
 	assert.equal((await fresh.refresh()).reason, "fresh", "a fresh cache never consults the gate");
@@ -263,8 +270,8 @@ test("duplicate current/history matches remain ambiguous", async () => {
 	second.citekeyHistory = ["Example2026"]; second.contentHash = entryHash(second);
 	index.entries.push(second); index.count++;
 	const service = new IndexService({} as BbtService, { read: async () => JSON.stringify(index), writeValidated: async () => undefined }, () => 60);
-	assert.equal((await service.resolve("Example2026")).status, "ambiguous");
-	assert.equal((await service.resolve("Example2026", { libraryID: 1 })).status, "resolved");
+	assert.equal((await resolveLoaded(service, "Example2026")).status, "ambiguous");
+	assert.equal((await resolveLoaded(service, "Example2026", { libraryID: 1 })).status, "resolved");
 });
 
 test("missing-file sentinel retains attachment identity without fabricating a path", () => {

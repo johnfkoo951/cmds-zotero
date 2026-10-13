@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { privateIgnoreCoversAll } from "./agent/git-ignore";
 import { digestFile, digestIfText, readWithDigest, sameDigest, type IndexDigest } from "./index-digest";
+import { assertSegmentsInside, memoizedLstat } from "./vault-scan";
 import type { IndexStorage } from "./types";
 import { BIBLIOGRAPHY_SIDECAR, type BibliographyStorage } from "./bibliography-store"; // 0.5 R12
 
@@ -20,17 +21,24 @@ export function relativePath(value: string): string {
 export async function assertVaultBoundary(app: App, value: string): Promise<void> {
 	const rel = relativePath(value);
 	if (!(app.vault.adapter instanceof FileSystemAdapter)) throw new Error("A desktop file-system vault is required.");
-	const root = await fs.realpath(app.vault.adapter.getBasePath());
-	let current = root;
-	for (const segment of rel.split("/")) {
-		current = path.join(current, segment);
-		try {
-			if ((await fs.lstat(current)).isSymbolicLink()) throw new Error("Symbolic-link output paths are not allowed.");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-			throw error;
-		}
-	}
+	await assertSegmentsInside(await fs.realpath(app.vault.adapter.getBasePath()), rel);
+}
+
+/**
+ * PERF-07: `assertVaultBoundary` for the files of one vault scan. The vault root's realpath is resolved once and the
+ * parent folders' lstat answers are shared by the scan's files; each file's own segment is still checked on every call.
+ * Create one per scan and never keep it across scans.
+ */
+export function vaultBoundaryScan(app: App): (value: string) => Promise<void> {
+	const lstatDir = memoizedLstat();
+	let root: Promise<string> | undefined;
+	return async value => {
+		const rel = relativePath(value);
+		const adapter = app.vault.adapter;
+		if (!(adapter instanceof FileSystemAdapter)) throw new Error("A desktop file-system vault is required.");
+		root ??= fs.realpath(adapter.getBasePath());
+		await assertSegmentsInside(await root, rel, lstatDir);
+	};
 }
 
 export async function ensureDirectory(app: App, filePath: string): Promise<void> {

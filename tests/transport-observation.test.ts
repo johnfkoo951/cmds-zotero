@@ -61,7 +61,7 @@ test("the plugin aborting a request after headers arrived is still its own cance
 	try {
 		const pending = rejection(bbt.capabilities());
 		await new Promise(resolve => setTimeout(resolve, 50));
-		bbt.updateSettings({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, requestTimeoutMs: 5000 });
+		bbt.dispose(); // STRUCT-03: the plugin's own cancellation (reload/unload)
 		const error = await pending;
 		assert.ok(isBbtTransportError(error));
 		assert.equal(error.reason, "aborted");

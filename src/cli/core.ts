@@ -6,7 +6,7 @@ import { buildConnection, buildEnvelope } from "../agent/connection";
 import { ACTION_API_VERSION, AGENT_ACTIONS, runAction as dispatch, type ActionHost, type AgentAction, type PdfCacheReader } from "../agent/actions";
 import type { FailureReason, IndexView } from "../agent/types";
 import { probeBbt } from "./bbt-direct";
-import { FsVaultReader, locateVault, readPluginSettings, readEnabledPlugins, readInstalledPluginVersion } from "./fs-vault";
+import { configDirOf, FsVaultReader, locateVault, readPluginSettings, readEnabledPlugins, readInstalledPluginVersion } from "./fs-vault";
 import { probeGit } from "../git-probe";
 import { LocalFileError, readLocalFile } from "../local-file";
 import { hashLocalPdf } from "../pdf/file-hash";
@@ -25,7 +25,8 @@ export function pluginApiVersionsFor(version: string | null): number[] | null {
 }
 
 
-export interface OfflineRunInput { action: string; vault: string; vaultPath?: string | null; request?: unknown; obsidianError?: string | null; now?: Date }
+/** `configDir` (HYG-02) is the vault's configuration folder name (`--config-dir`); null or absent means Obsidian's default. */
+export interface OfflineRunInput { action: string; vault: string; vaultPath?: string | null; configDir?: string | null; request?: unknown; obsidianError?: string | null; now?: Date }
 
 async function readIndex(root: string, path: string): Promise<{ index: ZoteroIndex | null; failure: { reason: FailureReason; message: string } | null; present: boolean }> {
 	let full: string;
@@ -85,6 +86,7 @@ async function pdfPaths(root: string): Promise<string[]> {
 
 async function offlineHost(input: OfflineRunInput, action: AgentAction): Promise<ActionHost | { failure: Record<string, unknown> }> {
 	const now = input.now ?? new Date();
+	const configDir = configDirOf(input.configDir);
 	const located = await locateVault(input.vault, input.vaultPath ?? null);
 	if (!located.location) {
 		const reason: FailureReason = located.ambiguous ? "ambiguous-vault-path" : "path-outside-vault";
@@ -94,7 +96,7 @@ async function offlineHost(input: OfflineRunInput, action: AgentAction): Promise
 	}
 	const root = located.location.path;
 	const reader = new FsVaultReader(root, input.vault);
-	const [{ settings, present: settingsPresent }, enabled, version] = await Promise.all([readPluginSettings(root), readEnabledPlugins(root), readInstalledPluginVersion(root)]);
+	const [{ settings, present: settingsPresent }, enabled, version] = await Promise.all([readPluginSettings(root, configDir), readEnabledPlugins(root, configDir), readInstalledPluginVersion(root, configDir)]);
 	const loaded = await readIndex(root, settings.zoteroIndexPath);
 	const bbt = action === "connection" ? await probeBbt(settings.bbtEndpoint) : { reachable: null };
 	const connection = buildConnection({
