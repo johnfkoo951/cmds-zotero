@@ -18,6 +18,20 @@ export function failedRecently(outcome: { ok: boolean; at: Date } | null | undef
 	return age >= 0 && age < windowMs;
 }
 
+/**
+ * Transport faults meaning Zotero is not answering at all: what a readiness probe would find again. An RPC error or an
+ * unexpected answer for one item says nothing about the next request, so it never counts.
+ */
+const UNREACHABLE_REASONS: ReadonlySet<string> = new Set(["connection-refused", "timeout", "http-404"]);
+
+/**
+ * 0.6 OPT-13: true when `outcome` is a "Zotero is not answering" failure (connection refused, timed out, endpoint missing)
+ * observed less than `windowMs` ago, so a sidebar can serve cached or fallback text without probing BBT again.
+ */
+export function unreachableRecently(outcome: { ok: boolean; at: Date; reason?: string } | null | undefined, now: number, windowMs = WARM_BACKOFF_MS): boolean {
+	return failedRecently(outcome, now, windowMs) && outcome?.reason !== undefined && UNREACHABLE_REASONS.has(outcome.reason);
+}
+
 export class WarmState {
 	private flight: { promise: Promise<void>; force: boolean } | null = null;
 	private failedUntil = 0;

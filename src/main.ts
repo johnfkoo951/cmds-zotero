@@ -198,7 +198,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	/** CSL bibliography text for one entry, cached per index generation and style; concurrent requests share one flight. */
 	bibliographyFor(entry: ZoteroIndexEntry): Promise<string> { return this.bibliography.bibliographyForStyle(entry, this.settings.bibliographyStyle); }
 
-	bibliographyBatch(entries: ZoteroIndexEntry[], style?: string, options?: { fresh?: boolean }): Promise<BibliographyDetail[]> { return this.bibliography.bibliographyBatch(entries, style, options); }
+	/** `fresh: false` joins the current render generation; `refresh` is the References sidebar's Refresh (0.6 OPT-13). */
+	bibliographyBatch(entries: ZoteroIndexEntry[], style?: string, options?: { fresh?: boolean; refresh?: boolean }): Promise<BibliographyDetail[]> { return this.bibliography.bibliographyBatch(entries, style, options); }
 
 	copyCslJson(entries: readonly ZoteroIndexEntry[]): Promise<void> { return this.bibliography.copyCslJson(entries); }
 

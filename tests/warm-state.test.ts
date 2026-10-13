@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { STARTUP_COLLECT_DELAY_MS, WARM_BACKOFF_MS, WarmState, failedRecently } from "../src/plugin/warm-state";
+import { STARTUP_COLLECT_DELAY_MS, WARM_BACKOFF_MS, WarmState, failedRecently, unreachableRecently } from "../src/plugin/warm-state";
 
 function clock(start = 1_000_000): { now: () => number; advance: (ms: number) => void } {
 	let current = start;
@@ -94,4 +94,20 @@ test("failedRecently: only a failure inside the window counts", () => {
 	assert.equal(failedRecently({ ok: false, at: new Date(now - WARM_BACKOFF_MS) }, now), false);
 	assert.equal(failedRecently({ ok: false, at: new Date(now + 1000) }, now), false, "a clock that went backwards does not suppress probes");
 	assert.equal(failedRecently({ ok: false, at: new Date(now - 5000) }, now, 1000), false);
+});
+
+test("0.6 OPT-13: unreachableRecently counts only 'Zotero is not answering' failures inside the window", () => {
+	const now = 5_000_000;
+	const at = (ageMs: number): Date => new Date(now - ageMs);
+	for (const reason of ["connection-refused", "timeout", "http-404"]) {
+		assert.equal(unreachableRecently({ ok: false, at: at(10), reason }, now), true, reason);
+		assert.equal(unreachableRecently({ ok: false, at: at(WARM_BACKOFF_MS), reason }, now), false, `${reason} at the window's end`);
+	}
+	for (const reason of ["rpc", "invalid-response", "http-other", "aborted", undefined]) {
+		assert.equal(unreachableRecently({ ok: false, at: at(10), ...(reason ? { reason } : {}) }, now), false, `${reason ?? "no reason"} says nothing about the next request`);
+	}
+	assert.equal(unreachableRecently({ ok: true, at: at(10), reason: "connection-refused" }, now), false);
+	assert.equal(unreachableRecently(null, now), false);
+	assert.equal(unreachableRecently({ ok: false, at: new Date(now + 1000), reason: "timeout" }, now), false, "a clock that went backwards does not suppress probes");
+	assert.equal(unreachableRecently({ ok: false, at: at(5000), reason: "timeout" }, now, 1000), false);
 });

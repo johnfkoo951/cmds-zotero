@@ -8,3 +8,6 @@
 - Editing notes no longer re-checks every note in the vault: the cross-vault note map re-checks only the notes that changed, and is written only when a literature note appears, moves, disappears or changes its Zotero identity.
 - The literature picker lists recently read papers first without scanning the whole index for each one.
 - "Find notes citing a source" reads up to eight notes at a time, so large vaults answer several times faster; the results and their order are unchanged.
+- The References sidebar's Refresh button renders the list again and fetches the bibliography text again instead of rebuilding the whole index; the "Refresh citekey index" command still rebuilds it.
+- While Zotero is not answering, editing a note no longer makes the References sidebar try to reach Zotero on every change; it shows the saved text until Refresh or until the retry pause ends.
+- The References sidebar has its own icon, so it no longer looks like "Send recently read papers to notes".

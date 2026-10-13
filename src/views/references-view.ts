@@ -9,7 +9,8 @@ export const VIEW_TYPE_REFERENCES = "cmds-zotero-references";
 
 /**
  * Sidebar bibliography for the citekeys in the active note. Resolution is index-local; bibliography text comes from the
- * plugin's memory → sidecar → BBT path in one batch per render (0.5 R12), so a closed or hung Zotero costs one short probe.
+ * plugin's memory → sidecar → BBT path in one batch per render (0.5 R12), so a closed or hung Zotero costs one short probe,
+ * and none at all while it was just found not answering (0.6 OPT-13).
  */
 export class ReferencesView extends ItemView {
 	private file: TFile | null = null;
@@ -21,7 +22,8 @@ export class ReferencesView extends ItemView {
 	constructor(leaf: WorkspaceLeaf, private plugin: CMDSZoteroPlugin) { super(leaf); }
 	getViewType(): string { return VIEW_TYPE_REFERENCES; }
 	getDisplayText(): string { return "Zotero references"; }
-	getIcon(): string { return "book-open"; }
+	// 0.6: "book-open" is the ribbon icon of "Send recently read papers to notes".
+	getIcon(): string { return "list-ordered"; }
 
 	onOpen(): Promise<void> {
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => { if (this.plugin.settings.referencesFollowActiveNote) this.refresh(); }));
@@ -47,7 +49,12 @@ export class ReferencesView extends ItemView {
 		return { loaded: this.plugin.indexLoaded(), stale: this.plugin.cachedIndexStale(), ageMinutes: this.plugin.cachedIndexAgeMinutes() };
 	}
 
-	async render(): Promise<void> {
+	/**
+	 * Rebuilds the list from the active note and the published snapshot, then fills in the bibliography text.
+	 * `refetch` (the Refresh button, 0.6 OPT-13) asks for the text again: BBT is probed even after a recent failure and
+	 * texts that did not come live from BBT are read again from the sidecar or BBT.
+	 */
+	async render(options: { refetch?: boolean } = {}): Promise<void> {
 		const generation = ++this.generation;
 		const file = this.activeFile();
 		this.file = file;
@@ -69,15 +76,11 @@ export class ReferencesView extends ItemView {
 		// 0.5 R10
 		const csl = toolbar.createEl("button", { text: "Copy CSL-JSON", attr: { "aria-label": "Copy CSL-JSON for the resolved references (pandoc bibliography)" } });
 		csl.addEventListener("click", () => { void this.plugin.run(() => this.plugin.copyCslJson(resolvedEntries(this.rows))); });
-		const refresh = toolbar.createEl("button", { attr: { "aria-label": "Refresh references" } });
+		// 0.6 OPT-13/references-refresh-rerender: Refresh renders the rows again and fetches their text again; it never
+		// rebuilds the index (that is the "Refresh citekey index" command). A stale snapshot still starts the warm-up below.
+		const refresh = toolbar.createEl("button", { attr: { "aria-label": "Refresh references and their bibliography text" } });
 		setIcon(refresh, "refresh-cw");
-		refresh.disabled = this.plugin.forcedWarmActive();
-		refresh.addEventListener("click", () => {
-			// Re-render at once so the current snapshot and its age stay visible while a forced collection runs, then again when it settles.
-			const warm = this.plugin.warmIndex(true);
-			this.refresh();
-			void warm.finally(() => { this.refresh(); });
-		});
+		refresh.addEventListener("click", () => { this.refresh.cancel(); void this.render({ refetch: true }); });
 		// At most one warm-up per render generation; the plugin backs off after a failure, so this never re-hits BBT per render.
 		if ((!state.loaded || state.stale) && !this.plugin.warmBackoffActive()) void this.plugin.warmIndex();
 		const list = container.createEl("ol", { cls: "cmds-zotero-reference-list" });
@@ -88,7 +91,7 @@ export class ReferencesView extends ItemView {
 			if (row.status === "resolved" && row.entry) slots.push({ entry: row.entry, text });
 		}
 		// 0.5 R12: one batch per render generation; rows keep the author-year line until their text arrives, then carry a provenance tag.
-		if (slots.length) void this.plugin.bibliographyBatch(slots.map(slot => slot.entry)).then(details => {
+		if (slots.length) void this.plugin.bibliographyBatch(slots.map(slot => slot.entry), undefined, options.refetch ? { refresh: true } : undefined).then(details => {
 			if (generation !== this.generation) return;
 			details.forEach((detail, index) => { this.showBibliography(slots[index].text, slots[index].entry, detail); });
 		}).catch(() => undefined);
