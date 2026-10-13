@@ -7498,12 +7498,18 @@ function validateEntry(value) {
     return false;
   }
 }
-function validateIndexWith(value, validEntry) {
-  if (!record(value) || value.schemaVersion !== 2 || value.source !== "better-bibtex" || typeof value.generatedAt !== "string" || !Number.isFinite(Date.parse(value.generatedAt)) || typeof value.complete !== "boolean" || !Array.isArray(value.entries) || value.count !== value.entries.length || !value.entries.every(validEntry)) return false;
+function indexHeaderValid(value) {
+  return record(value) && value.schemaVersion === 2 && value.source === "better-bibtex" && typeof value.generatedAt === "string" && Number.isFinite(Date.parse(value.generatedAt)) && typeof value.complete === "boolean" && Array.isArray(value.entries) && value.count === value.entries.length;
+}
+function indexTailValid(value) {
   if (new Set(value.entries.map((entry) => entry.id)).size !== value.entries.length || !record(value.capabilities) || !Array.isArray(value.diagnostics)) return false;
   const caps = value.capabilities;
   if (typeof caps.zotero !== "string" || typeof caps.betterbibtex !== "string" || [caps.metadata, caps.attachments, caps.annotations, caps.bibliography].some((flag2) => typeof flag2 !== "boolean")) return false;
   return value.diagnostics.every((diagnostic2) => record(diagnostic2) && typeof diagnostic2.code === "string" && typeof diagnostic2.message === "string" && ["info", "warning", "error"].includes(String(diagnostic2.severity)) && (diagnostic2.itemID === void 0 || typeof diagnostic2.itemID === "string") && (diagnostic2.citekey === void 0 || typeof diagnostic2.citekey === "string"));
+}
+function validateIndexWith(value, validEntry) {
+  if (!indexHeaderValid(value) || !value.entries.every(validEntry)) return false;
+  return indexTailValid(value);
 }
 function validateIndex(value) {
   return validateIndexWith(value, validateEntry);

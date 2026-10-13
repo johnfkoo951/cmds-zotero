@@ -3,9 +3,12 @@ import { describeRefreshFailure, formatIndexAge, refreshRefusal } from "../index
 import type { IngestAPI } from "../ingest-api";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndex } from "../types";
+import { STARTUP_COLLECT_DELAY_MS, WarmState } from "./warm-state";
 
-/** After a failed background refresh, UI warm-ups return immediately for this long instead of re-hitting BBT. */
-export const WARM_BACKOFF_MS = 60_000;
+export { WARM_BACKOFF_MS } from "./warm-state";
+
+/** How long the startup warm-up may wait for an idle moment once the layout is ready. */
+const STARTUP_IDLE_TIMEOUT_MS = 2000;
 
 /**
  * Index warm-up, human reads of the snapshot, the explicit refresh and the debounced note-map publication. The published
@@ -13,18 +16,50 @@ export const WARM_BACKOFF_MS = 60_000;
  */
 export class IndexController {
 	private mapTimer: number | undefined;
-	private warming: { promise: Promise<void>; force: boolean } | null = null;
-	private warmFailedUntil = 0;
-	/** Index generation (generatedAt, or "none") for which the offline Notice was already shown. */
-	private noticedGeneration: string | null = null;
+	private readonly state = new WarmState();
+	/** 0.6 OPT-03: the startup warm-up's idle callback and the timer that ends the deferral of a stale collection. */
+	private startupIdle: { idle: boolean; id: number } | null = null;
+	private startupTimer: number | undefined;
 
 	constructor(private readonly plugin: CMDSZoteroPlugin) {}
 
 	/** True while an explicit (forced) warm-up is in flight, so a refresh control can be disabled meanwhile. */
-	forcedWarmActive(): boolean { return this.warming?.force === true; }
+	forcedWarmActive(): boolean { return this.state.forcedActive(); }
 
 	/** True while background warm-ups are backing off after a failed refresh; UI callers may skip `warmIndex()` then. */
-	warmBackoffActive(): boolean { return Date.now() < this.warmFailedUntil; }
+	warmBackoffActive(): boolean { return this.state.backoffActive(); }
+
+	/**
+	 * 0.6 OPT-03: onload does not touch the index. Once the workspace layout is ready the first warm-up waits for an idle
+	 * moment; it publishes the saved snapshot (validated in chunks that yield) and, when that snapshot is stale, leaves the
+	 * collection to a second warm-up `STARTUP_COLLECT_DELAY_MS` later. Anything that needs the index sooner still gets it: a
+	 * missing snapshot is collected at once, and an explicit refresh is never deferred.
+	 */
+	startWarmUp(): void {
+		this.plugin.app.workspace.onLayoutReady(() => {
+			if (!this.plugin.active) return;
+			this.state.deferCollection(STARTUP_COLLECT_DELAY_MS);
+			const run = (): void => { this.startupIdle = null; if (this.plugin.active) void this.warmIndex(); };
+			this.startupIdle = typeof window.requestIdleCallback === "function"
+				? { idle: true, id: window.requestIdleCallback(run, { timeout: STARTUP_IDLE_TIMEOUT_MS }) }
+				: { idle: false, id: window.setTimeout(run, 0) };
+			this.startupTimer = window.setTimeout(() => {
+				this.startupTimer = undefined;
+				this.state.endDeferral();
+				if (this.plugin.active) void this.warmIndex();
+			}, STARTUP_COLLECT_DELAY_MS);
+		});
+	}
+
+	private cancelStartup(): void {
+		if (this.startupIdle) {
+			if (this.startupIdle.idle) window.cancelIdleCallback(this.startupIdle.id);
+			else window.clearTimeout(this.startupIdle.id);
+			this.startupIdle = null;
+		}
+		if (this.startupTimer !== undefined) window.clearTimeout(this.startupTimer);
+		this.startupTimer = undefined;
+	}
 
 	/** Publishes the newest validated snapshot from disk (fresh or stale) without contacting BBT; null when none exists. */
 	async peekPublished(): Promise<ZoteroIndex | null> {
@@ -40,15 +75,7 @@ export class IndexController {
 	 * index generation with a mapped message. A forced warm-up (explicit refresh button) never joins a non-forced flight.
 	 */
 	warmIndex(force = false): Promise<void> {
-		const current = this.warming;
-		if (current && (current.force || !force)) return current.promise;
-		if (!force && this.warmBackoffActive()) return Promise.resolve();
-		const flight = { force, promise: Promise.resolve() };
-		flight.promise = (current ? current.promise.catch(() => undefined) : Promise.resolve())
-			.then(() => this.warm(force))
-			.finally(() => { if (this.warming === flight) this.warming = null; });
-		this.warming = flight;
-		return flight.promise;
+		return this.state.run(force, value => this.warm(value));
 	}
 
 	private async warm(force: boolean): Promise<void> {
@@ -56,7 +83,9 @@ export class IndexController {
 		try {
 			const snapshot = force ? null : await this.peekPublished();
 			if (snapshot && this.plugin.index.isStale(snapshot) === false) return;
-			if (!force && this.warmBackoffActive()) return;
+			if (!force && this.state.backoffActive()) return;
+			// 0.6 OPT-03: right after startup a stale snapshot keeps serving reads; the deferred warm-up collects it.
+			if (!force && snapshot && this.state.collectionDeferred()) return;
 			const outcome = await service.ensureIndex(force);
 			// A warm-up aborted by saveSettings()/onunload() resolves as a cancelled stale-fallback; it must not report
 			// against the new configuration or start its backoff.
@@ -71,10 +100,8 @@ export class IndexController {
 
 	/** Starts the retry backoff and shows the mapped failure once per index generation; a forced warm-up always reports. */
 	private reportWarmFailure(error: unknown, snapshot: ZoteroIndex | null, force: boolean): void {
-		this.warmFailedUntil = Date.now() + WARM_BACKOFF_MS;
-		const generation = snapshot?.generatedAt ?? "none";
-		if (!force && this.noticedGeneration === generation) return;
-		this.noticedGeneration = generation;
+		this.state.failed();
+		if (!this.state.announce(snapshot?.generatedAt ?? "none", force)) return;
 		new Notice(describeRefreshFailure(error, this.plugin.settings.bbtEndpoint, this.plugin.index.ageMinutes(snapshot)));
 	}
 
@@ -89,10 +116,7 @@ export class IndexController {
 			catch (error) { throw new Error(describeRefreshFailure(error, this.plugin.settings.bbtEndpoint, null)); }
 		}
 		if (this.plugin.index.isStale(snapshot) === true) {
-			if (this.noticedGeneration !== snapshot.generatedAt) {
-				this.noticedGeneration = snapshot.generatedAt;
-				new Notice(`Using the saved index from ${formatIndexAge(this.plugin.index.ageMinutes(snapshot))} ago; Zotero was not contacted. Refresh the index to update it.`);
-			}
+			if (this.state.announce(snapshot.generatedAt)) new Notice(`Using the saved index from ${formatIndexAge(this.plugin.index.ageMinutes(snapshot))} ago; Zotero was not contacted. Refresh the index to update it.`);
 			void this.warmIndex();
 		}
 		return snapshot;
@@ -122,15 +146,15 @@ export class IndexController {
 		return file instanceof TFolder || (file instanceof TFile && file.extension === "md");
 	}
 
-	/** saveSettings(): the new configuration starts without a warm-up backoff, a noticed generation or a joined flight. */
+	/** saveSettings(): the new configuration starts without a warm-up backoff, a noticed generation, a joined flight or a startup deferral. */
 	reset(): void {
-		this.warmFailedUntil = 0;
-		this.noticedGeneration = null;
-		this.warming = null;
+		this.state.reset();
+		this.cancelStartup();
 	}
 
-	/** onunload(): a pending note-map publication is dropped. */
+	/** onunload(): a pending note-map publication and the startup warm-up are dropped. */
 	dispose(): void {
 		if (this.mapTimer !== undefined) window.clearTimeout(this.mapTimer);
+		this.cancelStartup();
 	}
 }

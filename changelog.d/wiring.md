@@ -3,3 +3,5 @@
 - Both batches show a progress notice with counts and a Cancel button; Cancel stops before the next note, never in the middle of a write, and the report lists the notes that were not run.
 - A second "Update all owned literature notes" run is refused while one is running.
 - The agent `import` action reads the note state before the import from the notes themselves, through the same identity lookup as the preview.
+- Obsidian starts without a pause from CMDS Zotero: the saved citekey index is loaded once the workspace is ready, at an idle moment, and large indexes are checked in small steps instead of one long block.
+- A stale index is refreshed from Zotero about 30 seconds after startup instead of during it; a missing index and the "Refresh citekey index" command are never delayed.

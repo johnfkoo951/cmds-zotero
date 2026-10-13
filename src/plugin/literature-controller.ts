@@ -10,8 +10,8 @@ import { ownershipSummary, partitionOwnedNotes } from "../note-ownership"; // 0.
 import { freshTargetOf, freshTargetOfRead, indexEntryFor, literatureNoteStatus, readNoteTexts, sendOutcome, type ImportNoteResult, type RecentRead, type SendOutcome } from "../recent/recent-reads";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { RecentReadsModal } from "../views/recent-reads-modal";
-import { WARM_BACKOFF_MS } from "./index-controller";
 import { NoteBatch } from "./note-batch";
+import { WARM_BACKOFF_MS } from "./warm-state";
 
 /** The picker lists recently read papers first from the last Zotero answer; an older answer is refreshed in the background. */
 const RECENT_CACHE_MS = 10 * 60_000;

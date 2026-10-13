@@ -70,7 +70,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 		this.registerDomEvent(this.status.statusBar, "click", () => { void this.status.testConnection(); });
 		this.registerInterval(window.setInterval(() => this.status.renderStatus(), 60_000));
 		this.status.renderStatus();
-		void this.indexing.warmIndex();
+		this.indexing.startWarmUp(); // 0.6 OPT-03: after the layout is ready, at an idle moment
 	}
 
 	/** True when the legacy plugin that shares the index path is enabled; null when the plugin registry is unavailable. */
