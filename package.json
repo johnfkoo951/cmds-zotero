@@ -11,8 +11,7 @@
     "test": "tsx --test tests/*.test.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "build:core": "node esbuild.config.mjs core",
-    "pretest": "node esbuild.config.mjs core"
+    "build:core": "node esbuild.config.mjs core"
   },
   "keywords": [
     "obsidian",

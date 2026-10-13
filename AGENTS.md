@@ -27,7 +27,7 @@ A desktop-only, local-first Zotero integration: verified identities and index, c
 - Prefer Obsidian public APIs for vault writes, UI and protocol registration. Use `Setting.setHeading()`, CSS classes and safe text construction.
 - Command IDs: kebab-case without plugin ID or `command`. Sentence-case labels. No global eslint rule suppression.
 - Note addresses shown to people and agents come from `obsidianOpenURI` (`obsidian://open?vault=&file=`, percent-encoded, `.md` stripped: the form Obsidian's Copy Obsidian URL produces; Hookmark records the same form, path-encoding parity unverified). Peer rows use `peerNoteURI` (Advanced URI when the peer lists that plugin). `noteDeepLink` (`obsidian://cmds-zotero`) is only for the rename-safe identity link and the protocol handler.
-- Run `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
+- Run `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`. `npm test` never rewrites a tracked file: after changing a module bundled into the offline core, run `npm run build:core` (the drift test fails until the committed `scripts/ingest-core.mjs` matches).
 - Public release tags equal manifest versions without a `v` prefix; CI builds and attests assets. Release/community submission require explicit approval.
 
 ## API contract
