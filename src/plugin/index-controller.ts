@@ -122,10 +122,35 @@ export class IndexController {
 		return snapshot;
 	}
 
+	/**
+	 * 0.6 OPT-05: a Markdown note changed or was written by the plugin. After the 500 ms pause only that note is resolved
+	 * again, and the note map is published only when a note's identity or path changed.
+	 */
+	noteChanged(path: string): void {
+		this.plugin.links.noteChanged(path);
+		this.publishMapSoon();
+	}
+
+	/** Vault rename or delete: a note is resolved again under its old and new path; a folder change resolves every note. */
+	noteMoved(file: TAbstractFile, oldPath?: string): void {
+		if (file instanceof TFolder) this.plugin.links.allNotesChanged();
+		else {
+			this.plugin.links.noteChanged(file.path);
+			if (oldPath !== undefined) this.plugin.links.noteChanged(oldPath);
+		}
+		this.publishMapSoon();
+	}
+
+	/** For callers that do not know which notes changed: every note is resolved again after the pause (published only if changed). */
 	scheduleMap(): void {
+		this.plugin.links.allNotesChanged();
+		this.publishMapSoon();
+	}
+
+	private publishMapSoon(): void {
 		if (this.mapTimer !== undefined) window.clearTimeout(this.mapTimer);
 		this.mapTimer = window.setTimeout(() => {
-			if (this.plugin.active && this.plugin.lastIndex) void this.plugin.links.publish(this.plugin.lastIndex).catch(() => { new Notice("Could not update cross-vault note map. Refresh the index to retry."); });
+			if (this.plugin.active && this.plugin.lastIndex) void this.plugin.links.publishIfChanged(this.plugin.lastIndex).catch(() => { new Notice("Could not update cross-vault note map. Refresh the index to retry."); });
 		}, 500);
 	}
 

@@ -5,3 +5,5 @@
 - The agent `import` action reads the note state before the import from the notes themselves, through the same identity lookup as the preview.
 - Obsidian starts without a pause from CMDS Zotero: the saved citekey index is loaded once the workspace is ready, at an idle moment, and large indexes are checked in small steps instead of one long block.
 - A stale index is refreshed from Zotero about 30 seconds after startup instead of during it; a missing index and the "Refresh citekey index" command are never delayed.
+- Editing notes no longer re-checks every note in the vault: the cross-vault note map re-checks only the notes that changed, and is written only when a literature note appears, moves, disappears or changes its Zotero identity.
+- The literature picker lists recently read papers first without scanning the whole index for each one.

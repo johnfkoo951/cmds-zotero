@@ -60,10 +60,11 @@ export default class CMDSZoteroPlugin extends Plugin {
 			const view = leaf?.view;
 			if (view instanceof MarkdownView) this.lastView = view;
 		}));
-		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.indexing.scheduleMap(); }));
+		// 0.6 OPT-05: the note map re-resolves only the notes these events name (a folder event: every note).
+		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.indexing.noteChanged(file.path); }));
 		// 0.5 R13/F07: only Markdown notes and folders (which may contain notes) can change the note map; attachments never do.
-		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (this.indexing.affectsNoteMap(file) || oldPath.endsWith(".md")) this.indexing.scheduleMap(); }));
-		this.registerEvent(this.app.vault.on("delete", file => { if (this.indexing.affectsNoteMap(file)) this.indexing.scheduleMap(); }));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (this.indexing.affectsNoteMap(file) || oldPath.endsWith(".md")) this.indexing.noteMoved(file, oldPath); }));
+		this.registerEvent(this.app.vault.on("delete", file => { if (this.indexing.affectsNoteMap(file)) this.indexing.noteMoved(file); }));
 		// 0.5 R4: status-bar item; click probes BBT once (no refresh); the minute tick only re-renders the age text.
 		this.status.statusBar = this.addStatusBarItem();
 		this.status.statusBar.addClass("cmds-zotero-status-bar", "mod-clickable");

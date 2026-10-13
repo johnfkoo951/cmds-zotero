@@ -105,7 +105,7 @@ export class LiteratureController {
 		const preview = await this.plugin.importer.preview(entry, index ?? undefined, { ...(options.offline ? { offline: true } : {}), ...(options.identities ? { identities: options.identities } : {}) });
 		if (preview.conflicts.length) return sendOutcome(preview, { path: preview.path, conflicts: preview.conflicts, changed: false, preserved: [] });
 		const outcome = sendOutcome(preview, await this.plugin.importer.apply(preview));
-		if (outcome.status !== "refused") this.plugin.indexing.scheduleMap();
+		if (outcome.status !== "refused") this.plugin.indexing.noteChanged(outcome.path);
 		return outcome;
 	}
 
@@ -151,7 +151,7 @@ export class LiteratureController {
 		if (request.apply !== true || preview.conflicts.length) return { item, fresh: found.fresh, before, preview: report, outcome: null, warnings };
 		const result = await this.plugin.importer.apply(preview);
 		const outcome = sendOutcome(preview, result);
-		if (outcome.status !== "refused") this.plugin.indexing.scheduleMap();
+		if (outcome.status !== "refused") this.plugin.indexing.noteChanged(outcome.path);
 		const written = this.plugin.app.vault.getAbstractFileByPath(result.path);
 		const after = outcome.status !== "refused" && written instanceof TFile ? literatureNoteStatus(target, await readNoteTexts([written], file => this.plugin.app.vault.read(file))) : undefined;
 		return { item, fresh: found.fresh, before, preview: report, outcome, ...(after ? { after } : {}), warnings };
@@ -176,7 +176,7 @@ export class LiteratureController {
 				const result = await this.plugin.importer.apply(preview, choices);
 				if (result.conflicts.length) throw new Error(result.conflicts.join("; "));
 				await this.plugin.app.workspace.openLinkText(result.path, "", true);
-				this.plugin.indexing.scheduleMap();
+				this.plugin.indexing.noteChanged(result.path);
 				new Notice(result.preserved.length ? `Literature note imported. Edited sections kept: ${result.preserved.join(", ")}.` : "Literature note imported. User-written sections were preserved.");
 			}).open();
 		});
@@ -239,6 +239,7 @@ export class LiteratureController {
 						if (preview.conflicts.length) { skipped.push(`@${entry.citekey}: ${preview.conflicts.join("; ")}`); return; }
 						if (!preview.exists) { skipped.push(`@${entry.citekey}: note was not created by this plugin; use Import literature note`); return; }
 						const result = await this.plugin.importer.apply(preview);
+						if (!result.conflicts.length) this.plugin.indexing.noteChanged(result.path);
 						// 0.5 R5: edited sections are preserved while the rest of the note is refreshed (partial), never skipped.
 						if (result.conflicts.length) skipped.push(`@${entry.citekey}: ${result.conflicts.join("; ")}`);
 						else if (result.preserved.length) partial.push(`${result.path}: preserved ${result.preserved.join(", ")}${result.changed ? "" : " (no other changes)"}`);
@@ -247,7 +248,6 @@ export class LiteratureController {
 				},
 			});
 		} finally { batch.close(); }
-		this.plugin.indexing.scheduleMap();
 		const notRun = run.notRun.map(entry => `@${entry.citekey}`);
 		new ReportModal(this.plugin.app, "Literature note batch update", [
 			...(run.cancelled ? [`Cancelled after ${owned.length - notRun.length} of ${owned.length} notes; the rest were not run.`] : []),
