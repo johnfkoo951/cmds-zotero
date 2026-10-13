@@ -3,7 +3,8 @@ import type { ImportRequest } from "../agent/actions";
 import { bbtErrorPayload, describeBbtError, transportReasonOf } from "../api/transport";
 import { formatIndexAge, resolveInIndex } from "../index-service";
 import type CMDSZoteroPlugin from "../main";
-import { ImportPreviewModal, ReportModal } from "../modals";
+import { ImportPreviewModal } from "../modals/import-preview";
+import { ReportModal } from "../modals/report";
 import { ownershipSummary, partitionOwnedNotes } from "../note-ownership"; // 0.5 R14
 import { freshTargetOf, freshTargetOfRead, indexEntryFor, literatureNoteStatus, type ImportNoteResult, type RecentRead, type SendOutcome } from "../recent/recent-reads";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";

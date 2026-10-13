@@ -1,7 +1,9 @@
 import { Editor, Notice, TFile } from "obsidian";
 import { scanCitations } from "../citations/scan";
 import type CMDSZoteroPlugin from "../main";
-import { ActionsModal, PageJumpModal, PickerModal } from "../modals";
+import { ActionsModal } from "../modals/actions";
+import { PageJumpModal } from "../modals/page-jump";
+import { PickerModal } from "../modals/picker";
 import { classifyLink, resolveOpenPdfTarget } from "../protocol";
 import { indexEntryFor, localDay, readLabel } from "../recent/recent-reads";
 import type { ZoteroIndexEntry } from "../types";

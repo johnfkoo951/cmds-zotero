@@ -1,7 +1,7 @@
 import { Editor } from "obsidian";
 import { CitekeySuggest } from "../citations/suggest";
 import type CMDSZoteroPlugin from "../main";
-import { PageJumpModal } from "../modals";
+import { PageJumpModal } from "../modals/page-jump";
 import { citekeyAtCursor, parseProtocolRequest } from "../protocol";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
