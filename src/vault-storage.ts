@@ -1,8 +1,9 @@
 import { App, FileSystemAdapter, normalizePath } from "obsidian";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { privateIgnoreCoversAll } from "./agent/git-ignore";
+import { digestFile, digestIfText, readWithDigest, sameDigest, type IndexDigest } from "./index-digest";
 import type { IndexStorage } from "./types";
 import { BIBLIOGRAPHY_SIDECAR, type BibliographyStorage } from "./bibliography-store"; // 0.5 R12
 
@@ -66,7 +67,11 @@ export async function ensureCmdsIgnore(app: App): Promise<void> {
 }
 
 export class VaultIndexStorage implements IndexStorage {
-	private snapshot: string | null | undefined;
+	/**
+	 * Digest of the index bytes last read or written (null: the file was absent; undefined: not read yet). Only the digest
+	 * is kept: the text belongs to the caller, so the plugin never holds a second copy of the index for its lifetime.
+	 */
+	private snapshot: IndexDigest | null | undefined;
 	constructor(private app: App, private indexPath: string, private canWrite: () => boolean = () => true) {
 		relativePath(indexPath);
 		if (indexPath.startsWith(`${app.vault.configDir}/`)) throw new Error("Keep the index outside the configuration directory.");
@@ -74,8 +79,9 @@ export class VaultIndexStorage implements IndexStorage {
 
 	async read(): Promise<string | null> {
 		await assertVaultBoundary(this.app, this.indexPath);
-		this.snapshot = await this.readCurrent();
-		return this.snapshot;
+		const file = await readWithDigest(this.fullPath(this.indexPath));
+		this.snapshot = file?.digest ?? null;
+		return file ? file.bytes.toString("utf8") : null;
 	}
 
 	async fingerprint(): Promise<string | undefined> {
@@ -83,16 +89,23 @@ export class VaultIndexStorage implements IndexStorage {
 		return stat ? `${stat.size}:${stat.mtime}` : "absent";
 	}
 
-	private async readCurrent(): Promise<string | null> {
-		return await this.app.vault.adapter.exists(this.indexPath)
-			? await this.app.vault.adapter.read(this.indexPath) : null;
+	/** Absolute path of a vault-relative path; the guarded replacement needs a desktop file-system vault. */
+	private fullPath(relative: string): string {
+		const adapter = this.app.vault.adapter;
+		if (!(adapter instanceof FileSystemAdapter)) throw new Error("A desktop file-system vault is required.");
+		return path.join(adapter.getBasePath(), relative);
+	}
+
+	/** Digest of the index file as it is now (null when absent), hashed in bounded chunks. */
+	private currentDigest(): Promise<IndexDigest | null> {
+		return digestFile(this.fullPath(this.indexPath));
 	}
 
 	async writeValidated(content: string): Promise<void> {
 		await assertVaultBoundary(this.app, this.indexPath);
 		await ensureDirectory(this.app, this.indexPath);
-		const current = await this.readCurrent();
-		if (this.snapshot !== undefined && current !== this.snapshot) {
+		const current = await this.currentDigest();
+		if (this.snapshot !== undefined && !sameDigest(current, this.snapshot)) {
 			throw new Error("Index changed during refresh. Reload the plugin before retrying; the external changes were preserved.");
 		}
 		const token = randomUUID();
@@ -101,27 +114,40 @@ export class VaultIndexStorage implements IndexStorage {
 		let backupName: string | undefined;
 		try {
 			await adapter.write(temp, content);
-			if (await adapter.read(temp) !== content) throw new Error("Index staging verification failed.");
+			const written = await digestIfText(this.fullPath(temp), content);
+			if (written === null) throw new Error("Index staging verification failed.");
 			if (current !== null) {
 				await ensureCmdsIgnore(this.app);
 				backupName = `index-${Date.now()}-${token}.json`;
 				const backup = `${BACKUP_DIR}/${backupName}`;
 				await assertVaultBoundary(this.app, backup);
 				await ensureDirectory(this.app, backup);
-				await adapter.write(backup, current);
+				await this.copyIndex(backup);
 			}
-			if (await this.readCurrent() !== current) throw new Error("Index changed during staging; refresh was cancelled.");
+			if (!sameDigest(await this.currentDigest(), current)) throw new Error("Index changed during staging; refresh was cancelled.");
 			if (!this.canWrite()) throw new Error("The plugin was unloaded; index replacement was cancelled.");
 			// DataAdapter.rename refuses an existing destination. A same-directory
 			// filesystem rename atomically replaces it without deleting the old file first.
 			if (!(adapter instanceof FileSystemAdapter)) throw new Error("A desktop file-system vault is required.");
 			await assertVaultBoundary(this.app, this.indexPath);
 			await fs.rename(path.join(adapter.getBasePath(), temp), path.join(adapter.getBasePath(), this.indexPath));
-			this.snapshot = content;
+			this.snapshot = written;
 		} finally {
 			if (await adapter.exists(temp)) await adapter.remove(temp);
 		}
 		if (backupName !== undefined) await this.pruneBackups(backupName);
+	}
+
+	/**
+	 * Backs up the index with one file-system copy (a copy-on-write clone where the volume supports it) instead of writing
+	 * a copy from memory. An index that vanished since it was checked gets the same verdict as the post-staging comparison.
+	 */
+	private async copyIndex(backup: string): Promise<void> {
+		try { await fs.copyFile(this.fullPath(this.indexPath), this.fullPath(backup), fsConstants.COPYFILE_FICLONE); }
+		catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT" && !(await this.app.vault.adapter.exists(this.indexPath))) throw new Error("Index changed during staging; refresh was cancelled.");
+			throw error;
+		}
 	}
 
 	/** Keeps the newest `BACKUPS_KEPT` plugin-owned backups after a successful replacement; foreign files are never deleted. */

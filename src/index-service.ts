@@ -1,5 +1,5 @@
 import type { BbtService } from "./bbt";
-import { validateIndex } from "./identity";
+import { validateAndSealIndex, verifyIndex } from "./identity";
 import { resolveIndex } from "./agent/resolve";
 import type { FailureReason } from "./agent/types";
 import type { IndexStorage, Resolution, ZoteroIndex } from "./types";
@@ -129,7 +129,8 @@ export class IndexService {
 		const persisted = await this.storage.read();
 		this.cache = undefined;
 		if (persisted !== null) {
-			try { const parsed: unknown = JSON.parse(persisted); if (validateIndex(parsed)) this.cache = parsed; } catch { /* Legacy or malformed caches must be rebuilt. */ }
+			// Bytes from disk are validated in full; their entries are sealed so later in-process checks skip the hash.
+			try { const parsed: unknown = JSON.parse(persisted); if (validateAndSealIndex(parsed)) this.cache = parsed; } catch { /* Legacy or malformed caches must be rebuilt. */ }
 		}
 		this.fingerprint = fingerprint ?? null;
 		this.loaded = true;
@@ -159,7 +160,8 @@ export class IndexService {
 				if (!fallback) throw failure !== undefined && !(error instanceof IndexRefusalError) ? new IndexRefusalError(failure, message, error) : error;
 				return { index: fallback, refreshed: false, reason: "stale-fallback", ageMinutesBefore: ageBefore, error: message, ...(failure !== undefined ? { failure } : {}), cause: error };
 			}
-			if (!validateIndex(candidate)) throw new Error("Refusing to save invalid Zotero index");
+			// A candidate from BbtService.collect has sealed entries (hashed once there); anything else is validated in full.
+			if (!verifyIndex(candidate)) throw new Error("Refusing to save invalid Zotero index");
 			await this.storage.writeValidated(JSON.stringify(candidate, null, 2));
 			this.fingerprint = (await this.storage.fingerprint?.()) ?? null;
 			this.cache = candidate;

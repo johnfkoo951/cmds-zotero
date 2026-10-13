@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { build } from "esbuild";
 
 const facade = `
@@ -151,6 +152,71 @@ test("VaultIndexStorage uses guarded filesystem replacement with a real temporar
 			assert.equal((await fileTree(root)).some(path => path.endsWith(".tmp")), false);
 			assert.equal(adapter.removed.includes(indexPath), false);
 			assert.equal(adapter.renameCalls, 0);
+		});
+
+		await t.test("changes are compared by content digest: a same-size edit is caught, a same-bytes rewrite is not a change", async () => {
+			assert.equal(Buffer.byteLength(external), Buffer.byteLength(original), "the external edit keeps the file size");
+			const sized = await fixture("same-size");
+			await fs.writeFile(join(sized.root, indexPath), external);
+			await assert.rejects(sized.storage.writeValidated(updated), /Index changed during refresh/);
+			assert.equal(await fs.readFile(join(sized.root, indexPath), "utf8"), external);
+			assert.deepEqual(await fileTree(sized.root), [indexPath]);
+
+			const touched = await fixture("same-bytes");
+			await fs.writeFile(join(touched.root, indexPath), original);
+			const later = new Date(Date.now() + 5000);
+			await fs.utimes(join(touched.root, indexPath), later, later);
+			await touched.storage.writeValidated(updated);
+			assert.equal(await fs.readFile(join(touched.root, indexPath), "utf8"), updated, "an unchanged index with a new mtime is replaced");
+		});
+
+		await t.test("an index deleted during staging cancels the refresh and nothing is recreated", async () => {
+			const { root, adapter, storage } = await fixture("deleted-during-staging");
+			adapter.afterWrite = async path => {
+				if (path.endsWith(".tmp")) await fs.unlink(join(root, indexPath));
+			};
+			await assert.rejects(storage.writeValidated(updated), /Index changed during staging/);
+			assert.equal((await fileTree(root)).some(path => path === indexPath || path.endsWith(".tmp")), false);
+			assert.equal(adapter.renameCalls, 0);
+		});
+
+		await t.test("a staged file that does not read back as written is refused before any backup", async () => {
+			const { root, adapter, storage } = await fixture("staging-corrupt");
+			adapter.afterWrite = async (path, content) => {
+				if (path.endsWith(".tmp")) await fs.writeFile(join(root, path), content.replace("SYNTH002", "SYNTH00X"));
+			};
+			await assert.rejects(storage.writeValidated(updated), /Index staging verification failed/);
+			assert.equal(await fs.readFile(join(root, indexPath), "utf8"), original);
+			assert.deepEqual(await fileTree(root), [indexPath], "no temporary file and no backup remain");
+		});
+
+		await t.test("the storage keeps a digest of the last text it read or wrote, never the text", async () => {
+			const { storage } = await fixture("digest-only");
+			const ownText = () => Object.entries(storage).filter(([, value]) => typeof value !== "function" && !(value && typeof value === "object" && "vault" in value)).map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(" ");
+			const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+			assert.doesNotMatch(ownText(), /SYNTH001/);
+			assert.match(ownText(), new RegExp(sha256(original)));
+			await storage.writeValidated(updated);
+			assert.doesNotMatch(ownText(), /SYNTH00[12]/);
+			assert.match(ownText(), new RegExp(`${sha256(updated)}.*"size":${Buffer.byteLength(updated)}`));
+		});
+
+		await t.test("a first index is written without a backup and the next write backs it up", async () => {
+			const root = join(directory, "first-write");
+			await fs.mkdir(join(root, "References"), { recursive: true });
+			const adapter = new module.FileSystemAdapter(root);
+			const storage = new module.VaultIndexStorage({ vault: { adapter, configDir: ".obsidian" } }, indexPath);
+			assert.equal(await storage.read(), null);
+			await storage.writeValidated(original);
+			assert.deepEqual(await fileTree(root), [indexPath]);
+			await fs.writeFile(join(root, indexPath), external);
+			await assert.rejects(storage.writeValidated(updated), /Index changed during refresh/, "the digest of the first write is the new snapshot");
+			await fs.writeFile(join(root, indexPath), original);
+			await storage.writeValidated(updated);
+			const backups = (await fileTree(root)).filter(path => path.startsWith(".cmds-zotero/backups/"));
+			assert.equal(backups.length, 1);
+			assert.equal(await fs.readFile(join(root, backups[0]!), "utf8"), original);
+			assert.equal(await fs.readFile(join(root, indexPath), "utf8"), updated);
 		});
 	} finally {
 		await fs.rm(directory, { recursive: true, force: true });

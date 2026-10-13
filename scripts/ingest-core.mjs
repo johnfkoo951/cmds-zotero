@@ -7464,7 +7464,7 @@ function entryHash(entry) {
   const { contentHash: _hash, ...rest } = entry;
   return contentHash(rest);
 }
-function validateEntry(value) {
+function validateEntryStructure(value) {
   if (!record(value) || !validateIdentity(value)) return false;
   const item = value;
   if (item.id !== identityKey(item) || item.zoteroSelectURI !== selectURI(item)) return false;
@@ -7485,18 +7485,28 @@ function validateEntry(value) {
         if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
       }
     }
-    if (item.attachmentPath && !item.attachments.some((attachment) => attachment.path === item.attachmentPath)) return false;
-    return /^[a-f0-9]{64}$/.test(item.contentHash) && entryHash(item) === item.contentHash;
+    return !item.attachmentPath || item.attachments.some((attachment) => attachment.path === item.attachmentPath);
   } catch {
     return false;
   }
 }
-function validateIndex(value) {
-  if (!record(value) || value.schemaVersion !== 2 || value.source !== "better-bibtex" || typeof value.generatedAt !== "string" || !Number.isFinite(Date.parse(value.generatedAt)) || typeof value.complete !== "boolean" || !Array.isArray(value.entries) || value.count !== value.entries.length || !value.entries.every(validateEntry)) return false;
+function validateEntry(value) {
+  if (!validateEntryStructure(value)) return false;
+  try {
+    return /^[a-f0-9]{64}$/.test(value.contentHash) && entryHash(value) === value.contentHash;
+  } catch {
+    return false;
+  }
+}
+function validateIndexWith(value, validEntry) {
+  if (!record(value) || value.schemaVersion !== 2 || value.source !== "better-bibtex" || typeof value.generatedAt !== "string" || !Number.isFinite(Date.parse(value.generatedAt)) || typeof value.complete !== "boolean" || !Array.isArray(value.entries) || value.count !== value.entries.length || !value.entries.every(validEntry)) return false;
   if (new Set(value.entries.map((entry) => entry.id)).size !== value.entries.length || !record(value.capabilities) || !Array.isArray(value.diagnostics)) return false;
   const caps = value.capabilities;
   if (typeof caps.zotero !== "string" || typeof caps.betterbibtex !== "string" || [caps.metadata, caps.attachments, caps.annotations, caps.bibliography].some((flag2) => typeof flag2 !== "boolean")) return false;
   return value.diagnostics.every((diagnostic2) => record(diagnostic2) && typeof diagnostic2.code === "string" && typeof diagnostic2.message === "string" && ["info", "warning", "error"].includes(String(diagnostic2.severity)) && (diagnostic2.itemID === void 0 || typeof diagnostic2.itemID === "string") && (diagnostic2.citekey === void 0 || typeof diagnostic2.citekey === "string"));
+}
+function validateIndex(value) {
+  return validateIndexWith(value, validateEntry);
 }
 
 // src/agent/git-ignore.ts
