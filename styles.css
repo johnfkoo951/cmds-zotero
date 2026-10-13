@@ -216,3 +216,18 @@ mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius
 .cmds-zotero-recent-pending { color: var(--text-muted); }
 .cmds-zotero-recent-done { color: var(--text-success); }
 .cmds-zotero-recent-problem { color: var(--text-error); }
+
+/* 0.6: literature-note batch progress Notice (counts, current item, Cancel) */
+.cmds-zotero-batch-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-2);
+}
+.cmds-zotero-batch-progress-detail {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-batch-progress button {
+  align-self: flex-start;
+}

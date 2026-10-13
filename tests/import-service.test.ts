@@ -190,3 +190,53 @@ test("an empty bibliography keeps an owned note's citation section byte-identica
 		});
 	} finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
+
+// 0.6 OPT-02: one identity map per batch instead of one folder scan per preview.
+test("a batch identity map gives the same previews as fresh scans, reads the folder once, and sees the batch's own writes", async () => {
+	const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-service-map-")));
+	try {
+		const output = join(directory, "service.cjs");
+		await build({ stdin: { contents: 'export { ImportService } from "./src/importer"; export { TestVault } from "obsidian";', resolveDir: process.cwd() }, bundle: true, platform: "node", format: "cjs", outfile: output, plugins: [{ name: "synthetic-obsidian", setup(b) { b.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "mock" })); b.onLoad({ filter: /.*/, namespace: "mock" }, () => ({ contents: facade, loader: "js" })); } }] });
+		const { ImportService, TestVault } = createRequire(output)(output);
+		const vault = new TestVault(directory);
+		const service = new ImportService({ vault }, { bibliography: async () => "Author. (2026). Example." }, () => DEFAULT_SETTINGS);
+		const item = (n: number): ZoteroIndexEntry => ({ ...entry, id: `user:1:ITEM000${n}`, itemKey: `ITEM000${n}`, citekey: `Example${n}` });
+		const [owned, fresh, doubled] = [item(1), item(2), item(3)];
+		for (const target of [owned, doubled]) await service.apply(await service.preview(target));
+		const folder = DEFAULT_SETTINGS.outputFolder;
+		await vault.create(`${folder}/Copy of Example3.md`, vault.data.get(`${folder}/@Example3.md`));
+		for (let i = 0; i < 12; i++) await vault.create(`${folder}/filler ${i}.md`, i % 3 ? `---\nzoteroID: "user:1:OTHER0${i}"\n---\n\nText` : "No frontmatter");
+		await vault.create("Elsewhere/@Example2.md", `---\nzoteroID: "${fresh.id}"\n---\n`);
+		const reads: string[] = [];
+		const read = vault.read.bind(vault);
+		vault.read = async (file: { path: string }) => { reads.push(file.path); return read(file); };
+		const shape = (preview: { path: string; content: string; conflicts: string[]; softConflicts: string[]; exists: boolean; sections: unknown[] }) => ({ path: preview.path, content: preview.content, conflicts: preview.conflicts, softConflicts: preview.softConflicts, exists: preview.exists, sections: preview.sections });
+		const freshPreviews = [];
+		for (const target of [owned, fresh, doubled]) freshPreviews.push(shape(await service.preview(target)));
+		const notesInFolder = vault.getMarkdownFiles().filter((file: { path: string }) => file.path.startsWith(`${folder}/`)).length;
+		assert.equal(reads.length, 3 * notesInFolder + 1, "fresh previews scan the whole folder each time (plus the owned note's text)");
+		reads.length = 0;
+		const identities = await service.identityMap();
+		assert.equal(reads.length, notesInFolder, "the map reads each folder note once");
+		assert.ok(reads.every(path => path.startsWith(`${folder}/`)), "notes outside the output folder are never read");
+		reads.length = 0;
+		const mapped = [];
+		for (const target of [owned, fresh, doubled]) mapped.push(await service.preview(target, undefined, { identities }));
+		assert.deepEqual(mapped.map(shape), freshPreviews, "map previews equal fresh previews");
+		assert.deepEqual(reads, [`${folder}/@Example1.md`], "previews through the map read only their own note");
+		assert.match(mapped[2].conflicts.join(" "), /Multiple notes have this Zotero identity/);
+		// The batch creates a note: the next preview of that item finds it through the map without scanning the folder.
+		reads.length = 0;
+		assert.deepEqual((await service.apply(mapped[1])).conflicts, []);
+		const again = await service.preview(fresh, undefined, { identities });
+		assert.equal(again.path, `${folder}/@Example2.md`);
+		assert.equal(again.exists, true);
+		assert.deepEqual(reads, [`${folder}/@Example2.md`]);
+		// A map built for another output folder is not used.
+		reads.length = 0;
+		const other = new ImportService({ vault }, { bibliography: async () => "Author. (2026). Example." }, () => ({ ...DEFAULT_SETTINGS, outputFolder: "Elsewhere" }));
+		const elsewhere = await other.preview(fresh, undefined, { identities });
+		assert.equal(elsewhere.path, "Elsewhere/@Example2.md", "the folder's own notes decide");
+		assert.ok(reads.includes("Elsewhere/@Example2.md") && !reads.some(path => path.startsWith(`${folder}/`)));
+	} finally { await fs.rm(directory, { recursive: true, force: true }); }
+});

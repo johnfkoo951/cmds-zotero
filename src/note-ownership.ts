@@ -5,8 +5,10 @@
  * counted once and never sent through the BBT-backed preview path. Only notes inside the output folder are read.
  */
 import type { ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { buildAliasIndex, noteIdentity } from "./note-aliases";
+import { noteIdentity } from "./note-aliases";
 import { ownerMarker } from "./note-writer";
+import { indexDerived } from "./index-derived";
+import { SCAN_CONCURRENCY, scanInOrder } from "./vault-scan";
 
 export interface OwnershipNote { path: string; basename: string; frontmatter: Record<string, unknown> | undefined }
 export interface OwnedPartition {
@@ -22,23 +24,26 @@ function normalizeFolder(folder: string): string {
 	return folder.trim().replace(/^\/+|\/+$/g, "");
 }
 
-export async function partitionOwnedNotes(index: ZoteroIndex, notes: OwnershipNote[], outputFolder: string, read: (path: string) => Promise<string>): Promise<OwnedPartition> {
-	const lookup = buildAliasIndex(index.entries);
+/**
+ * 0.6: the alias index is the index generation's shared one (`indexDerived`), and the output folder's candidates are read
+ * with up to `concurrency` reads in flight, taken in path order, so the partition equals the sequential one.
+ */
+export async function partitionOwnedNotes(index: ZoteroIndex, notes: OwnershipNote[], outputFolder: string, read: (path: string) => Promise<string>, concurrency = SCAN_CONCURRENCY): Promise<OwnedPartition> {
+	const lookup = indexDerived(index.entries).aliasIndex;
 	const folder = normalizeFolder(outputFolder);
 	const ownedPaths = new Map<string, string[]>();
 	const linkedNotOwned: string[] = [];
-	for (const note of [...notes].sort((a, b) => a.path.localeCompare(b.path))) {
+	const resolved = [...notes].sort((a, b) => a.path.localeCompare(b.path)).flatMap(note => {
 		const id = noteIdentity(note.basename, note.frontmatter, lookup);
-		if (!id) continue;
-		let owned = false;
-		if (folder && note.path.startsWith(`${folder}/`)) {
-			try { owned = (await read(note.path)).includes(ownerMarker(id)); } catch { owned = false; }
-		}
-		if (!owned) { linkedNotOwned.push(note.path); continue; }
-		const paths = ownedPaths.get(id) ?? [];
-		paths.push(note.path);
-		ownedPaths.set(id, paths);
-	}
+		return id ? [{ note, id }] : [];
+	});
+	const inFolder = (path: string): boolean => !!folder && path.startsWith(`${folder}/`);
+	await scanInOrder(resolved, concurrency, ({ note }) => inFolder(note.path) ? read(note.path) : null, ({ note, id }, outcome) => {
+		if (!outcome?.ok || !outcome.value.includes(ownerMarker(id))) { linkedNotOwned.push(note.path); return true; }
+		const paths = ownedPaths.get(id);
+		if (paths) paths.push(note.path); else ownedPaths.set(id, [note.path]);
+		return true;
+	});
 	return { owned: index.entries.filter(entry => ownedPaths.has(entry.id)), ownedPaths, linkedNotOwned };
 }
 

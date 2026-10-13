@@ -19,6 +19,7 @@ import { registerCommands } from "./plugin/commands";
 import { IndexController } from "./plugin/index-controller";
 import { LiteratureController } from "./plugin/literature-controller";
 import { NavigationController } from "./plugin/navigation";
+import type { NoteBatch } from "./plugin/note-batch";
 import { StatusController } from "./plugin/status";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
@@ -206,7 +207,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	literatureNoteFiles(): Map<string, TFile[]> { return this.literature.literatureNoteFiles(); }
 
-	sendToNote(entry: ZoteroIndexEntry, index: ZoteroIndex | null, options?: { offline?: boolean }): Promise<SendOutcome> { return this.literature.sendToNote(entry, index, options); }
+	sendToNote(entry: ZoteroIndexEntry, index: ZoteroIndex | null, options?: Parameters<LiteratureController["sendToNote"]>[2]): Promise<SendOutcome> { return this.literature.sendToNote(entry, index, options); }
+
+	/** 0.6: a literature-note batch session (identity map read once, progress Notice with Cancel); the caller closes it. */
+	openNoteBatch(message: string): Promise<NoteBatch> { return this.literature.openNoteBatch(message); }
 
 	pick(choose: (entry: ZoteroIndexEntry) => void): Promise<void> { return this.navigation.pick(choose); }
 

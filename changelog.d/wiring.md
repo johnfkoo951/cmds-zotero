@@ -1,0 +1,5 @@
+- "Update all owned literature notes" and "Send recently read papers to notes" read the literature folder once per batch instead of once per note, so large batches no longer slow down quadratically.
+- "Update all owned literature notes" reads the next notes fresh from Zotero (and renders their bibliography) a few at a time while the notes are written one by one.
+- Both batches show a progress notice with counts and a Cancel button; Cancel stops before the next note, never in the middle of a write, and the report lists the notes that were not run.
+- A second "Update all owned literature notes" run is refused while one is running.
+- The agent `import` action reads the note state before the import from the notes themselves, through the same identity lookup as the preview.

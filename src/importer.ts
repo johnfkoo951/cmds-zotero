@@ -4,7 +4,8 @@ import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types"
 import { hashText, renderLiterature, safeVaultPath, type RenderedNote, type SectionInfo } from "./note-writer";
 import { relatedCitekeys } from "./related";
 import { checkVaultDestination, hashBytes, MAX_IMAGE_BYTES, readAnnotationImage } from "./import/images";
-import { assertVaultBoundary, BACKUP_DIR, ensureCmdsIgnore, ensureDirectory } from "./vault-storage";
+import { assertVaultBoundary, BACKUP_DIR, ensureCmdsIgnore, ensureDirectory, vaultBoundaryScan } from "./vault-storage";
+import { IdentityMap } from "./batch/identity-map";
 
 export interface ImportPreview {
 	path: string;
@@ -31,14 +32,23 @@ interface Snapshot {
 	rendered: RenderedNote | null;
 	/** Inputs needed to re-render with detach/reset choices at apply time. */
 	render: { entry: ZoteroIndexEntry; bibliography: string; settings: CmdsZoteroSettings; imageHashes: Map<string, string>; related: string[] } | null;
+	/** 0.6 OPT-02: the identity map the preview consulted; apply records the written note in it. */
+	identities: IdentityMap;
 }
 /** 0.5 R5: note backups written before a reset: `.cmds-zotero/backups/notes/<basename>-<epoch ms>.md`. */
 export const NOTE_BACKUP_DIR = `${BACKUP_DIR}/notes`;
 
 // 0.5 R12: bibliography text is injected (the plugin serves memory → sidecar → BBT); an empty string means "unavailable now".
-export type BibliographyProvider = (entry: ZoteroIndexEntry, options?: PreviewOptions) => Promise<string>;
-/** `offline`: the caller already knows BBT is down for this batch; the provider must not wait on a BBT request. */
-export interface PreviewOptions { offline?: boolean }
+export type BibliographyProvider = (entry: ZoteroIndexEntry, options?: Pick<PreviewOptions, "offline">) => Promise<string>;
+export interface PreviewOptions {
+	/** The caller already knows BBT is down for this batch; the provider must not wait on a BBT request. */
+	offline?: boolean;
+	/**
+	 * 0.6 OPT-02: the batch's identity map for the output folder (`identityMap()`), so a batch reads the folder once instead
+	 * of once per preview. Without it, or when the output folder changed since it was built, the preview builds its own.
+	 */
+	identities?: IdentityMap;
+}
 
 export class ImportService {
 	private snapshots = new WeakMap<ImportPreview, Snapshot>();
@@ -52,19 +62,21 @@ export class ImportService {
 		if (!entry.citekey || /[\\/:*?"<>|]/.test(entry.citekey) || [...entry.citekey].some(c => c.charCodeAt(0) < 32) || entry.citekey.endsWith(".")) throw new Error("Unsafe citation key filename");
 		const settings = this.settings();
 		const defaultPath = safeVaultPath(`${settings.outputFolder}/@${entry.citekey}.md`);
-		const identities = await this.findIdentityPaths(settings.outputFolder, entry.id);
-		if (identities.length > 1) {
-			const conflicts = [`Multiple notes have this Zotero identity; choose one before importing: ${identities.join(", ")}`];
+		const { identities: given, ...providerOptions } = options;
+		const identities = given?.folder === settings.outputFolder ? given : await this.identityMap();
+		const paths = await identities.pathsFor(entry.id);
+		if (paths.length > 1) {
+			const conflicts = [`Multiple notes have this Zotero identity; choose one before importing: ${paths.join(", ")}`];
 			const preview: ImportPreview = { path: defaultPath, content: "", conflicts: [...conflicts], softConflicts: [], detached: [], sections: [], exists: true };
-			this.snapshots.set(preview, { path: defaultPath, content: "", original: null, images: [], conflicts, rendered: null, render: null });
+			this.snapshots.set(preview, { path: defaultPath, content: "", original: null, images: [], conflicts, rendered: null, render: null, identities });
 			return preview;
 		}
-		const path = identities[0] ?? defaultPath;
+		const path = paths[0] ?? defaultPath;
 		await this.checkPath(path);
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing && !(existing instanceof TFile)) throw new Error("Literature note path is not a file");
 		const original = existing instanceof TFile ? await this.app.vault.read(existing) : null;
-		const bibliography = await this.bibliography(entry, options); // 0.5 R12
+		const bibliography = await this.bibliography(entry, providerOptions); // 0.5 R12
 		const imageHashes = new Map<string, string>();
 		for (const attachment of entry.attachments) for (const annotation of attachment.annotations) {
 			if (annotation.imagePath && !imageHashes.has(annotation.imagePath)) imageHashes.set(annotation.imagePath, hashBytes(await readAnnotationImage(annotation.imagePath)));
@@ -81,8 +93,31 @@ export class ImportService {
 			images.push({ ...image, hash });
 		}
 		const preview: ImportPreview = { path, content: rendered.content, conflicts: [...rendered.conflicts], softConflicts: [...rendered.softConflicts], detached: [...rendered.detached], sections: rendered.sections.map(section => ({ ...section })), exists: original !== null };
-		this.snapshots.set(preview, { path, content: rendered.content, original, images, conflicts: [...rendered.conflicts], rendered, render: { entry, bibliography, settings, imageHashes, related } });
+		this.snapshots.set(preview, { path, content: rendered.content, original, images, conflicts: [...rendered.conflicts], rendered, render: { entry, bibliography, settings, imageHashes, related }, identities });
 		return preview;
+	}
+
+	/**
+	 * 0.6 OPT-02: the output folder's `zoteroID` → note paths, read from the notes themselves (never the metadata cache):
+	 * every read passes the vault-boundary walk (the vault root resolved once per round of reads), 8 reads in flight. A
+	 * batch builds it once, passes it to every `preview`, and `apply` records each written note in it.
+	 */
+	identityMap(): Promise<IdentityMap> {
+		const adapter = this.app.vault.adapter;
+		if (!(adapter instanceof FileSystemAdapter)) return Promise.reject(new Error("Safe local import requires a desktop filesystem vault"));
+		return IdentityMap.build(this.settings().outputFolder, {
+			list: () => this.app.vault.getMarkdownFiles().map(file => file.path),
+			reader: () => {
+				const boundary = vaultBoundaryScan(this.app);
+				return async path => {
+					safeVaultPath(path);
+					await boundary(path);
+					const file = this.app.vault.getAbstractFileByPath(path);
+					return file instanceof TFile ? this.app.vault.read(file) : null;
+				};
+			},
+			parseYaml: yaml => parseYaml(yaml) as unknown,
+		});
 	}
 
 	/**
@@ -145,6 +180,7 @@ export class ImportService {
 					return content;
 				});
 			}
+			snapshot.identities.noteWritten(path, content); // 0.6 OPT-02: later previews of the batch see this note
 			this.snapshots.delete(preview);
 			return { path, conflicts: [], changed, preserved, detached, reset };
 		} finally { this.applying = false; }
@@ -159,27 +195,6 @@ export class ImportService {
 		await ensureDirectory(this.app, backup);
 		await this.app.vault.adapter.write(backup, text);
 		return backup;
-	}
-
-	private async findIdentityPaths(folder: string, identity: string): Promise<string[]> {
-		const prefix = `${safeVaultPath(folder)}/`;
-		const matches: string[] = [];
-		// Read actual frontmatter rather than depending on an asynchronously updated metadata cache.
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			if (!file.path.startsWith(prefix)) continue;
-			await this.checkPath(file.path);
-			const content = await this.app.vault.read(file);
-			const withoutBOM = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-			const yaml = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(withoutBOM)?.[1];
-			if (yaml === undefined) continue;
-			try {
-				const data: unknown = parseYaml(yaml);
-				if (data && typeof data === "object" && (data as Record<string, unknown>).zoteroID === identity) matches.push(file.path);
-			} catch {
-				// Invalid YAML in an unrelated user note is not ours to repair.
-			}
-		}
-		return matches.sort();
 	}
 
 	private async matches(snapshot: Snapshot): Promise<boolean> {

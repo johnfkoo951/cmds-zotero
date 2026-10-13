@@ -202,6 +202,20 @@ export interface SendOutcome {
 	message?: string;
 }
 
+/**
+ * What one send did, from its import preview and the apply result (0.6 STRUCT-02: shared by the recent-reads send and the
+ * agent `import`). For a preview refused before apply, pass the preview's path and conflicts as the result.
+ */
+export function sendOutcome(preview: { exists: boolean }, result: { path: string; conflicts: readonly string[]; changed: boolean; preserved: readonly string[] }): SendOutcome {
+	if (result.conflicts.length) return { status: "refused", path: result.path, preserved: [], message: result.conflicts.join("; ") };
+	return { status: !preview.exists ? "created" : result.changed ? "updated" : "unchanged", path: result.path, preserved: [...result.preserved] };
+}
+
+/** The texts `literatureNoteStatus` compares, read concurrently (0.6 STRUCT-02: one loader for the modal and both agent actions). */
+export function readNoteTexts<F extends { path: string }>(files: readonly F[], read: (file: F) => Promise<string>): Promise<{ path: string; text: string }[]> {
+	return Promise.all(files.map(async file => ({ path: file.path, text: await read(file) })));
+}
+
 /** One-line result text for a send. */
 export function describeSendOutcome(outcome: SendOutcome): string {
 	const kept = outcome.preserved.length ? `; your edits kept in ${outcome.preserved.length} section${outcome.preserved.length === 1 ? "" : "s"}` : "";

@@ -1,14 +1,17 @@
 import { Notice, TFile } from "obsidian";
 import type { ImportRequest } from "../agent/actions";
 import { bbtErrorPayload, describeBbtError, transportReasonOf } from "../api/transport";
+import { batchProgressText, runBatch, type BatchRun } from "../batch/batch-run";
+import type { IdentityMap } from "../batch/identity-map";
 import { formatIndexAge, resolveInIndex } from "../index-service";
 import type CMDSZoteroPlugin from "../main";
 import { ImportPreviewModal, ReportModal } from "../modals";
 import { ownershipSummary, partitionOwnedNotes } from "../note-ownership"; // 0.5 R14
-import { freshTargetOf, freshTargetOfRead, indexEntryFor, literatureNoteStatus, type ImportNoteResult, type RecentRead, type SendOutcome } from "../recent/recent-reads";
+import { freshTargetOf, freshTargetOfRead, indexEntryFor, literatureNoteStatus, readNoteTexts, sendOutcome, type ImportNoteResult, type RecentRead, type SendOutcome } from "../recent/recent-reads";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { RecentReadsModal } from "../views/recent-reads-modal";
 import { WARM_BACKOFF_MS } from "./index-controller";
+import { NoteBatch } from "./note-batch";
 
 /** The picker lists recently read papers first from the last Zotero answer; an older answer is refreshed in the background. */
 const RECENT_CACHE_MS = 10 * 60_000;
@@ -20,6 +23,8 @@ export class LiteratureController {
 	private recentFlight: { days: number; promise: Promise<RecentRead[]> } | null = null;
 	/** After a failed background refresh the picker does not ask Zotero again until this time (Zotero is likely closed). */
 	private recentRetryAt = 0;
+	/** True while "Update all owned literature notes" runs; a second run is refused. */
+	private updateAllActive = false;
 
 	constructor(private readonly plugin: CMDSZoteroPlugin) {}
 
@@ -84,16 +89,24 @@ export class LiteratureController {
 	}
 
 	/**
+	 * 0.6 batch-performance-progress: a batch session — the output folder's identity map, read once and kept current by the
+	 * batch's writes and by vault events, and the progress Notice with Cancel. The caller closes it.
+	 */
+	async openNoteBatch(message: string): Promise<NoteBatch> {
+		return new NoteBatch(this.plugin.app, await this.plugin.importer.identityMap(), message);
+	}
+
+	/**
 	 * Creates the literature note or refreshes its managed sections (new annotations included). Edited generated sections
 	 * stay as they are (0.5 R5); hard conflicts (unowned note, damaged markers, several notes with one identity) refuse.
+	 * `identities` is the batch's identity map (0.6 OPT-02); without it the preview reads the output folder itself.
 	 */
-	async sendToNote(entry: ZoteroIndexEntry, index: ZoteroIndex | null, options: { offline?: boolean } = {}): Promise<SendOutcome> {
-		const preview = await this.plugin.importer.preview(entry, index ?? undefined, options.offline ? { offline: true } : {});
-		if (preview.conflicts.length) return { status: "refused", path: preview.path, preserved: [], message: preview.conflicts.join("; ") };
-		const result = await this.plugin.importer.apply(preview);
-		if (result.conflicts.length) return { status: "refused", path: result.path, preserved: [], message: result.conflicts.join("; ") };
-		this.plugin.indexing.scheduleMap();
-		return { status: !preview.exists ? "created" : result.changed ? "updated" : "unchanged", path: result.path, preserved: result.preserved };
+	async sendToNote(entry: ZoteroIndexEntry, index: ZoteroIndex | null, options: { offline?: boolean; identities?: IdentityMap } = {}): Promise<SendOutcome> {
+		const preview = await this.plugin.importer.preview(entry, index ?? undefined, { ...(options.offline ? { offline: true } : {}), ...(options.identities ? { identities: options.identities } : {}) });
+		if (preview.conflicts.length) return sendOutcome(preview, { path: preview.path, conflicts: preview.conflicts, changed: false, preserved: [] });
+		const outcome = sendOutcome(preview, await this.plugin.importer.apply(preview));
+		if (outcome.status !== "refused") this.plugin.indexing.scheduleMap();
+		return outcome;
 	}
 
 	/** An item the saved index does not know yet, found in Zotero by its exact citekey and read fresh. */
@@ -126,9 +139,10 @@ export class LiteratureController {
 		if (!found.entry) return { failure: { reason: bbtError ? "bbt-unreachable" : "invalid-request", message: `${describeBbtError(found.error)} The item is not in the saved index and could not be read from Zotero.`, ...(bbtError ? { bbtError } : {}) } };
 		if (!found.fresh && request.allowStale !== true) return { failure: { reason: bbtError ? "bbt-unreachable" : "invalid-request", message: `${describeBbtError(found.error)} The item could not be read fresh from Zotero; pass --allow-stale to import from the saved index (annotations made since it was saved are missing).`, ...(bbtError ? { bbtError } : {}) } };
 		const target = found.entry;
-		const files = this.literatureNoteFiles().get(target.id) ?? [];
-		const before = literatureNoteStatus(target, await Promise.all(files.map(async file => ({ path: file.path, text: await this.plugin.app.vault.read(file) }))));
-		const preview = await this.plugin.importer.preview(target, index ?? undefined, found.fresh || !this.isOfflineError(found.error) ? {} : { offline: true });
+		// 0.6 OPT-02: one identity map serves the note state before the import and the preview, so both see the same notes.
+		const identities = await this.plugin.importer.identityMap();
+		const before = literatureNoteStatus(target, await readNoteTexts((await identities.pathsFor(target.id)).map(path => ({ path })), note => this.readNote(note.path)));
+		const preview = await this.plugin.importer.preview(target, index ?? undefined, { identities, ...(found.fresh || !this.isOfflineError(found.error) ? {} : { offline: true }) });
 		const existing = this.plugin.app.vault.getAbstractFileByPath(preview.path);
 		const original = existing instanceof TFile ? await this.plugin.app.vault.read(existing) : null;
 		const report = { path: preview.path, exists: preview.exists, conflicts: [...preview.conflicts], softConflicts: [...preview.softConflicts], sections: preview.sections.map(section => ({ id: section.id, state: section.state })), changes: original !== preview.content };
@@ -136,11 +150,17 @@ export class LiteratureController {
 		const warnings = found.fresh ? [] : [`${describeBbtError(found.error)} Imported from the saved index (${formatIndexAge(this.plugin.index.ageMinutes(index))} old); annotations made since then are missing.`];
 		if (request.apply !== true || preview.conflicts.length) return { item, fresh: found.fresh, before, preview: report, outcome: null, warnings };
 		const result = await this.plugin.importer.apply(preview);
-		const outcome: SendOutcome = result.conflicts.length ? { status: "refused", path: result.path, preserved: [], message: result.conflicts.join("; ") } : { status: !preview.exists ? "created" : result.changed ? "updated" : "unchanged", path: result.path, preserved: result.preserved };
+		const outcome = sendOutcome(preview, result);
 		if (outcome.status !== "refused") this.plugin.indexing.scheduleMap();
 		const written = this.plugin.app.vault.getAbstractFileByPath(result.path);
-		const after = outcome.status !== "refused" && written instanceof TFile ? literatureNoteStatus(target, [{ path: written.path, text: await this.plugin.app.vault.read(written) }]) : undefined;
+		const after = outcome.status !== "refused" && written instanceof TFile ? literatureNoteStatus(target, await readNoteTexts([written], file => this.plugin.app.vault.read(file))) : undefined;
 		return { item, fresh: found.fresh, before, preview: report, outcome, ...(after ? { after } : {}), warnings };
+	}
+
+	/** The text of the note at `path`; "" when no note is there any more. */
+	private async readNote(path: string): Promise<string> {
+		const file = this.plugin.app.vault.getAbstractFileByPath(path);
+		return file instanceof TFile ? this.plugin.app.vault.read(file) : "";
 	}
 
 	async previewImport(entry: ZoteroIndexEntry): Promise<void> {
@@ -166,42 +186,76 @@ export class LiteratureController {
 	 * Re-renders managed sections of every note this plugin owns; conflicts are reported and skipped, never forced.
 	 * 0.5 R14: owned = resolves to an entry, lies in the output folder and carries the owner marker; other linked notes are
 	 * counted once and never reach the BBT-backed preview.
+	 * 0.6 batch-performance-progress: the output folder is read once for the whole batch (identity map); the fresh Zotero
+	 * reads (and bibliography renderings) of the next notes run `settings.concurrency` ahead while the writes stay one at a
+	 * time; a progress Notice counts the results and offers Cancel, which stops before the next note and reports the rest
+	 * as not run.
 	 */
 	async updateAllLiteratureNotes(): Promise<void> {
 		await this.plugin.run(async () => {
-			const index = await this.plugin.indexing.loadIndexForRead();
-			const partition = await partitionOwnedNotes(index, this.plugin.app.vault.getMarkdownFiles().map(file => ({ path: file.path, basename: file.basename, frontmatter: this.plugin.app.metadataCache.getFileCache(file)?.frontmatter })), this.plugin.settings.outputFolder, path => {
-				const file = this.plugin.app.vault.getAbstractFileByPath(path);
-				return file instanceof TFile ? this.plugin.app.vault.cachedRead(file) : Promise.resolve("");
-			});
-			const owned = partition.owned;
-			if (!owned.length && !partition.linkedNotOwned.length) throw new Error("No owned literature notes were found. Import a note first.");
-			// 0.5 R4: probe BBT once before the loop. 0.5 R12: when it fails, owned notes are still updated from the index and the
-			// sidecar — a note whose bibliography is not cached keeps its `citation` section byte-identical, and no note waits on BBT.
-			const offline = await this.plugin.bbt.capabilities().then(() => null, (error: unknown) => error);
-			const notice = new Notice(`Updating ${owned.length} literature notes…`, 0);
-			const updated: string[] = [];
-			const partial: string[] = [];
-			const unchanged: string[] = [];
-			const skipped: string[] = [];
-			try {
-				for (const entry of owned) {
+			if (this.updateAllActive) throw new Error("Literature notes are already being updated.");
+			this.updateAllActive = true;
+			try { await this.updateAll(); }
+			finally { this.updateAllActive = false; }
+		});
+	}
+
+	private async updateAll(): Promise<void> {
+		const index = await this.plugin.indexing.loadIndexForRead();
+		const partition = await partitionOwnedNotes(index, this.plugin.app.vault.getMarkdownFiles().map(file => ({ path: file.path, basename: file.basename, frontmatter: this.plugin.app.metadataCache.getFileCache(file)?.frontmatter })), this.plugin.settings.outputFolder, path => {
+			const file = this.plugin.app.vault.getAbstractFileByPath(path);
+			return file instanceof TFile ? this.plugin.app.vault.cachedRead(file) : Promise.resolve("");
+		});
+		const owned = partition.owned;
+		if (!owned.length && !partition.linkedNotOwned.length) throw new Error("No owned literature notes were found. Import a note first.");
+		// 0.5 R4: probe BBT once before the loop. 0.5 R12: when it fails, owned notes are still updated from the index and the
+		// sidecar — a note whose bibliography is not cached keeps its `citation` section byte-identical, and no note waits on BBT.
+		const offline = await this.plugin.bbt.capabilities().then(() => null, (error: unknown) => error);
+		const updated: string[] = [];
+		const partial: string[] = [];
+		const unchanged: string[] = [];
+		const skipped: string[] = [];
+		const label = "Updating literature notes";
+		const progress = (done: number): string => batchProgressText(label, done, owned.length, [["updated", updated.length], ["partial", partial.length], ["unchanged", unchanged.length], ["skipped", skipped.length]]);
+		const batch = await this.openNoteBatch(progress(0));
+		let run: BatchRun<ZoteroIndexEntry, void>;
+		try {
+			run = await runBatch(owned, {
+				concurrency: this.plugin.settings.concurrency,
+				// Online, each note is rendered from the item as Zotero has it now (new annotations included); its bibliography is
+				// rendered here too, so the preview below finds it in memory instead of waiting on BBT one note at a time.
+				prepare: async entry => {
+					if (offline) return entry;
+					const current = (await this.freshEntry(entry)).entry;
+					await this.plugin.bibliography.bibliographyDetail(current).catch(() => undefined);
+					return current;
+				},
+				cancelled: () => batch.cancelled,
+				onItem: (entry, position) => { batch.update(progress(position), `@${entry.citekey}`); },
+				apply: async (entry, prepared) => {
 					try {
-						// Online, each note is rendered from the item as Zotero has it now (new annotations included).
-						const current = offline ? entry : (await this.freshEntry(entry)).entry;
-						const preview = await this.plugin.importer.preview(current, index, offline ? { offline: true } : {}); // 0.5 R12
-						if (preview.conflicts.length) { skipped.push(`@${entry.citekey}: ${preview.conflicts.join("; ")}`); continue; }
-						if (!preview.exists) { skipped.push(`@${entry.citekey}: note was not created by this plugin; use Import literature note`); continue; }
+						const current = prepared.ok ? prepared.value : entry;
+						const preview = await this.plugin.importer.preview(current, index, { identities: batch.identities, ...(offline ? { offline: true } : {}) }); // 0.5 R12
+						if (preview.conflicts.length) { skipped.push(`@${entry.citekey}: ${preview.conflicts.join("; ")}`); return; }
+						if (!preview.exists) { skipped.push(`@${entry.citekey}: note was not created by this plugin; use Import literature note`); return; }
 						const result = await this.plugin.importer.apply(preview);
 						// 0.5 R5: edited sections are preserved while the rest of the note is refreshed (partial), never skipped.
 						if (result.conflicts.length) skipped.push(`@${entry.citekey}: ${result.conflicts.join("; ")}`);
 						else if (result.preserved.length) partial.push(`${result.path}: preserved ${result.preserved.join(", ")}${result.changed ? "" : " (no other changes)"}`);
 						else (result.changed ? updated : unchanged).push(result.path);
 					} catch (error) { skipped.push(`@${entry.citekey}: ${error instanceof Error ? error.message : "failed"}`); }
-				}
-			} finally { notice.hide(); }
-			this.plugin.indexing.scheduleMap();
-			new ReportModal(this.plugin.app, "Literature note batch update", [`Updated: ${updated.length}`, `Partial (edited sections preserved): ${partial.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`, ownershipSummary(partition), ...(offline ? [`Zotero offline: ${describeBbtError(offline)} Citation sections were kept as they are unless a cached rendering existed.`] : []), "", ...updated.map(path => `updated  ${path}`), ...partial.map(line => `partial  ${line}`), ...skipped.map(line => `skipped  ${line}`)].join("\n")).open(); // 0.5 R5 + R12
-		});
+				},
+			});
+		} finally { batch.close(); }
+		this.plugin.indexing.scheduleMap();
+		const notRun = run.notRun.map(entry => `@${entry.citekey}`);
+		new ReportModal(this.plugin.app, "Literature note batch update", [
+			...(run.cancelled ? [`Cancelled after ${owned.length - notRun.length} of ${owned.length} notes; the rest were not run.`] : []),
+			`Updated: ${updated.length}`, `Partial (edited sections preserved): ${partial.length}`, `Unchanged: ${unchanged.length}`, `Skipped: ${skipped.length}`,
+			...(notRun.length ? [`Not run: ${notRun.length}`] : []),
+			ownershipSummary(partition),
+			...(offline ? [`Zotero offline: ${describeBbtError(offline)} Citation sections were kept as they are unless a cached rendering existed.`] : []),
+			"", ...updated.map(path => `updated  ${path}`), ...partial.map(line => `partial  ${line}`), ...skipped.map(line => `skipped  ${line}`), ...notRun.map(key => `not run  ${key}`),
+		].join("\n")).open(); // 0.5 R5 + R12
 	}
 }
