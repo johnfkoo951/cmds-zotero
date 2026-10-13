@@ -41,7 +41,8 @@ async function serve(handler: (call: { method: string; params: unknown[] }) => u
 			calls.push(call);
 			let payload: unknown;
 			try { payload = { jsonrpc: "2.0", id: 1, result: handler(call) }; }
-			catch (error) { payload = { jsonrpc: "2.0", id: 1, error: { code: -32602, message: error instanceof Error ? error.message : "error" } }; }
+			// Better BibTeX's real error shape: id null (json-rpc.ts handle()).
+			catch (error) { payload = { jsonrpc: "2.0", error: { code: -32602, message: error instanceof Error ? error.message : "error" }, id: null }; }
 			response.setHeader("Content-Type", "application/json");
 			response.end(JSON.stringify(payload));
 		});
@@ -160,7 +161,7 @@ test("recentlyRead with nothing read in the window makes exactly one search", as
 	} finally { await bbt.close(); }
 });
 
-test("collectEntry reads one item fresh, follows a citekey renamed in Zotero, and refuses another item", async () => {
+test("collectEntry reads one item fresh, follows a citekey renamed in Zotero after BBT's real id-null not-found reply, and refuses another item", async () => {
 	let renamed = false;
 	const bbt = await serve(call => {
 		if (call.method === "item.export") {

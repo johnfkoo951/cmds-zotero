@@ -8015,7 +8015,7 @@ function bbtObservation(error) {
     case "aborted":
       return `The request to ${at} was aborted by the plugin before Zotero answered`;
     case "rpc":
-      return `Better BibTeX at ${at} reported an error (${error.detail})`;
+      return `Better BibTeX at ${at} reported an error (${error.detail}${error.rpcMessage ? `: ${error.rpcMessage.replace(/\s+/g, " ").trim().slice(0, 200)}` : ""})`;
     default:
       return `Better BibTeX at ${at} returned an unexpected response (${error.detail})`;
   }
@@ -8076,26 +8076,37 @@ function httpRequest(rawURL, timeoutMs, body, signal) {
     request.end(body);
   });
 }
-async function rpc(endpoint, method, params, timeoutMs, signal) {
-  const url = `${endpoint.replace(/\/$/, "")}/json-rpc`;
-  const response = await httpRequest(url, timeoutMs, JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal);
-  if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", url, `BBT HTTP ${response.status} for ${method}`, { status: response.status });
-  let parsed;
-  try {
-    parsed = JSON.parse(response.text);
-  } catch (error) {
-    throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${method}`, { cause: error });
-  }
-  if (!record(parsed) || parsed.jsonrpc !== "2.0" || parsed.id !== 1) throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`);
-  if ("error" in parsed) {
-    const fault = record(parsed.error) ? parsed.error : {};
-    throw new BbtTransportError("rpc", url, `BBT RPC error for ${method}`, {
+function settleReply(reply, id, url, method) {
+  if (!record(reply) || reply.jsonrpc !== "2.0") return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+  if ("error" in reply) {
+    if (reply.id !== null && reply.id !== id) return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+    const fault = record(reply.error) ? reply.error : {};
+    return { ok: false, error: new BbtTransportError("rpc", url, `BBT RPC error for ${method}`, {
       ...typeof fault.code === "number" ? { rpcCode: fault.code } : {},
       ...typeof fault.message === "string" ? { rpcMessage: fault.message.slice(0, 500) } : {}
-    });
+    }) };
   }
-  if (!("result" in parsed)) throw new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`);
-  return parsed.result;
+  if (reply.id !== id) return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+  if (!("result" in reply)) return { ok: false, error: new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`) };
+  return { ok: true, result: reply.result };
+}
+function rpcURL(endpoint) {
+  return `${endpoint.replace(/\/$/, "")}/json-rpc`;
+}
+async function postRpc(url, body, label, timeoutMs, signal) {
+  const response = await httpRequest(url, timeoutMs, JSON.stringify(body), signal);
+  if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", url, `BBT HTTP ${response.status} for ${label}`, { status: response.status });
+  try {
+    return JSON.parse(response.text);
+  } catch (error) {
+    throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${label}`, { cause: error });
+  }
+}
+async function rpc(endpoint, method, params, timeoutMs, signal) {
+  const url = rpcURL(endpoint);
+  const settled = settleReply(await postRpc(url, { jsonrpc: "2.0", id: 1, method, params }, method, timeoutMs, signal), 1, url, method);
+  if (!settled.ok) throw settled.error;
+  return settled.result;
 }
 
 // src/index-service.ts

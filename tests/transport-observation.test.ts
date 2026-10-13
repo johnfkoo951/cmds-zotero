@@ -80,7 +80,7 @@ test("a failure stays recorded while slower requests that started before it comp
 			const fail = (parsed.params[0] as { fail?: boolean } | undefined)?.fail === true;
 			setTimeout(() => {
 				response.setHeader("Content-Type", "application/json");
-				response.end(JSON.stringify(fail ? { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "boom" } } : { jsonrpc: "2.0", id: 1, result: "ok" }));
+				response.end(JSON.stringify(fail ? { jsonrpc: "2.0", error: { code: -32000, message: "boom" }, id: null } : { jsonrpc: "2.0", id: 1, result: "ok" }));
 			}, delay);
 		});
 	});
@@ -112,7 +112,7 @@ test("bibliography with a non-default style goes through the observed, typed tra
 			const style = (parsed.params[1] as { id: string }).id;
 			styles.push(style);
 			response.setHeader("Content-Type", "application/json");
-			response.end(JSON.stringify(style === failStyle ? { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "unknown style" } } : { jsonrpc: "2.0", id: 1, result: `[${style}] Author, Example. Synthetic example.` }));
+			response.end(JSON.stringify(style === failStyle ? { jsonrpc: "2.0", error: { code: -32603, message: "CSL style \"unknown\" not found" }, id: null } : { jsonrpc: "2.0", id: 1, result: `[${style}] Author, Example. Synthetic example.` }));
 		});
 	});
 	const bbt = service(api.endpoint);
