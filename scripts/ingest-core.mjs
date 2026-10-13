@@ -10784,13 +10784,16 @@ function normalizeSettings(raw) {
       return typeof peer.name === "string" && !!peer.name.trim() && typeof peer.path === "string" && !!peer.path.trim();
     }).map((peer) => ({ name: peer.name.trim(), path: peer.path.trim() })) : [],
     citationTrigger: ["bracket", "at", "off"].includes(data.citationTrigger) ? data.citationTrigger : DEFAULT_SETTINGS.citationTrigger,
-    excludedTags: Array.isArray(data.excludedTags) ? [...new Set(data.excludedTags.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase()).filter(Boolean))] : [...DEFAULT_SETTINGS.excludedTags],
+    excludedTags: Array.isArray(data.excludedTags) ? normalizeTagList(data.excludedTags) : [...DEFAULT_SETTINGS.excludedTags],
     headingHighlightColor: typeof data.headingHighlightColor === "string" && (data.headingHighlightColor === "none" || isAnnotationColor(data.headingHighlightColor)) ? data.headingHighlightColor : DEFAULT_SETTINGS.headingHighlightColor,
     referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
     referencesHeadings: referencesHeadings(data.referencesHeadings),
     // 0.5 R10
     recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365)
   };
+}
+function normalizeTagList(value) {
+  return [...new Set(value.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase()).filter(Boolean))];
 }
 function referencesHeadings(value) {
   const list = Array.isArray(value) ? [...new Set(value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean))] : [];

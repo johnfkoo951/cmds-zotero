@@ -7,9 +7,11 @@ import { DEFAULT_ACRONYMS } from "eslint-plugin-obsidianmd/dist/lib/rules/ui/acr
 // so brands added upstream later must be re-imported here). "Hookmark" is a product name that appears mid-label; "Cursor"
 // (the editor) is dropped so the text caret in "Open link under cursor" is not rewritten as a brand. The deep import has no
 // exports-map contract (plugin pinned to 0.4.2 in package.json); a plugin restructure fails loudly at lint time, by design.
-const SENTENCE_CASE_BRANDS = [...DEFAULT_BRANDS.filter(brand => brand !== "Cursor"), "Hookmark"];
+// 0.6 OPT-22: "Better BibTeX" (the Zotero add-on this plugin talks to) is a product name too.
+const SENTENCE_CASE_BRANDS = [...DEFAULT_BRANDS.filter(brand => brand !== "Cursor"), "Hookmark", "Better BibTeX"];
 // 0.5 R10: "CSL" (Citation Style Language) is an acronym that appears in labels such as "Copy CSL-JSON"; same replace-the-list caveat.
-const SENTENCE_CASE_ACRONYMS = [...DEFAULT_ACRONYMS, "CSL"];
+// 0.6 OPT-22: "CAYW" (Better BibTeX's cite-as-you-write endpoint) as well.
+const SENTENCE_CASE_ACRONYMS = [...DEFAULT_ACRONYMS, "CSL", "CAYW"];
 
 export default [
   ...obsidianmd.configs.recommended,

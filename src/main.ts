@@ -8,7 +8,7 @@ import type { BibliographyDetail } from "./bibliography-store"; // 0.5 R12
 import { VaultLinks } from "./vault-links";
 import { VaultIndexStorage, relativePath } from "./vault-storage";
 import { normalizeSettings, validateEndpoint } from "./settings-data";
-import { CmdsZoteroSettingsTab } from "./settings";
+import { CmdsZoteroSettingsTab } from "./settings/tab";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "./views/references-view";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "./views/annotations-view";
 import type { RecentRead, SendOutcome } from "./recent/recent-reads";
