@@ -135,6 +135,12 @@ export function describeBbtError(error: unknown): string {
 	}
 }
 
+/** Major version of a Zotero version string (`10.0.6` → 10, `7.0.0-beta.80+abc` → 7), or null when it does not start with one. */
+export function zoteroMajor(version: string | null | undefined): number | null {
+	const match = /^\s*(\d{1,4})(?:[.\s-]|$)/.exec(version ?? "");
+	return match ? Number(match[1]) : null;
+}
+
 /** The additive `bbtError` payload field: the typed reason and the endpoint that failed, or null for non-transport errors. */
 export function bbtErrorPayload(error: unknown): { reason: BbtTransportReason; endpoint: string } | null {
 	return isBbtTransportError(error) ? { reason: error.reason, endpoint: error.endpoint } : null;

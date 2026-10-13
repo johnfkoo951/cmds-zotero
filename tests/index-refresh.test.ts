@@ -54,11 +54,29 @@ async function mockBbt(count: number, options: MockOptions = {}) {
 		else if (slot.waiting.length === expected) { clearTimeout(slot.timer); slot.timer = setTimeout(release, 30); }
 		else slot.timer ??= setTimeout(release, 5000);
 	};
+	const batchSizes: number[] = [];
 	const server = http.createServer((request, response) => {
 		let body = "";
 		request.on("data", chunk => { body += String(chunk); });
 		request.on("end", () => {
-			const call = JSON.parse(body) as { method: string; params: unknown[] };
+			const parsed = JSON.parse(body) as unknown;
+			// 0.6 OPT-10: item.attachments arrive as JSON-RPC batch arrays; a batch is one request in flight.
+			if (Array.isArray(parsed)) {
+				const calls = parsed as { id: number; method: string; params: unknown[] }[];
+				batchSizes.push(calls.length);
+				const method = `${calls[0].method}[]`;
+				inFlight.set(method, (inFlight.get(method) ?? 0) + 1);
+				peak.set(method, Math.max(peak.get(method) ?? 0, inFlight.get(method) ?? 0));
+				hold(method, options.attachmentsInFlight, () => {
+					inFlight.set(method, (inFlight.get(method) ?? 0) - 1);
+					response.end(JSON.stringify(calls.map(call => {
+						const i = byKey().get(call.params[0] as string)!;
+						return options.failAttachments?.has(i) ? { jsonrpc: "2.0", error: { code: -32603, message: "synthetic attachment failure" }, id: null } : { jsonrpc: "2.0", id: call.id, result: attachmentsOf(i) };
+					})));
+				});
+				return;
+			}
+			const call = parsed as { method: string; params: unknown[] };
 			inFlight.set(call.method, (inFlight.get(call.method) ?? 0) + 1);
 			peak.set(call.method, Math.max(peak.get(call.method) ?? 0, inFlight.get(call.method) ?? 0));
 			const send = (result: unknown, status = 200) => {
@@ -67,20 +85,22 @@ async function mockBbt(count: number, options: MockOptions = {}) {
 				response.end(status === 200 ? JSON.stringify({ jsonrpc: "2.0", id: 1, result }) : "unavailable");
 			};
 			if (call.method === "api.ready") send({ zotero: "8", betterbibtex: "9" });
+			else if (call.method === "user.groups") send([{ id: 1, name: "Synthetic User", collections: [] }]);
+			else if (call.method === "item.search" && (call.params[0] as unknown[][]).some(term => term[0] === "retracted")) send([]);
 			else if (call.method === "item.search") send(Array.from({ length: count }, (_, i) => ({ citekey: citekey(i), library: "Synthetic User", id: rawItem(i).uri })));
 			else if (call.method === "item.export") {
 				const index = byKey();
 				hold("item.export", options.exportsInFlight, () => send(JSON.stringify({ items: (call.params[0] as string[]).map(citationKey => rawItem(index.get(citationKey)!, citationKey)) })));
 			} else if (call.method === "item.attachments") {
 				const i = byKey().get(call.params[0] as string)!;
-				hold("item.attachments", options.attachmentsInFlight, () => options.failAttachments?.has(i) ? send(null, 500) : send(attachmentsOf(i)));
+				options.failAttachments?.has(i) ? send(null, 500) : send(attachmentsOf(i));
 			} else send(null, 500);
 		});
 	});
 	await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("Mock did not expose a port");
-	return { endpoint: `http://127.0.0.1:${address.port}`, peak, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
+	return { endpoint: `http://127.0.0.1:${address.port}`, peak, batchSizes, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
 
 /** What the unoptimised pipeline stored: normalize, hash, add attachments, hash again; the bytes must not change. */
@@ -100,7 +120,8 @@ function expectedEntries(count: number, previous: Map<string, ZoteroIndexEntry>,
 		return entry;
 	}).sort((left, right) => left.id.localeCompare(right.id));
 }
-const expectedIndex = (entries: ZoteroIndexEntry[], actual: ZoteroIndex): ZoteroIndex => ({ schemaVersion: 2, generatedAt: actual.generatedAt, source: "better-bibtex", count: entries.length, entries, capabilities: { zotero: "8", betterbibtex: "9", metadata: true, attachments: true, annotations: true, bibliography: true }, diagnostics: indexDiagnostics(entries), complete: entries.every(entry => entry.attachmentStatus === "complete") });
+// 0.6: the additive libraries/collections/retracted fields follow the 0.5 fields; entries and their hashes are unchanged.
+const expectedIndex = (entries: ZoteroIndexEntry[], actual: ZoteroIndex): ZoteroIndex => ({ schemaVersion: 2, generatedAt: actual.generatedAt, source: "better-bibtex", count: entries.length, entries, capabilities: { zotero: "8", betterbibtex: "9", metadata: true, attachments: true, annotations: true, bibliography: true }, diagnostics: indexDiagnostics(entries), complete: entries.every(entry => entry.attachmentStatus === "complete"), libraries: [{ libraryID: 1, name: "Synthetic User", kind: "user", items: entries.length, indexed: entries.length }], collections: [], retracted: [] });
 
 test("a refresh hashes each entry once and stores the same bytes and hashes as before", async () => {
 	const count = 60;
@@ -233,18 +254,29 @@ test("bibliography and the index service still refuse entries and candidates thi
 	} finally { bbt.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
-test("a refresh keeps twice the configured attachment reads in flight (at most 8); exports keep the configured value", async () => {
-	assert.deepEqual([1, 2, 3, 4, 5, 8].map(attachmentConcurrency), [2, 4, 6, 8, 8, 8]);
+test("0.6 OPT-10: attachment reads go out in JSON-RPC batches of 25, collectConcurrency batches in flight; exports keep the configured value", async () => {
+	assert.deepEqual([1, 2, 3, 4, 5, 8].map(attachmentConcurrency), [2, 4, 6, 8, 8, 8], "the wave-1 doubling survives as the default for older settings files");
 	assert.deepEqual([0, 9, 2.5, Number.NaN].map(attachmentConcurrency), [0, 9, 2.5, Number.NaN], "out-of-range values still reach mapBounded's check");
-	for (const [concurrency, expected] of [[2, 4], [1, 2]] as const) {
-		// Item counts divide into full rounds: 12 attachment reads, and 100 parents in two export batches of 50.
-		for (const [count, options, method, peak] of [[12, { attachmentsInFlight: expected }, "item.attachments", expected], [100, { exportsInFlight: concurrency }, "item.export", concurrency]] as const) {
-			const api = await mockBbt(count, options);
-			const bbt = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, concurrency });
-			try {
-				assert.equal((await bbt.collect()).count, count);
-				assert.equal(api.peak.get(method), peak, `concurrency ${concurrency}: ${method} calls in flight`);
-			} finally { bbt.dispose(); await api.close(); }
-		}
+	for (const [collectConcurrency, items] of [[2, 100], [1, 60], [4, 100]] as const) {
+		const batches = Math.ceil(items / 25);
+		const api = await mockBbt(items, { attachmentsInFlight: Math.min(collectConcurrency, batches) });
+		const bbt = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, collectConcurrency });
+		try {
+			const index = await bbt.collect();
+			assert.equal(index.count, items);
+			assert.equal(index.complete, true);
+			assert.deepEqual(api.batchSizes, Array.from({ length: batches }, (_, i) => Math.min(25, items - i * 25)), `${items} parents: ${batches} POSTs of at most 25 requests`);
+			assert.equal(api.peak.get("item.attachments[]"), Math.min(collectConcurrency, batches), `collectConcurrency ${collectConcurrency}: attachment batches in flight`);
+			assert.equal(api.peak.get("item.attachments"), undefined, "no single attachment calls when the batches succeed");
+		} finally { bbt.dispose(); await api.close(); }
+	}
+	for (const concurrency of [2, 1]) {
+		// 100 parents in two export batches of 50.
+		const api = await mockBbt(100, { exportsInFlight: concurrency });
+		const bbt = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, concurrency });
+		try {
+			assert.equal((await bbt.collect()).count, 100);
+			assert.equal(api.peak.get("item.export"), concurrency, `concurrency ${concurrency}: item.export calls in flight`);
+		} finally { bbt.dispose(); await api.close(); }
 	}
 });

@@ -8652,7 +8652,9 @@ var DEFAULT_SETTINGS = {
   referencesFollowActiveNote: true,
   referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS],
   // 0.5 R10
-  recentReadsDays: 30
+  recentReadsDays: 30,
+  collectConcurrency: 4
+  // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
 };
 
 // src/citations/scan.ts
@@ -9176,8 +9178,20 @@ var DIAGNOSTIC_CODES2 = {
   "index-in-git": "warning",
   "legacy-frontmatter-dialect": "info",
   // 0.5 R14
-  "reader-annotations": "info"
+  "reader-annotations": "info",
   // 0.6 epub-snapshot-annotations
+  // 0.6 index-refresh-resilience: items a refresh left out instead of aborting.
+  "item-skipped": "warning",
+  "missing-citekey": "warning",
+  // 0.6 group-library-validation (report-only).
+  "library-not-indexed": "warning",
+  "library-empty": "info",
+  "feed-library": "info",
+  "collections-unavailable": "info",
+  // 0.6 collection-membership-index
+  // 0.6 retraction-flags-from-zotero.
+  "retracted-source": "warning",
+  "retraction-check-unavailable": "info"
 };
 function diagnostic(code, message, extra = {}) {
   const result = { code, severity: DIAGNOSTIC_CODES2[code], message };
@@ -10710,15 +10724,19 @@ function integer(value, fallback, min, max) {
 function text3(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
+function defaultCollectConcurrency(concurrency) {
+  return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
+}
 function normalizeSettings(raw) {
   const data = raw && typeof raw === "object" ? raw : {};
+  const concurrency = integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8);
   return {
     bbtEndpoint: text3(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
     zoteroIndexPath: text3(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
     caywFormat: text3(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
     requestTimeoutMs: integer(data.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs, 1e3, 18e4),
     attachmentTimeoutMs: integer(data.attachmentTimeoutMs, DEFAULT_SETTINGS.attachmentTimeoutMs, 1e3, 18e4),
-    concurrency: integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8),
+    concurrency,
     indexMaxAgeMinutes: integer(data.indexMaxAgeMinutes, DEFAULT_SETTINGS.indexMaxAgeMinutes, 1, 10080),
     outputFolder: text3(data.outputFolder, DEFAULT_SETTINGS.outputFolder),
     imageFolder: text3(data.imageFolder, DEFAULT_SETTINGS.imageFolder),
@@ -10734,7 +10752,9 @@ function normalizeSettings(raw) {
     referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
     referencesHeadings: referencesHeadings(data.referencesHeadings),
     // 0.5 R10
-    recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365)
+    recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
+    collectConcurrency: integer(data.collectConcurrency, defaultCollectConcurrency(concurrency), 1, 8)
+    // 0.6 OPT-10
   };
 }
 function referencesHeadings(value) {

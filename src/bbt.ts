@@ -1,8 +1,9 @@
 import type { Capabilities, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { BbtTransportError, httpRequest, isBbtTransportError, mapBounded, rpc, type BbtTransportReason } from "./api/transport";
+import { BbtTransportError, httpRequest, isBbtTransportError, mapBounded, rpc, rpcBatch, type BbtTransportReason } from "./api/transport";
 import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, primaryPdfPath, text } from "./api/normalize";
+import { collectIndex } from "./index/collector";
+import { defaultCollectConcurrency } from "./settings-data";
 import { record, sealEntry, verifyEntry, verifyIndex } from "./identity";
-import { indexDiagnostics } from "./diagnostics";
 import { positiveInteger } from "./uris";
 import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentItem, recentKey, windowTerms, type RecentRead } from "./recent/recent-reads";
 
@@ -10,15 +11,10 @@ import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentI
 const RECENT_DAY_BATCH = 7;
 
 /**
- * Parallel `item.attachments` calls during an index refresh: twice the configured parallel requests, at most 8 (the
- * `mapBounded` limit). A refresh makes one such call per parent item; each is a short read whose time is mostly the round
- * trip, so keeping more in flight shortens the refresh while bibliography batches, reading history and the export batches
- * keep the configured value. Doubling keeps the setting meaningful: the default 2 gives 4, a value lowered to 1 for a slow
- * Zotero still gives only 2. An out-of-range value is passed through so `mapBounded` rejects it as before.
+ * The wave-1 refresh concurrency for `concurrency` (twice the value, at most 8). Since 0.6 OPT-10 refreshes use the
+ * separate `collectConcurrency` setting, whose default for an older settings file is this value.
  */
-export function attachmentConcurrency(concurrency: number): number {
-	return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
-}
+export function attachmentConcurrency(concurrency: number): number { return defaultCollectConcurrency(concurrency); }
 
 /**
  * Identity a fresh single-item collection must reproduce; the cached citekey is only the lookup handle. `libraryID` is the
@@ -116,77 +112,21 @@ export class BbtService {
 		});
 	}
 
+	/**
+	 * A new index from Better BibTeX (0.6: per-library searches, skipped items instead of aborts, collections, retraction
+	 * flags, batched attachment reads; see `collectIndex`). The previous index is the host's validated snapshot: its sealed
+	 * entries are not hashed again, and skipped items keep their previous entries.
+	 */
 	async collect(previous?: ZoteroIndex): Promise<ZoteroIndex> {
 		const settings = { ...this.settings };
 		const signal = this.controller.signal;
-		const call = (method: string, params: unknown[], timeout = settings.requestTimeoutMs): Promise<unknown> => this.observed(() => rpc(settings.bbtEndpoint, method, params, timeout, signal));
 		const capabilities = await this.readCapabilities(settings, signal);
-		const result = await call("item.search", [[["itemType", "isNot", "attachment"], ["itemType", "isNot", "annotation"], ["itemType", "isNot", "note"]], "*"]);
-		if (!Array.isArray(result)) throw new Error("Invalid BBT parent search response");
-		const libraries = new Map<string, Map<string, ReturnType<typeof parseItemURI>>>();
-		for (const item of result) {
-			if (!record(item)) throw new Error("Malformed BBT search item");
-			const citekey = text(item.citekey) || text(item.citationKey) || text(item["citation-key"]);
-			const library = text(item.library);
-			if (!citekey || !library) throw new Error("Search item lacks named library citation identity");
-			const scope = parseItemURI(text(item.id));
-			const keys = libraries.get(library) ?? new Map<string, ReturnType<typeof parseItemURI>>();
-			if (keys.has(citekey)) throw new Error("Duplicate citation key inside a named library cannot be exported unambiguously");
-			for (const prior of keys.values()) if (prior.libraryType !== scope.libraryType || prior.groupID !== scope.groupID) throw new Error("Library name maps to multiple URI scopes");
-			keys.set(citekey, scope);
-			libraries.set(library, keys);
-		}
-		const batches: { library: string; keys: string[] }[] = [];
-		for (const [library, scoped] of libraries) {
-			const keys = [...scoped.keys()];
-			for (let offset = 0; offset < keys.length; offset += 50) batches.push({ library, keys: keys.slice(offset, offset + 50) });
-		}
-		const libraryIDs = new Map<string, number>();
-		// The previous index is the host's validated snapshot: its sealed entries are not hashed again.
 		const validPrevious = previous && verifyIndex(previous) ? new Map(previous.entries.map(entry => [entry.id, entry])) : new Map<string, ZoteroIndexEntry>();
-		const exports = await mapBounded(batches, settings.concurrency, async ({ library, keys }) => {
-			const serialized = await call("item.export", [keys, "BetterBibTeX JSON", library]);
-			if (typeof serialized !== "string") throw new Error("BBT export must return a JSON string");
-			const exported: unknown = JSON.parse(serialized);
-			if (!record(exported) || !Array.isArray(exported.items)) throw new Error("Invalid BetterBibTeX JSON export envelope");
-			const entries = exported.items.map(item => {
-				if (!record(item) || !positiveInteger(item.libraryID)) throw new Error("Exported library identity mismatch");
-				const priorID = libraryIDs.get(library);
-				if (priorID !== undefined && priorID !== item.libraryID) throw new Error("Named library has inconsistent local IDs");
-				libraryIDs.set(library, item.libraryID);
-				const id = `${item.libraryID}:${text(item.itemKey)}`;
-				// Hashed once below, after the attachments step changed it for the last time.
-				const entry = normalizeEntryUnhashed(item, validPrevious.get(id));
-				const searched = libraries.get(library)?.get(entry.citekey);
-				if (!keys.includes(entry.citekey) || !searched || searched.itemKey !== entry.itemKey || searched.libraryType !== entry.libraryType || searched.groupID !== entry.groupID) throw new Error("Export differs from searched item identity");
-				return entry;
-			});
-			if (entries.length !== keys.length || new Set(entries.map(entry => entry.citekey)).size !== keys.length) throw new Error("BBT export did not cover the requested parents");
-			return entries;
-		});
-		// Each entry is structure-checked and hashed once, after its last change (sealEntry): with attachments, or with the
-		// previous attachments (or none) when this item's attachments could not be read.
-		const entries = await mapBounded(exports.flat(), attachmentConcurrency(settings.concurrency), async entry => {
-			try {
-				const attachments = await call("item.attachments", [entry.citekey, entry.libraryID], settings.attachmentTimeoutMs);
-				entry.attachments = normalizeAttachments(attachments, entry);
-				entry.attachmentPath = primaryPdfPath(entry.attachments);
-				if (!sealEntry(entry)) throw new Error("Invalid enriched attachment data");
-			} catch (error) {
-				if (signal.aborted) throw error;
-				const old = validPrevious.get(entry.id);
-				entry.attachments = old && old.libraryType === entry.libraryType && old.groupID === entry.groupID ? old.attachments : [];
-				entry.attachmentPath = old && entry.attachments === old.attachments ? old.attachmentPath : "";
-				entry.attachmentStatus = "unavailable";
-				if (!sealEntry(entry)) throw new Error("Invalid normalized parent item");
-			}
-			return entry;
-		});
-		if (signal.aborted) throw new Error("BBT collection cancelled");
-		entries.sort((left, right) => left.id.localeCompare(right.id));
-		const index: ZoteroIndex = { schemaVersion: 2, generatedAt: new Date().toISOString(), source: "better-bibtex", count: entries.length, entries, capabilities, diagnostics: indexDiagnostics(entries), complete: entries.every(entry => entry.attachmentStatus === "complete") };
-		if (!verifyIndex(index)) throw new Error("Invalid collected Zotero index");
-		return index;
+		return collectIndex({
+			call: (method, params, timeout = settings.requestTimeoutMs) => this.observed(() => rpc(settings.bbtEndpoint, method, params, timeout, signal)),
+			batch: (calls, timeout) => this.observed(() => rpcBatch(settings.bbtEndpoint, calls, timeout, signal)),
+			signal,
+		}, settings, capabilities, validPrevious);
 	}
 
 	/** CSL bibliography text for one entry; `style` defaults to the configured style (0.5 R4: every style is observed and typed). */

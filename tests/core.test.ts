@@ -58,31 +58,41 @@ test("identity validation rejects fabricated and legacy keys and protects hash i
 
 test("collector groups exports, preserves citekey history, parses actual attachment arrays and isolates attachment failures", async () => {
 	const calls: { method: string; params: unknown[] }[] = [];
+	const answer = (call: { method: string; params: unknown[] }): unknown => {
+		calls.push(call);
+		// 0.6: a Better BibTeX without user.groups takes the 0.5 name-based path.
+		if (call.method === "user.groups") throw new Error("Method not found: user.groups");
+		if (call.method === "api.ready") return { zotero: "8", betterbibtex: "9" };
+		if (call.method === "item.search") {
+			if ((call.params[0] as unknown[][]).some(term => term[0] === "retracted")) return [];
+			assert.equal(call.params[1], "*");
+			assert.deepEqual((call.params[0] as unknown[][]).at(-1), ["ignore_feeds"], "feeds never enter a refresh");
+			return [{ citekey: "Renamed2026", library: "Synthetic User", id: parent().uri }, { citekey: "Renamed2026", library: "Synthetic Group", id: parent(9).uri }];
+		}
+		if (call.method === "item.export") {
+			assert.equal(call.params[1], "BetterBibTeX JSON");
+			return JSON.stringify({ items: [parent(call.params[2] === "Synthetic User" ? 1 : 9, "Renamed2026")], collections: {}, config: {}, version: {} });
+		}
+		if (call.method === "item.bibliography") {
+			assert.deepEqual(call.params, [["Renamed2026"], { id: "apa", contentType: "text" }, 1]);
+			return "Synthetic bibliography";
+		}
+		if (call.method === "item.attachments") {
+			if (call.params[1] === 9) throw new Error("unavailable");
+			return [{ open: "zotero://open-pdf/library/items/EFGH2345", path: "/synthetic/example.pdf", annotations: [{ key: "JKLM2345", parentItem: "EFGH2345", annotationType: "highlight", annotationText: "Synthetic annotation", annotationPosition: { pageIndex: 2 }, annotationPageLabel: "iii", version: 1 }] }];
+		}
+		throw new Error(`unexpected ${call.method}`);
+	};
+	const reply = (request: { id: number; method: string; params: unknown[] }): unknown => {
+		try { return { jsonrpc: "2.0", id: request.id, result: answer(request) }; }
+		catch (error) { return { jsonrpc: "2.0", error: { code: -32603, message: error instanceof Error ? error.message : "error" }, id: null }; }
+	};
 	const api = await serve((request, response) => {
 		let body = "";
 		request.on("data", chunk => { body += String(chunk); });
 		request.on("end", () => {
-			const call = JSON.parse(body) as { method: string; params: unknown[] };
-			calls.push(call);
-			let result: unknown;
-			if (call.method === "api.ready") result = { zotero: "8", betterbibtex: "9" };
-			if (call.method === "item.search") {
-				assert.equal(call.params[1], "*");
-				result = [{ citekey: "Renamed2026", library: "Synthetic User", id: parent().uri }, { citekey: "Renamed2026", library: "Synthetic Group", id: parent(9).uri }];
-			}
-			if (call.method === "item.export") {
-				assert.equal(call.params[1], "BetterBibTeX JSON");
-				result = JSON.stringify({ items: [parent(call.params[2] === "Synthetic User" ? 1 : 9, "Renamed2026")], collections: {}, config: {}, version: {} });
-			}
-			if (call.method === "item.bibliography") {
-				assert.deepEqual(call.params, [["Renamed2026"], { id: "apa", contentType: "text" }, 1]);
-				result = "Synthetic bibliography";
-			}
-			if (call.method === "item.attachments") {
-				if (call.params[1] === 9) { response.statusCode = 500; response.end("unavailable"); return; }
-				result = [{ open: "zotero://open-pdf/library/items/EFGH2345", path: "/synthetic/example.pdf", annotations: [{ key: "JKLM2345", parentItem: "EFGH2345", annotationType: "highlight", annotationText: "Synthetic annotation", annotationPosition: { pageIndex: 2 }, annotationPageLabel: "iii", version: 1 }] }];
-			}
-			response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result }));
+			const parsed = JSON.parse(body) as unknown;
+			response.end(JSON.stringify(Array.isArray(parsed) ? parsed.map(reply) : reply(parsed as { id: number; method: string; params: unknown[] })));
 		});
 	});
 	try {
@@ -95,9 +105,12 @@ test("collector groups exports, preserves citekey history, parses actual attachm
 		assert.equal(index.entries[0].attachments[0].annotations[0].text, "Synthetic annotation");
 		assert.equal(await new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint }).bibliography(index.entries[0]), "Synthetic bibliography");
 		assert.equal(index.entries[1].groupID, 12345);
-		assert.equal(index.entries[1].attachmentStatus, "unavailable");
+		assert.equal(index.entries[1].attachmentStatus, "unavailable", "one item's attachment fault stays with that item inside the batch");
+		assert.equal(index.entries[0].attachmentStatus, "complete");
 		assert.equal(calls.filter(call => call.method === "item.export").length, 2);
-		assert.equal(calls.filter(call => call.method === "item.search").length, 1);
+		assert.equal(calls.filter(call => call.method === "item.search").length, 2, "one parent search (name-based fallback) and one retraction search");
+		assert.equal(index.libraries, undefined, "without user.groups the index lists no libraries");
+		assert.deepEqual(index.retracted, []);
 	} finally { await api.close(); }
 });
 

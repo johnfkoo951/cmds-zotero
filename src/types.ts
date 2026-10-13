@@ -25,6 +25,12 @@ export interface CmdsZoteroSettings {
 	referencesHeadings: string[];
 	/** Days of Zotero reading history "Send recently read papers to notes" lists (1–365). */
 	recentReadsDays: number;
+	/**
+	 * 0.6 OPT-10: parallel requests during an index refresh (attachment batches, per-library and collection searches), apart
+	 * from `concurrency` (export batches, bibliography and other reads). 1–8; an older settings file derives it from
+	 * `concurrency` (twice the value, at most 8: the 0.6 wave-1 behaviour).
+	 */
+	collectConcurrency: number;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -48,6 +54,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	referencesFollowActiveNote: true,
 	referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS], // 0.5 R10
 	recentReadsDays: 30,
+	collectConcurrency: 4, // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
 };
 
 export interface ItemIdentity {
