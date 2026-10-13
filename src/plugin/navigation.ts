@@ -1,5 +1,5 @@
 import { Editor, Notice, TFile } from "obsidian";
-import { scanCitations } from "../citations/scan";
+import { findCitingNotes } from "../citations/citing-notes";
 import type CMDSZoteroPlugin from "../main";
 import { ActionsModal, PageJumpModal, PickerModal } from "../modals";
 import { classifyLink, resolveOpenPdfTarget } from "../protocol";
@@ -46,17 +46,9 @@ export class NavigationController {
 		]).open();
 	}
 
-	/** Vault-wide scan for notes citing an entry's citekey or one of its previous citekeys. */
+	/** Vault-wide scan for notes citing an entry's citekey or one of its previous citekeys (0.6 OPT-15: 8 reads in flight). */
 	async showCitingNotes(entry: ZoteroIndexEntry): Promise<void> {
-		const keys = new Set([entry.citekey, ...entry.citekeyHistory]);
-		const hits: { file: TFile; line: number; count: number }[] = [];
-		for (const file of this.plugin.app.vault.getMarkdownFiles()) {
-			const text = await this.plugin.app.vault.cachedRead(file);
-			if (![...keys].some(key => text.includes(`@${key}`))) continue;
-			const occurrences = scanCitations(text).filter(item => keys.has(item.citekey));
-			if (occurrences.length) hits.push({ file, line: occurrences[0].line, count: occurrences.length });
-		}
-		hits.sort((a, b) => b.count - a.count || a.file.path.localeCompare(b.file.path));
+		const hits = await findCitingNotes(this.plugin.app.vault.getMarkdownFiles(), [entry.citekey, ...entry.citekeyHistory], file => this.plugin.app.vault.cachedRead(file));
 		new ActionsModal(this.plugin.app, `Notes citing @${entry.citekey}`, hits.length ? hits.map(hit => ({
 			name: hit.file.path, description: `${hit.count} citation${hit.count === 1 ? "" : "s"}`,
 			action: async () => { const leaf = this.plugin.app.workspace.getLeaf(false); await leaf.openFile(hit.file, { eState: { line: hit.line } }); },

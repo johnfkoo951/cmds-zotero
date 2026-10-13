@@ -7,3 +7,4 @@
 - A stale index is refreshed from Zotero about 30 seconds after startup instead of during it; a missing index and the "Refresh citekey index" command are never delayed.
 - Editing notes no longer re-checks every note in the vault: the cross-vault note map re-checks only the notes that changed, and is written only when a literature note appears, moves, disappears or changes its Zotero identity.
 - The literature picker lists recently read papers first without scanning the whole index for each one.
+- "Find notes citing a source" reads up to eight notes at a time, so large vaults answer several times faster; the results and their order are unchanged.

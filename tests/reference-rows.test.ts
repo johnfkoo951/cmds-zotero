@@ -101,3 +101,27 @@ test("0.6 PERF-05: ambiguous candidates are a fresh array per call, so a caller 
 	assert.equal(second?.candidates?.length, 2);
 	assert.notEqual(first?.candidates, second?.candidates);
 });
+
+// 0.6 STRUCT-02: one Set-based dedupe of resolved rows for the sidebar's CSL-JSON button and the active-note exports.
+import { resolvedEntries } from "../src/citations/reference-rows";
+
+/** What the two 0.5.0 copies did: an O(n²) `some()` over the entries collected so far. */
+function resolvedEntries050(rows: { status: string; entry?: ZoteroIndexEntry }[]): ZoteroIndexEntry[] {
+	const entries: ZoteroIndexEntry[] = [];
+	for (const row of rows) if (row.status === "resolved" && row.entry && !entries.some(item => item.id === row.entry?.id)) entries.push(row.entry);
+	return entries;
+}
+
+test("0.6 STRUCT-02: resolvedEntries keeps row order, lists each entry once and skips rows that did not resolve", () => {
+	const entries = [entry("1:A", "known2020", ["gone2019"]), entry("1:B", "dup2021"), entry("2:C", "dup2021"), entry("1:D", "solo2018")];
+	const rows = resolveReferenceRows("[@solo2018] @known2020 [[@gone2019]] @dup2021 @missing2000 @known2020 [@solo2018]", entries, true);
+	assert.deepEqual(rows.map(row => row.status), ["resolved", "resolved", "resolved", "ambiguous", "not-found"]);
+	assert.deepEqual(resolvedEntries(rows).map(item => item.id), ["1:D", "1:A"], "the current and the previous citekey of 1:A give one entry");
+	assert.deepEqual(resolvedEntries(rows), resolvedEntries050(rows));
+	assert.deepEqual(resolvedEntries([]), []);
+	assert.deepEqual(resolvedEntries(resolveReferenceRows("@known2020", [], false)), [], "unchecked rows name no entry");
+	// Many rows: same answer as 0.5.0.
+	const many = Array.from({ length: 500 }, (_, i) => entry(`1:K${i}`, `key${i}`));
+	const manyRows = resolveReferenceRows(Array.from({ length: 1500 }, (_, i) => `@key${(i * 7) % 500}`).join(" "), many, true);
+	assert.deepEqual(resolvedEntries(manyRows), resolvedEntries050(manyRows));
+});
