@@ -114,13 +114,14 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 	host.applyReconcile = async result => applyReconcile({
 		read: async path => { await assertVaultBoundary(plugin.app, path); const file = plugin.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error(`Hub not found: ${path}`); return plugin.app.vault.read(file); },
 		file: path => { const file = plugin.app.vault.getAbstractFileByPath(path); return file instanceof TFile ? file : null; },
-		processFrontMatter: async (file, change) => {
+		// 0.5 R8: whole-text read-modify-write; the writer re-checks the source hash and patches only the allowed key lines.
+		process: async (file, change) => {
 			await assertVaultBoundary(plugin.app, file.path);
 			const current = plugin.app.vault.getAbstractFileByPath(file.path);
 			if (!(current instanceof TFile)) return Promise.reject(new Error(`Hub not found: ${file.path}`));
-			return plugin.app.fileManager.processFrontMatter(current, (fm: Record<string, unknown>) => {
+			await plugin.app.vault.process(current, text => {
 				if (plugin.legacyPluginEnabled() !== false) throw new Error("Legacy plugin state changed before apply.");
-				change(fm);
+				return change(text);
 			});
 		},
 		canWrite: () => plugin.active && plugin.index === indexToken && plugin.pdfText === pdfToken,
@@ -133,5 +134,6 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		},
 		yaml: { parse: parseYaml, stringify: stringifyYaml },
 	}, result);
+	host.yaml = { parse: parseYaml, stringify: stringifyYaml }; // 0.5 R8: informational yamlNormalisable on reconcile rows
 	return host;
 }

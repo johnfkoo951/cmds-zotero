@@ -9162,6 +9162,22 @@ function diagnostic(code, message, extra = {}) {
   return result;
 }
 
+// src/agent/frontmatter-patch.ts
+var KEY_SET = new Set(HUB_WRITABLE_KEYS);
+function readFrontmatterBlock(text4) {
+  const bom = text4.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const source = text4.slice(bom.length);
+  if (!/^---\r?\n/.test(source)) return source === "---" || source === "---\r" ? "unterminated" : null;
+  const eol = source.startsWith("---\r\n") ? "\r\n" : "\n";
+  const lines2 = source.slice(3 + eol.length).split("\n");
+  const close = lines2.findIndex((line) => line === "---" || line === "---\r");
+  if (close < 0) return "unterminated";
+  return { bom, eol, yamlLines: lines2.slice(0, close), rest: lines2.slice(close) };
+}
+function frontmatterText(block) {
+  return block.yamlLines.join("\n").replace(/\r$/, "");
+}
+
 // src/agent/reconcile-core.ts
 var HUB_FINDINGS = [
   "missing-zoteroID",
@@ -9182,8 +9198,10 @@ var HUB_FINDINGS = [
   "index-incomplete",
   "raw-source-path",
   "frontmatter-parse-error",
-  "legacy-frontmatter-dialect"
+  "legacy-frontmatter-dialect",
   // 0.5 R14: report-only, literature notes carrying pre-0.5 keys
+  "blocked-by-parse-error"
+  // 0.5 R8: a parse-error note mentions this hub's citekey; the hub is not apply-eligible until it is repaired
 ];
 var APPLY_ELIGIBLE_FINDINGS = ["missing-zoteroID", "missing-zoteroSelectURI", "missing-zoteroStatus", "missing-zoteroCheckedAt", "citekeyProvisional-absent"];
 var DESYNC_FINDINGS = ["malformed-identity", "identity-conflict", "zoteroID-mismatch", "s01-says-unregistered", "citekeyProvisional-absent", "zoteroStatus-stale"];
@@ -9645,7 +9663,42 @@ function reconcileNote(note, type, index, vault, opts) {
   if (verdict2.pinInstruction !== void 0) result.pinInstruction = verdict2.pinInstruction;
   const skippedReason = skippedReasonFor(type, verdict2.classification, orderedFindings, opts.stale, resolution.indexComplete);
   if (skippedReason) result.skippedReason = skippedReason;
+  if (hub) annotateHub(result, note, opts);
   return result;
+}
+function mentions(text4, citekey) {
+  let from = 0;
+  for (; ; ) {
+    const at = text4.indexOf(citekey, from);
+    if (at < 0) return false;
+    const before = at === 0 ? "" : text4.charAt(at - 1);
+    const after = text4.charAt(at + citekey.length);
+    if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) return true;
+    from = at + 1;
+  }
+}
+function annotateHub(result, note, opts) {
+  const blockedBy = result.citekey ? (opts.parseErrorSources ?? []).filter((source) => mentions(source.text, result.citekey)).map((source) => source.path).sort() : [];
+  if (blockedBy.length) {
+    result.findings = orderFindings([...result.findings, finding("blocked-by-parse-error", `${blockedBy.length === 1 ? "A note" : `${blockedBy.length} notes`} with unparseable frontmatter mention${blockedBy.length === 1 ? "s" : ""} citekey "${result.citekey}"; repair ${blockedBy.length === 1 ? "it" : "them"} before applying.`, blockedBy.join(", "))]);
+    result.blockedBy = blockedBy;
+    result.proposalEligible = false;
+    result.proposed = null;
+    result.skippedReason = "blocked-by-parse-error";
+  }
+  if (opts.yaml && note.body !== void 0) {
+    const block = readFrontmatterBlock(note.body);
+    if (block && block !== "unterminated") {
+      const yaml = frontmatterText(block);
+      let normalisable = false;
+      try {
+        normalisable = opts.yaml.stringify(opts.yaml.parse(yaml)).replace(/\n$/, "") === yaml;
+      } catch {
+        normalisable = false;
+      }
+      result.yamlNormalisable = normalisable;
+    }
+  }
 }
 function noteDiagnostics(note) {
   const extra = { citekey: note.citekey, path: note.path, ...note.index ? { itemID: note.index.id } : {} };
@@ -10290,6 +10343,26 @@ async function citesAction(host, request) {
   const bytes = await host.sidecar.write(outPath, sidecarContent(format, content));
   return { ...payload, out: { path: outPath, written: true, bytes } };
 }
+function reconcileScanOf(host, listed) {
+  const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+  const parseErrors = new Set(listed.filter((note) => note.frontmatterParse === "error").map((note) => note.path));
+  const skippedDetail = scan.skippedDetail ? scan.skippedDetail.map((item) => ({ ...item })) : scan.skipped.map((path) => ({ path, kind: parseErrors.has(path) ? "parse-error" : "unreadable" }));
+  for (const item of skippedDetail) if (item.kind === "parse-error") parseErrors.add(item.path);
+  return { skipped: [...scan.skipped], truncated: scan.truncated, skippedDetail, parseErrors: [...parseErrors].sort() };
+}
+var listPaths = (paths) => {
+  const shown = paths.slice(0, 10);
+  return `${shown.join(", ")}${paths.length > shown.length ? ` (+${paths.length - shown.length} more)` : ""}`;
+};
+function applyScanVeto(scan, result) {
+  if (scan.truncated) return "Vault discovery was truncated at the note limit; hubs may be missing, so reconcile apply is refused.";
+  const unreadable = scan.skippedDetail.filter((item) => item.kind !== "parse-error").map((item) => item.path);
+  if (unreadable.length) return `Vault discovery skipped ${unreadable.length} unreadable or symlinked ${unreadable.length === 1 ? "entry" : "entries"} (${listPaths(unreadable)}); reconcile apply is refused.`;
+  const candidates = new Set(result.notes.filter((note) => note.type === "paper-hub" && note.proposalEligible && note.proposed).map((note) => note.path));
+  const inScope = scan.parseErrors.filter((path) => candidates.has(path) || result.folders.length > 0 && inFolders(path, result.folders));
+  if (inScope.length) return `${inScope.length} ${inScope.length === 1 ? "note" : "notes"} with unparseable frontmatter ${inScope.length === 1 ? "lies" : "lie"} inside the apply scope (${listPaths(inScope)}); repair ${inScope.length === 1 ? "it" : "them"} or narrow --folders. Parse errors outside the scope are listed in scan.parseErrors and do not veto apply.`;
+  return null;
+}
 async function reconcileDryRun(host, request, listedNotes) {
   const view = host.indexView;
   const stale = view ? host.connection.index.complete !== true || host.connection.index.stale !== false : true;
@@ -10301,19 +10374,29 @@ async function reconcileDryRun(host, request, listedNotes) {
     else notes.push(note);
   }
   const pdfPaths2 = await host.vaultPdfPaths();
-  const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths: pdfPaths2 }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders });
+  const scan = reconcileScanOf(host, listed);
+  const parseErrorSources = [];
+  for (const path of scan.parseErrors) {
+    try {
+      parseErrorSources.push({ path, text: await host.reader.readNote(path) });
+    } catch {
+      scan.skippedDetail.push({ path, kind: "unreadable" });
+      if (!scan.skipped.includes(path)) scan.skipped.push(path);
+    }
+  }
+  const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths: pdfPaths2 }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders, parseErrorSources, ...host.yaml ? { yaml: host.yaml } : {} });
   const sourceByPath = new Map(notes.filter((note) => note.body !== void 0).map((note) => [note.path, note.body]));
   for (const note of result.notes) {
     const source = sourceByPath.get(note.path);
     if (source !== void 0) note.sourceHash = createHash4("sha256").update(source).digest("hex");
   }
-  return { result, view, stale };
+  return { result, view, stale, scan };
 }
 async function reconcileAction(host, request) {
-  const { result, view } = await reconcileDryRun(host, request);
-  const scan = scanOf(host);
+  const { result, view, scan } = await reconcileDryRun(host, request);
   if (!request.apply) return { ...envelope(host, "reconcile", 2), mode: "dry-run", ...result, scan, apply: { mode: "dry-run" }, generatedAt: view?.index.generatedAt ?? null };
-  if (scan.truncated || scan.skipped.length) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: "Vault discovery was incomplete; reconcile apply is refused." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete" }, generatedAt: view?.index.generatedAt ?? null };
+  const veto = applyScanVeto(scan, result);
+  if (veto) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: veto }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete", refusedMessage: veto }, generatedAt: view?.index.generatedAt ?? null };
   if (!host.applyReconcile) return { ...envelope(host, "reconcile", 2, { reason: "requires-obsidian", message: "reconcile --apply requires the live Obsidian host." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "requires-obsidian" }, generatedAt: view?.index.generatedAt ?? null };
   const applied = await host.applyReconcile(result, request);
   const applyState = applied && typeof applied === "object" ? applied : {};
@@ -10898,10 +10981,15 @@ var FsVaultReader = class {
     this.root = root;
     this.name = name;
     this.limit = limit;
-    this.report = { skipped: [], truncated: false };
+    this.report = { skipped: [], truncated: false, skippedDetail: [] };
   }
   scanWarnings() {
-    return { skipped: [...this.report.skipped], truncated: this.report.truncated };
+    return { skipped: [...this.report.skipped], truncated: this.report.truncated, skippedDetail: this.report.skippedDetail.map((item) => ({ ...item })) };
+  }
+  // 0.5 R8: every skipped path carries its kind so reconcile apply can veto on unreadable or symlinked entries only.
+  skip(path, kind) {
+    this.report.skipped.push(path);
+    this.report.skippedDetail.push({ path, kind });
   }
   vaultName() {
     return this.name;
@@ -10925,14 +11013,14 @@ var FsVaultReader = class {
     try {
       entries = await fs3.readdir(dir, { withFileTypes: true });
     } catch {
-      yield { kind: "skip", path: relative(this.root, dir) };
+      yield { kind: "skip", path: relative(this.root, dir).split(sep).join("/"), reason: "unreadable" };
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       const full = join2(dir, entry.name);
       if (entry.isSymbolicLink()) {
-        yield { kind: "skip", path: relative(this.root, full) };
+        yield { kind: "skip", path: relative(this.root, full).split(sep).join("/"), reason: "symlink" };
         continue;
       }
       if (entry.isDirectory()) {
@@ -10949,22 +11037,22 @@ var FsVaultReader = class {
   }
   async listNotes() {
     const notes = [];
-    this.report = { skipped: [], truncated: false };
+    this.report = { skipped: [], truncated: false, skippedDetail: [] };
     await scanInOrder(this.walk(this.root), SCAN_CONCURRENCY, (event) => event.kind === "note" ? this.readNote(event.path).then(parseFrontmatter) : null, (event, outcome) => {
       if (notes.length >= this.limit) {
         this.report.truncated = true;
         return false;
       }
       if (event.kind === "skip") {
-        this.report.skipped.push(event.path);
+        this.skip(event.path, event.reason);
         return true;
       }
       if (event.kind === "pass") return true;
       if (!outcome?.ok) {
-        this.report.skipped.push(event.path);
+        this.skip(event.path, "unreadable");
         return true;
       }
-      if (outcome.value.frontmatterParse === "error") this.report.skipped.push(event.path);
+      if (outcome.value.frontmatterParse === "error") this.skip(event.path, "parse-error");
       notes.push({ path: event.path, basename: event.basename, frontmatter: outcome.value.frontmatter, frontmatterParse: outcome.value.frontmatterParse });
       return true;
     });

@@ -129,7 +129,10 @@ Dry-run first. Apply is allowed only on actual paper hubs outside Raw Sources an
 It never writes citekey, DOI, body/S01, atom notes, raw sources or filenames.
 It refuses offline, stale/incomplete/invalid evidence, unreachable/unknown BBT, and enabled/unknown legacy state.
 Malformed existing keys or conflicting identities require human review, not silent replacement.
-YAML round-trip and concurrent-change guards can skip hand-formatted notes. No unconditional rollback or full-file CAS is promised.
+Hand-formatted hubs are patched line by line: only the allowed key lines change and every other byte stays (0.6).
+A note that changed since the dry-run is skipped as `changed-since-plan`; a block-scalar, multi-line, duplicated or quoted
+allowed key as `frontmatter-not-patchable`. A parse-error note inside `--folders` refuses the whole apply; one elsewhere
+that mentions a hub's citekey withholds only that hub (`blocked-by-parse-error`). No unconditional rollback or full-file CAS is promised.
 Repeated no-op applies do not churn timestamps. Always inspect applied/skipped/integrity outcomes.
 
 PDF page positions and printed labels are separate; open-pdf links use the ATTACHMENT key, not parent item key.

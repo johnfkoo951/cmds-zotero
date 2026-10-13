@@ -5,6 +5,7 @@
  */
 import type { CmdsZoteroSettings, Diagnostic, ZoteroIndex, ZoteroIndexEntry } from "../types";
 import type { ConnectionInfo, Envelope, FailureReason, IndexView, NoteRecord, NoteRef, RankedItem, ResolveOutcome, ScanReport, Selector, VaultNotes, VaultReader } from "./types";
+import type { ReconcileScanReport, ScanSkip, YamlCodec } from "./types"; // 0.5 R8
 import { HUB_IDENTITY_KEYS, noteRef } from "./types";
 import { buildEnvelope, infoWarnings, staleGate } from "./connection";
 import { resolveIndex, selectorKind } from "./resolve";
@@ -17,7 +18,7 @@ import type { NoteLookups } from "./cites-core";
 // 0.5 R10
 import { BIBLIOGRAPHY_FORMATS, DEFAULT_REFERENCES_HEADING, defaultSidecarPath, groupResolvedByLibrary, isStructuredFormat, mergeExports, sidecarContent, sidecarWriteDecision, structuredReferencesPayload, validateSidecarPath } from "./cites-core";
 import type { BibliographyExporter, BibliographyFormat, ReferencesPayload, StructuredExport, StructuredReferencesPayload } from "./cites-core";
-import { reconcileNotes } from "./reconcile-core";
+import { inFolders, reconcileNotes } from "./reconcile-core";
 import type { ReconcileResult } from "./reconcile-core";
 import { findNote } from "./note-lookup";
 import { diagnostic } from "../diagnostics";
@@ -84,6 +85,8 @@ export interface ActionHost {
 	recentReads?: (days: number) => Promise<RecentReport[]>;
 	/** Live host only: the literature-note import the plugin UI uses; writes only when `request.apply` is true. */
 	importNote?: (request: ImportRequest) => Promise<ImportNoteResult>;
+	/** 0.5 R8: YAML codec for the informational `yamlNormalisable` flag on reconcile rows; absent hosts omit the flag. */
+	yaml?: YamlCodec;
 }
 
 /** 0.5 R10: vault-relative sidecar access; `read` returns null when absent, `write` ensures the private ignore file and folders and returns the byte count. */
@@ -384,7 +387,37 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	return { ...payload, out: { path: outPath, written: true, bytes } };
 }
 
-export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest, listedNotes?: NoteRecord[]): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean }> {
+// 0.5 R8
+/**
+ * The reconcile scan report: every skipped path classified. A reader without `skippedDetail` is classified from the
+ * listing (rows whose frontmatter failed to parse are parse errors; any other skipped path counts as unreadable).
+ */
+function reconcileScanOf(host: ActionHost, listed: NoteRecord[]): ReconcileScanReport {
+	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	const parseErrors = new Set(listed.filter(note => note.frontmatterParse === "error").map(note => note.path));
+	const skippedDetail: ScanSkip[] = scan.skippedDetail ? scan.skippedDetail.map(item => ({ ...item })) : scan.skipped.map(path => ({ path, kind: parseErrors.has(path) ? "parse-error" : "unreadable" }));
+	for (const item of skippedDetail) if (item.kind === "parse-error") parseErrors.add(item.path);
+	return { skipped: [...scan.skipped], truncated: scan.truncated, skippedDetail, parseErrors: [...parseErrors].sort() };
+}
+
+const listPaths = (paths: string[]): string => { const shown = paths.slice(0, 10); return `${shown.join(", ")}${paths.length > shown.length ? ` (+${paths.length - shown.length} more)` : ""}`; };
+
+/**
+ * Why `--apply` is refused for the whole vault: a truncated scan, an unreadable or symlinked entry, or a parse-error note
+ * inside the apply scope (under `--folders`, or one of the candidate hubs). Parse errors elsewhere are echoed in
+ * `scan.parseErrors`; a hub they mention is withheld individually (`blocked-by-parse-error`), never the vault.
+ */
+function applyScanVeto(scan: ReconcileScanReport, result: ReconcileResult): string | null {
+	if (scan.truncated) return "Vault discovery was truncated at the note limit; hubs may be missing, so reconcile apply is refused.";
+	const unreadable = scan.skippedDetail.filter(item => item.kind !== "parse-error").map(item => item.path);
+	if (unreadable.length) return `Vault discovery skipped ${unreadable.length} unreadable or symlinked ${unreadable.length === 1 ? "entry" : "entries"} (${listPaths(unreadable)}); reconcile apply is refused.`;
+	const candidates = new Set(result.notes.filter(note => note.type === "paper-hub" && note.proposalEligible && note.proposed).map(note => note.path));
+	const inScope = scan.parseErrors.filter(path => candidates.has(path) || (result.folders.length > 0 && inFolders(path, result.folders)));
+	if (inScope.length) return `${inScope.length} ${inScope.length === 1 ? "note" : "notes"} with unparseable frontmatter ${inScope.length === 1 ? "lies" : "lie"} inside the apply scope (${listPaths(inScope)}); repair ${inScope.length === 1 ? "it" : "them"} or narrow --folders. Parse errors outside the scope are listed in scan.parseErrors and do not veto apply.`;
+	return null;
+}
+
+export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest, listedNotes?: NoteRecord[]): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean; scan: ReconcileScanReport }> {
 	const view = host.indexView;
 	// Preserve raw freshness for proposals/apply: allowStale relaxes reporting only and never turns stale evidence fresh.
 	const stale = view ? host.connection.index.complete !== true || host.connection.index.stale !== false : true;
@@ -396,20 +429,27 @@ export async function reconcileDryRun(host: ActionHost, request: ReconcileReques
 		else notes.push(note);
 	}
 	const pdfPaths = await host.vaultPdfPaths();
-	const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders });
+	// 0.5 R8: parse-error notes are read once so hubs they mention can be withheld; one that vanished since the listing is unreadable.
+	const scan = reconcileScanOf(host, listed);
+	const parseErrorSources: { path: string; text: string }[] = [];
+	for (const path of scan.parseErrors) {
+		try { parseErrorSources.push({ path, text: await host.reader.readNote(path) }); }
+		catch { scan.skippedDetail.push({ path, kind: "unreadable" }); if (!scan.skipped.includes(path)) scan.skipped.push(path); }
+	}
+	const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders, parseErrorSources, ...(host.yaml ? { yaml: host.yaml } : {}) });
 	const sourceByPath = new Map(notes.filter(note => note.body !== undefined).map(note => [note.path, note.body as string]));
 	for (const note of result.notes) {
 		const source = sourceByPath.get(note.path);
 		if (source !== undefined) (note as typeof note & { sourceHash: string }).sourceHash = createHash("sha256").update(source).digest("hex");
 	}
-	return { result, view, stale };
+	return { result, view, stale, scan };
 }
 
 export async function reconcileAction(host: ActionHost, request: ReconcileRequest): Promise<Payload> {
-	const { result, view } = await reconcileDryRun(host, request);
-	const scan = scanOf(host);
+	const { result, view, scan } = await reconcileDryRun(host, request);
 	if (!request.apply) return { ...envelope(host, "reconcile", 2), mode: "dry-run", ...result, scan, apply: { mode: "dry-run" }, generatedAt: view?.index.generatedAt ?? null };
-	if (scan.truncated || scan.skipped.length) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: "Vault discovery was incomplete; reconcile apply is refused." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete" }, generatedAt: view?.index.generatedAt ?? null };
+	const veto = applyScanVeto(scan, result); // 0.5 R8: scoped scan policy replaces the any-skip veto
+	if (veto) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: veto }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete", refusedMessage: veto }, generatedAt: view?.index.generatedAt ?? null };
 	if (!host.applyReconcile) return { ...envelope(host, "reconcile", 2, { reason: "requires-obsidian", message: "reconcile --apply requires the live Obsidian host." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "requires-obsidian" }, generatedAt: view?.index.generatedAt ?? null };
 	const applied = await host.applyReconcile(result, request);
 	const applyState = applied && typeof applied === "object" ? applied as { mode?: unknown; refusedReason?: unknown; notes?: unknown } : {};

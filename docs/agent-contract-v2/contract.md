@@ -262,15 +262,41 @@ Existing identity evidence prevents an automatic negative transition. Resolved s
 Malformed identities require human repair followed by a new dry-run; no repair action is added in 0.4.
 S01 corrections are suggestions only; reconcile does not edit the body.
 
+Scan policy (0.6, R8). `reconcile` reports `scan {skipped, truncated, skippedDetail, parseErrors}`: `skippedDetail`
+gives each skipped path its kind (`unreadable`, `parse-error`, `symlink` for the offline reader) and `parseErrors` lists
+every note whose frontmatter did not parse. `--apply` is refused vault-wide (`reason: scan-incomplete`, the message
+names up to ten paths, `apply.refusedMessage` repeats it) for a truncated scan, any unreadable or symlinked entry, or a
+parse-error note inside the `--folders` scope. A parse-error note elsewhere no longer vetoes the apply; the host reads
+it once, and a hub whose citekey it mentions (word-bounded) is withheld individually with the finding
+`blocked-by-parse-error` (`skippedReason: blocked-by-parse-error`, `blockedBy` = the paths, `proposed: null`) until it is
+repaired, because that note may be the hub's own atom or S01 note. A parse-error note that vanished after the listing
+counts as unreadable.
+
 ### Apply protocol
 
 Require live host, valid complete fresh index, current BBT reachability and explicitly disabled legacy plugin.
 Unknown preconditions fail closed. Serialize applies per canonical vault/path.
-Bind each proposal to its source snapshot; re-read and check the source before writing.
-Recheck current frontmatter and transition preconditions within `processFrontMatter` before assignments.
-Existing YAML must pass the byte-identical parse/stringify round-trip guard.
+Bind each proposal to its source snapshot (the SHA-256 of the note text); re-read and check the source before writing.
+
+The write is a line patch (0.6, R8) of the whole note text inside one read-modify-write callback (`vault.process`).
+The callback rechecks the plugin lifecycle, evidence freshness and the source hash, then replaces the single column-0
+line of each changed allowed key (a trailing comment on that line is kept) and appends missing keys before the closing
+fence in `HUB_WRITABLE_KEYS` order. Every other byte stays: comments, quoting style, folded scalars, lists, trailing
+whitespace, CRLF, BOM and the body. A value is written bare only when YAML 1.1 and 1.2 parsers both read it back as
+the same string (letters, digits and `_ . / : @ % + ~ -`, not a boolean, null, number or timestamp); anything else is
+double-quoted with JSON escapes, so a backslash becomes `\\`, and DEL, C1 controls, U+2028/U+2029 and the BOM become
+`\uXXXX`. The patched text must parse back to the intended frontmatter (non-allowed keys and unchanged allowed keys
+equal, changed keys at their proposed values) before it is handed to the writer. Hand-formatted YAML that a
+parse/stringify pass would rewrite is patched like any other hub; dry-run rows may carry the informational
+`yamlNormalisable` (live host only) and it never withholds a proposal.
+A hub whose current allowed value is a block scalar, flow collection, multi-line or unterminated quoted scalar, a key
+that appears twice or in quoted form, or a proposed value that is neither string nor boolean is skipped with
+`skippedReason: frontmatter-not-patchable` and nothing is written (0.5's `yaml-roundtrip-unsafe` no longer occurs).
+A source change before the write or inside the callback is skipped as `changed-since-plan` with `wrote: false`, never an
+integrity failure: a throw from the callback means the writer received no text, whatever another editor did meanwhile.
 Verify body bytes, non-allowed values and intended allowed values afterward, even after a possibly post-write exception.
-No-op runs do not update timestamps. Per-file failures and actual writes are reported distinctly.
+No-op runs do not update timestamps. Per-file failures and actual writes are reported distinctly; `apply.notes[]`
+add `replacedKeys` and `appendedKeys` (which of `changedKeys` replaced a line and which were appended).
 `apply.notes[].wrote` is `null` when a post-invocation read cannot establish the outcome; this is an integrity failure,
 not proof of no write. Top-level note `applied` flags mirror successful writer outcomes. Revalidation may advance
 `zoteroCheckedAt` while preserving the approved material patch. Each queued file rechecks evidence and the callback

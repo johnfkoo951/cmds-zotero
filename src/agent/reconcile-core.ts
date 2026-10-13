@@ -9,9 +9,10 @@ import type { ParsedZoteroURI } from "../uris";
 import { parseZoteroURI } from "../uris";
 import type { AgentDiagnostic } from "../diagnostics";
 import { diagnostic } from "../diagnostics";
-import type { CitekeyShape, HubClassification, NoteRecord, ResolutionStatus } from "./types";
+import type { CitekeyShape, HubClassification, NoteRecord, ResolutionStatus, YamlCodec } from "./types";
 import { HUB_WRITABLE_KEYS, LEGACY_LITERATURE_KEYS } from "./types";
 import { arxivFromDoi, citekeyShape, entryArxiv, normalizeArxiv, normalizeDoi } from "./search";
+import { frontmatterText, readFrontmatterBlock } from "./frontmatter-patch"; // 0.5 R8
 
 export const HUB_FINDINGS = [
 	"missing-zoteroID", "missing-zoteroSelectURI", "missing-zoteroStatus", "missing-zoteroCheckedAt",
@@ -19,6 +20,7 @@ export const HUB_FINDINGS = [
 	"s01-says-unregistered", "citekey-not-pinned", "doi-nonconforming", "hub-attachment-missing", "index-stale", "index-incomplete",
 	"raw-source-path", "frontmatter-parse-error",
 	"legacy-frontmatter-dialect", // 0.5 R14: report-only, literature notes carrying pre-0.5 keys
+	"blocked-by-parse-error", // 0.5 R8: a parse-error note mentions this hub's citekey; the hub is not apply-eligible until it is repaired
 ] as const;
 export type HubFinding = typeof HUB_FINDINGS[number];
 
@@ -35,7 +37,8 @@ export type HubWritableKey = typeof HUB_WRITABLE_KEYS[number];
 export type ProposedFrontmatter = Partial<Record<HubWritableKey, unknown>>;
 export type ResolvedVia = "zoteroID" | "zoteroSelectURI" | "citekey" | "citekeyHistory" | "folder" | "doi" | "arxiv" | null;
 export type S01Marker = "registered" | "not-registered" | "provisional" | "confirmed" | null;
-export type SkippedReason = "not-paper-hub" | "raw-source" | "raw-source-path" | "ambiguous" | "unchecked" | "malformed-identity" | "identity-conflict" | "index-stale" | "index-incomplete" | "frontmatter-parse-error" | "yaml-roundtrip-unsafe" | "write-error" | "post-write-mismatch";
+export type SkippedReason = "not-paper-hub" | "raw-source" | "raw-source-path" | "ambiguous" | "unchecked" | "malformed-identity" | "identity-conflict" | "index-stale" | "index-incomplete" | "frontmatter-parse-error" | "write-error" | "post-write-mismatch"
+	| "frontmatter-not-patchable" | "blocked-by-parse-error"; // 0.5 R8 (replaces `yaml-roundtrip-unsafe`)
 export type ReconcileNoteType = "paper-hub" | "raw-source" | "parse-error" | "literature";
 
 /**
@@ -144,6 +147,11 @@ export interface ReconcileNote {
 	pinInstruction?: string;
 	applied: boolean;
 	skippedReason?: SkippedReason;
+	// 0.5 R8
+	/** Hubs only, when the host injected a YAML codec: `false` means hand-formatted YAML that a parse/stringify pass would rewrite. Informational; apply patches lines and never needs it. */
+	yamlNormalisable?: boolean;
+	/** Parse-error notes that mention this hub's citekey (`blocked-by-parse-error`). */
+	blockedBy?: string[];
 }
 
 export interface HubSummary {
@@ -164,6 +172,11 @@ export interface ReconcileOptions {
 	allowStale: boolean;
 	/** `--folders`: narrows discovery to notes under these vault-relative folders; never defines discovery. */
 	folders?: string[];
+	// 0.5 R8
+	/** Raw text of every parse-error note the host could read; a hub whose citekey appears in one is `blocked-by-parse-error`. */
+	parseErrorSources?: { path: string; text: string }[];
+	/** When given, hubs with a body report `yamlNormalisable` (informational: does parse/stringify reproduce the block byte for byte). */
+	yaml?: YamlCodec;
 }
 
 export interface ReconcileVault {
@@ -579,7 +592,7 @@ function normalizeFolders(folders: string[] | undefined): string[] {
 	return [...new Set((folders ?? []).map(folder => folder.trim().replace(/^\.\//, "").replace(/\/+$/, "")).filter(Boolean))].sort();
 }
 
-function inFolders(path: string, folders: string[]): boolean {
+export function inFolders(path: string, folders: string[]): boolean {
 	return !folders.length || folders.some(folder => path === folder || path.startsWith(`${folder}/`));
 }
 
@@ -693,7 +706,46 @@ function reconcileNote(note: NoteRecord, type: ReconcileNoteType, index: ZoteroI
 	if (verdict.pinInstruction !== undefined) result.pinInstruction = verdict.pinInstruction;
 	const skippedReason = skippedReasonFor(type, verdict.classification, orderedFindings, opts.stale, resolution.indexComplete);
 	if (skippedReason) result.skippedReason = skippedReason;
+	if (hub) annotateHub(result, note, opts); // 0.5 R8
 	return result;
+}
+
+// 0.5 R8
+function mentions(text: string, citekey: string): boolean {
+	let from = 0;
+	for (;;) {
+		const at = text.indexOf(citekey, from);
+		if (at < 0) return false;
+		const before = at === 0 ? "" : text.charAt(at - 1);
+		const after = text.charAt(at + citekey.length);
+		if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) return true;
+		from = at + 1;
+	}
+}
+
+/**
+ * Hub-only additions that need host-read text: `blocked-by-parse-error` when a parse-error note names this hub's
+ * citekey (that note may be the hub's own S01/atom, so the proposal is withheld until it is repaired), and the
+ * informational `yamlNormalisable` flag. Findings stay in vocabulary order; the block wins over any other skip reason.
+ */
+function annotateHub(result: ReconcileNote, note: NoteRecord, opts: ReconcileOptions): void {
+	const blockedBy = result.citekey ? (opts.parseErrorSources ?? []).filter(source => mentions(source.text, result.citekey)).map(source => source.path).sort() : [];
+	if (blockedBy.length) {
+		result.findings = orderFindings([...result.findings, finding("blocked-by-parse-error", `${blockedBy.length === 1 ? "A note" : `${blockedBy.length} notes`} with unparseable frontmatter mention${blockedBy.length === 1 ? "s" : ""} citekey "${result.citekey}"; repair ${blockedBy.length === 1 ? "it" : "them"} before applying.`, blockedBy.join(", "))]);
+		result.blockedBy = blockedBy;
+		result.proposalEligible = false;
+		result.proposed = null;
+		result.skippedReason = "blocked-by-parse-error";
+	}
+	if (opts.yaml && note.body !== undefined) {
+		const block = readFrontmatterBlock(note.body);
+		if (block && block !== "unterminated") {
+			const yaml = frontmatterText(block);
+			let normalisable = false;
+			try { normalisable = opts.yaml.stringify(opts.yaml.parse(yaml)).replace(/\n$/, "") === yaml; } catch { normalisable = false; }
+			result.yamlNormalisable = normalisable;
+		}
+	}
 }
 
 /** Reconcile-derived diagnostics for one note (vocabulary §2 codes). `index-stale` is envelope-level and left to the host. */

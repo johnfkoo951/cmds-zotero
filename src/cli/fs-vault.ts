@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYamlText } from "yaml";
 import { readLocalFile } from "../local-file";
 import { parseNoteText } from "../frontmatter-read";
-import type { NoteRecord, VaultReader } from "../agent/types";
+import type { NoteRecord, ScanSkip, VaultReader } from "../agent/types";
 import { findNote as findListedNote, notePathCandidates } from "../agent/note-lookup";
 import { normalizeSettings } from "../settings-data";
 import type { CmdsZoteroSettings } from "../types";
@@ -29,7 +29,7 @@ export function configDirOf(value: string | null | undefined): string {
 }
 
 /** One step of the scan order: a note file, an entry the scan passes without reading, or a path it reports as skipped. */
-type WalkEvent = { kind: "note"; path: string; basename: string } | { kind: "skip"; path: string } | { kind: "pass" };
+type WalkEvent = { kind: "note"; path: string; basename: string } | { kind: "skip"; path: string; reason: "unreadable" | "symlink" } | { kind: "pass" };
 
 export interface VaultLocation { name: string; path: string }
 
@@ -61,10 +61,12 @@ export function parseFrontmatter(text: string): ReturnType<typeof parseNoteText>
 
 /** Offline read-only vault access over the filesystem: refuses symlinks and anything outside the vault root. */
 export class FsVaultReader implements VaultReader {
-	private report = { skipped: [] as string[], truncated: false };
+	private report = { skipped: [] as string[], truncated: false, skippedDetail: [] as ScanSkip[] };
 	/** `limit` is the note cap of one scan (MAX_LISTED_NOTES); tests lower it. */
 	constructor(private root: string, private name: string, private limit = MAX_LISTED_NOTES) {}
-	scanWarnings(): { skipped: string[]; truncated: boolean } { return { skipped: [...this.report.skipped], truncated: this.report.truncated }; }
+	scanWarnings(): { skipped: string[]; truncated: boolean; skippedDetail: ScanSkip[] } { return { skipped: [...this.report.skipped], truncated: this.report.truncated, skippedDetail: this.report.skippedDetail.map(item => ({ ...item })) }; }
+	// 0.5 R8: every skipped path carries its kind so reconcile apply can veto on unreadable or symlinked entries only.
+	private skip(path: string, kind: ScanSkip["kind"]): void { this.report.skipped.push(path); this.report.skippedDetail.push({ path, kind }); }
 
 	vaultName(): string { return this.name; }
 
@@ -85,11 +87,11 @@ export class FsVaultReader implements VaultReader {
 	private async *walk(dir: string): AsyncGenerator<WalkEvent> {
 		yield { kind: "pass" };
 		let entries: Dirent[];
-		try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { yield { kind: "skip", path: relative(this.root, dir) }; return; }
+		try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { yield { kind: "skip", path: relative(this.root, dir).split(sep).join("/"), reason: "unreadable" }; return; }
 		entries.sort((a, b) => a.name.localeCompare(b.name));
 		for (const entry of entries) {
 			const full = join(dir, entry.name);
-			if (entry.isSymbolicLink()) { yield { kind: "skip", path: relative(this.root, full) }; continue; }
+			if (entry.isSymbolicLink()) { yield { kind: "skip", path: relative(this.root, full).split(sep).join("/"), reason: "symlink" }; continue; }
 			if (entry.isDirectory()) { yield { kind: "pass" }; if (!entry.name.startsWith(".")) yield* this.walk(full); continue; }
 			if (!entry.isFile() || !entry.name.endsWith(".md")) { yield { kind: "pass" }; continue; }
 			yield { kind: "note", path: relative(this.root, full).split(sep).join("/"), basename: entry.name.replace(/\.md$/, "") };
@@ -98,15 +100,15 @@ export class FsVaultReader implements VaultReader {
 
 	async listNotes(): Promise<NoteRecord[]> {
 		const notes: NoteRecord[] = [];
-		this.report = { skipped: [], truncated: false };
+		this.report = { skipped: [], truncated: false, skippedDetail: [] };
 		// PERF-07: up to SCAN_CONCURRENCY notes are read ahead while the walk is visited in order, so notes, skipped and
 		// truncated equal the sequential walk's (a note read past the cap is discarded).
 		await scanInOrder(this.walk(this.root), SCAN_CONCURRENCY, event => event.kind === "note" ? this.readNote(event.path).then(parseFrontmatter) : null, (event, outcome) => {
 			if (notes.length >= this.limit) { this.report.truncated = true; return false; }
-			if (event.kind === "skip") { this.report.skipped.push(event.path); return true; }
+			if (event.kind === "skip") { this.skip(event.path, event.reason); return true; }
 			if (event.kind === "pass") return true;
-			if (!outcome?.ok) { this.report.skipped.push(event.path); return true; }
-			if (outcome.value.frontmatterParse === "error") this.report.skipped.push(event.path);
+			if (!outcome?.ok) { this.skip(event.path, "unreadable"); return true; }
+			if (outcome.value.frontmatterParse === "error") this.skip(event.path, "parse-error");
 			notes.push({ path: event.path, basename: event.basename, frontmatter: outcome.value.frontmatter, frontmatterParse: outcome.value.frontmatterParse });
 			return true;
 		});
