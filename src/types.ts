@@ -151,6 +151,32 @@ export interface Diagnostic {
 	citekey?: string;
 }
 
+/**
+ * Additive (0.6): one Zotero library as a refresh saw it (`user.groups` plus its parent-item search). Readers of an older
+ * index find the field absent; readers must skip elements they cannot read (see `indexLibraries()`).
+ */
+export interface IndexLibrary {
+	libraryID: number;
+	name: string;
+	/** `user` (library 1), `group` (item URIs under /groups/N/), `feed` (items only without the feed filter), `unknown` (empty or unreadable). */
+	kind: "user" | "group" | "feed" | "unknown";
+	groupID?: number;
+	/** Parent items Better BibTeX listed in this library during the refresh (feed items are not counted). */
+	items: number;
+	/** Entries of this library in the index, previous entries kept for skipped items included. */
+	indexed: number;
+}
+
+/** Additive (0.6): one collection of an indexed library, flat; `parentKey` is null at the library root. */
+export interface IndexCollection {
+	libraryID: number;
+	key: string;
+	name: string;
+	parentKey: string | null;
+	/** Ids of index entries filed directly in this collection (not in subcollections); absent when membership could not be read. */
+	items?: string[];
+}
+
 export interface ZoteroIndex {
 	schemaVersion: 2;
 	generatedAt: string;
@@ -160,6 +186,12 @@ export interface ZoteroIndex {
 	capabilities: Capabilities;
 	diagnostics: Diagnostic[];
 	complete: boolean;
+	/** Additive (0.6): the libraries Better BibTeX listed; absent from older indexes and when `user.groups` was unavailable. */
+	libraries?: IndexLibrary[];
+	/** Additive (0.6): every collection of the listed libraries with its direct members; absent when the tree was unavailable. */
+	collections?: IndexCollection[];
+	/** Additive (0.6): sorted ids of entries Zotero marks as retracted; absent when the flag could not be read. */
+	retracted?: string[];
 }
 
 export type Resolution =
