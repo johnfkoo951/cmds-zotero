@@ -75,15 +75,44 @@ export interface Annotation {
 	sortIndex?: string;
 }
 
+/**
+ * Additive (0.6): an annotation made in Zotero's EPUB or web-snapshot reader. Such annotations have no PDF page: their
+ * position is an EPUB CFI (`FragmentSelector`) or a CSS selector (`CssSelector`), kept as Zotero reports it. They live
+ * beside `annotations` so readers of the PDF contract (0.5 and the offline core) keep seeing only PDF annotations.
+ */
+export interface ReaderAnnotation {
+	key: string;
+	attachmentKey: string;
+	type: string;
+	text: string;
+	comment: string;
+	color: string;
+	pageLabel: string;
+	version: number;
+	/** `zotero://select/<library|groups/N>/items/<attachmentKey>`: open-pdf links are used for PDF annotations only. */
+	uri: string;
+	tags: string[];
+	dateModified: string;
+	sortIndex?: string;
+	imagePath?: string;
+	/** Zotero's position object (`type` names the selector; `value` holds the CFI or CSS selector). */
+	position: Record<string, unknown>;
+}
+
 export interface Attachment {
 	key: string;
 	openURI: string;
 	path: string | null;
 	title: string;
 	annotations: Annotation[];
-	/** Additive (0.4): from the BetterBibTeX JSON export when present; lets a null-path PDF be told apart from a snapshot. */
+	/**
+	 * Additive (0.4): the MIME type when Better BibTeX reports one (`contentType`, or the BBT JSON `mimeType` since 0.6);
+	 * lets a null-path PDF be told apart from an EPUB or a snapshot. `attachmentFormat()` also reads the file extension.
+	 */
 	contentType?: string;
 	filename?: string;
+	/** Additive (0.6): EPUB and snapshot annotations; absent when the attachment has none. */
+	readerAnnotations?: ReaderAnnotation[];
 }
 
 export interface ZoteroIndexEntry extends ItemIdentity {

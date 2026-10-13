@@ -25,6 +25,7 @@ export const DIAGNOSTIC_CODES = {
 	"index-stale": "info",
 	"index-in-git": "warning",
 	"legacy-frontmatter-dialect": "info", // 0.5 R14
+	"reader-annotations": "info", // 0.6 epub-snapshot-annotations
 } as const satisfies Record<string, DiagnosticSeverity>;
 
 export type DiagnosticCode = keyof typeof DIAGNOSTIC_CODES;
@@ -58,6 +59,8 @@ export function indexDiagnostics(entries: ZoteroIndexEntry[]): Diagnostic[] {
 		citekeys.set(entry.citekey, matches);
 		if (entry.attachments.some(attachment => attachment.path === null)) diagnostics.push({ code: "attachment-path-missing", severity: "warning", message: "An attachment has no available local file path; its verified Zotero URI is retained.", itemID: entry.id, citekey: entry.citekey });
 		if (entry.attachmentStatus === "unavailable") diagnostics.push({ code: "attachments-unavailable", severity: "warning", message: "Attachment refresh failed; only previously validated attachment data was retained.", itemID: entry.id, citekey: entry.citekey });
+		const reader = entry.attachments.reduce((count, attachment) => count + (attachment.readerAnnotations?.length ?? 0), 0);
+		if (reader) diagnostics.push(diagnostic("reader-annotations", `${reader} annotation${reader === 1 ? "" : "s"} on EPUB or web-snapshot attachments ${reader === 1 ? "has" : "have"} no PDF page; ${reader === 1 ? "it is" : "they are"} kept in the index as reader annotations.`, { itemID: entry.id, citekey: entry.citekey }));
 	}
 	for (const [citekey, matches] of citekeys) {
 		if (matches.length > 1) diagnostics.push({ code: "duplicate-citekey", severity: "warning", message: `Citation key matches ${matches.length} parent items; explicit identity is required.`, citekey });

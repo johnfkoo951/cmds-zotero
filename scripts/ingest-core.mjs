@@ -7464,6 +7464,17 @@ function entryHash(entry) {
   const { contentHash: _hash, ...rest } = entry;
   return contentHash(rest);
 }
+function validReaderAnnotations(value, attachmentKey, item) {
+  if (!Array.isArray(value)) return false;
+  for (const annotation of value) {
+    if (!record(annotation) || typeof annotation.key !== "string" || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachmentKey || typeof annotation.version !== "number" || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags) || !record(annotation.position)) return false;
+    if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text4) => typeof text4 !== "string")) return false;
+    if (annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string" || annotation.sortIndex !== void 0 && typeof annotation.sortIndex !== "string") return false;
+    const location = parseZoteroURI(annotation.uri);
+    if (location.action !== "select" || location.itemKey !== attachmentKey || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
+  }
+  return true;
+}
 function validateEntryStructure(value) {
   if (!record(value) || !validateIdentity(value)) return false;
   const item = value;
@@ -7484,6 +7495,7 @@ function validateEntryStructure(value) {
         const location = parseZoteroURI(annotation.uri);
         if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
       }
+      if (attachment.readerAnnotations !== void 0 && !validReaderAnnotations(attachment.readerAnnotations, attachment.key, item)) return false;
     }
     return !item.attachmentPath || item.attachments.some((attachment) => attachment.path === item.attachmentPath);
   } catch {
@@ -9162,8 +9174,10 @@ var DIAGNOSTIC_CODES2 = {
   "legacy-plugin-enabled": "error",
   "index-stale": "info",
   "index-in-git": "warning",
-  "legacy-frontmatter-dialect": "info"
+  "legacy-frontmatter-dialect": "info",
   // 0.5 R14
+  "reader-annotations": "info"
+  // 0.6 epub-snapshot-annotations
 };
 function diagnostic(code, message, extra = {}) {
   const result = { code, severity: DIAGNOSTIC_CODES2[code], message };
@@ -9978,6 +9992,9 @@ function textLayerWarning(report, pageCount) {
   if (report.textLayer === "none") return `No text layer: none of the ${pageCount} pages has extractable body text (a scanned PDF). Run OCR before reading or quoting it; locate cannot verify quotes in it.`;
   return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (figure-only, blank or scanned pages)${report.ocrRecommended ? "; run OCR for them before relying on the text" : "; if those pages are scanned text, run OCR for them"}.`;
 }
+
+// src/api/normalize.ts
+var MAX_READER_POSITION = 16 * 1024;
 
 // src/note-writer.ts
 import { createHash as createHash3 } from "crypto";

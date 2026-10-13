@@ -1,6 +1,6 @@
 import type { Capabilities, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
 import { BbtTransportError, httpRequest, isBbtTransportError, mapBounded, rpc, type BbtTransportReason } from "./api/transport";
-import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, text } from "./api/normalize";
+import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, primaryPdfPath, text } from "./api/normalize";
 import { record, sealEntry, verifyEntry, verifyIndex } from "./identity";
 import { indexDiagnostics } from "./diagnostics";
 import { positiveInteger } from "./uris";
@@ -170,7 +170,7 @@ export class BbtService {
 			try {
 				const attachments = await call("item.attachments", [entry.citekey, entry.libraryID], settings.attachmentTimeoutMs);
 				entry.attachments = normalizeAttachments(attachments, entry);
-				entry.attachmentPath = entry.attachments.find(attachment => attachment.path?.toLowerCase().endsWith(".pdf"))?.path ?? "";
+				entry.attachmentPath = primaryPdfPath(entry.attachments);
 				if (!sealEntry(entry)) throw new Error("Invalid enriched attachment data");
 			} catch (error) {
 				if (signal.aborted) throw error;
@@ -283,7 +283,7 @@ export class BbtService {
 		if (entry.itemKey !== target.itemKey || (target.libraryID !== undefined && entry.libraryID !== target.libraryID) || entry.libraryType !== target.libraryType || (entry.groupID ?? 0) !== (target.groupID ?? 0)) throw new Error("The fresh Better BibTeX export is a different Zotero item; refresh the index.");
 		const attachments = await this.call("item.attachments", [entry.citekey, entry.libraryID], this.settings.attachmentTimeoutMs, signal);
 		entry.attachments = normalizeAttachments(attachments, entry);
-		entry.attachmentPath = entry.attachments.find(attachment => attachment.path?.toLowerCase().endsWith(".pdf"))?.path ?? "";
+		entry.attachmentPath = primaryPdfPath(entry.attachments);
 		entry.attachmentStatus = "complete";
 		if (!sealEntry(entry)) throw new Error("Invalid fresh Zotero item data");
 		return entry;

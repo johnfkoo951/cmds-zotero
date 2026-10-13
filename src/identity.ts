@@ -31,6 +31,22 @@ export function entryHash(entry: ZoteroIndexEntry): string {
 }
 
 /**
+ * 0.6 additive `readerAnnotations` (EPUB and snapshot annotations): the PDF annotation fields without a page, a select URI
+ * for the attachment in the entry's library, and a position object. Readers of the 0.5 contract ignore the field.
+ */
+function validReaderAnnotations(value: unknown, attachmentKey: string, item: ZoteroIndexEntry): boolean {
+	if (!Array.isArray(value)) return false;
+	for (const annotation of value as unknown[]) {
+		if (!record(annotation) || typeof annotation.key !== "string" || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachmentKey || typeof annotation.version !== "number" || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags) || !record(annotation.position)) return false;
+		if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some(text => typeof text !== "string")) return false;
+		if ((annotation.imagePath !== undefined && typeof annotation.imagePath !== "string") || (annotation.sortIndex !== undefined && typeof annotation.sortIndex !== "string")) return false;
+		const location = parseZoteroURI(annotation.uri as string);
+		if (location.action !== "select" || location.itemKey !== attachmentKey || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
+	}
+	return true;
+}
+
+/**
  * Every check of `validateEntry` except the content hash: identity, field types, attachment and annotation URIs. An entry
  * this process builds is checked with this and then hashed once by `sealEntry`.
  */
@@ -54,6 +70,7 @@ export function validateEntryStructure(value: unknown): value is ZoteroIndexEntr
 				const location = parseZoteroURI(annotation.uri);
 				if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
 			}
+			if (attachment.readerAnnotations !== undefined && !validReaderAnnotations(attachment.readerAnnotations, attachment.key, item)) return false;
 		}
 		return !item.attachmentPath || item.attachments.some(attachment => attachment.path === item.attachmentPath);
 	} catch { return false; }
