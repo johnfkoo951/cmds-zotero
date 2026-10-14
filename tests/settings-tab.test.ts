@@ -19,7 +19,7 @@ test("0.5 keys and defaults are unchanged; 0.6 adds only refresh requests and th
 		requestTimeoutMs: 20000, attachmentTimeoutMs: 60000, concurrency: 2, indexMaxAgeMinutes: 60, outputFolder: "References/Zotero",
 		imageFolder: "References/Zotero/images", bibliographyStyle: "apa", peerVaults: [], citationTrigger: "bracket", excludedTags: ["obscite"],
 		headingHighlightColor: "gray", referencesFollowActiveNote: true, referencesHeadings: ["References", "Bibliography", "Works Cited", "참고 문헌", "참고 자료"], recentReadsDays: 30,
-		collectConcurrency: 4, pickerWaitSeconds: 600,
+		collectConcurrency: 4, pickerWaitSeconds: 600, followZoteroSelection: "off", followZoteroSelectionSeconds: 10,
 	});
 });
 

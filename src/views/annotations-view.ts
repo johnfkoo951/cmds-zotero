@@ -21,6 +21,8 @@ import { CARD_ACTIONS, annotationDataText, citationFor, identityLinkFor, scopedK
 import { ReportModal } from "../modals/report";
 import { ANNOTATION_DRAG_TYPE, dragPayload, encodeDragPayload } from "../annotations/drag-payload";
 import { annotationText } from "../plugin/annotation-insert";
+import { FOLLOW_TIMEOUT_MS, SelectionPoller, followConfig, type PollTrigger } from "../library/selection-follow";
+import type { SelectedItem } from "../library/selection";
 
 export const VIEW_TYPE_ANNOTATIONS = "cmds-zotero-annotations";
 /** Hides a card, section heading or message the filter does not show (0.6 PERF-15). */
@@ -46,6 +48,8 @@ export class AnnotationsView extends ItemView {
 	/** The in-place message of the last selection read that showed nothing (not persisted). */
 	private selectionMessage: string | null = null;
 	private reading = false;
+	// 0.6.1 follow-zotero-selection: opt-in polling (window focus or an interval), never a listener.
+	private readonly poller = new SelectionPoller(() => Date.now());
 	/** The citekey under the cursor the last render resolved (cursor mode only). */
 	private shownCursorKey = "";
 	/** The shown item: the live entry when one was fetched for this index generation, else the indexed one. */
@@ -127,6 +131,7 @@ export class AnnotationsView extends ItemView {
 			this.render();
 			return;
 		}
+		if (mode === "selection" && this.mode !== "selection") this.poller.reset();
 		this.mode = mode;
 		this.selectionMessage = null;
 		this.saveState();
@@ -141,10 +146,12 @@ export class AnnotationsView extends ItemView {
 		if (this.reading) return;
 		this.mode = "selection";
 		this.reading = true;
+		this.poller.reset();
 		this.saveState();
 		this.render();
 		try {
 			const items = await this.plugin.bbt.selectedItems();
+			this.poller.remember(items);
 			const target = selectionTarget(this.plugin.cachedEntries(), items);
 			if (target.kind === "resolved") { this.selected = itemRef(target.entry); this.selectionMessage = null; }
 			else if (target.kind === "several") {
@@ -156,8 +163,7 @@ export class AnnotationsView extends ItemView {
 				}, "Several items are selected in Zotero. Choose one…").open();
 			} else {
 				this.selected = null;
-				this.selectionMessage = target.kind === "empty" ? "Nothing is selected in Zotero. Select an item there, then read the selection again."
-					: `The ${target.count === 1 ? "item" : `${target.count} items`} selected in Zotero ${target.count === 1 ? "is" : "are"} not in the index. Refresh the index, or select another item.`;
+				this.selectionMessage = target.kind === "empty" ? "Nothing is selected in Zotero. Select an item there, then read the selection again." : notIndexedText(target.count);
 			}
 		} catch (error) {
 			new Notice(`Could not read the Zotero selection: ${error instanceof Error ? error.message : String(error)}`);
@@ -166,6 +172,51 @@ export class AnnotationsView extends ItemView {
 		}
 		this.saveState();
 		this.render();
+	}
+
+	/** True when the sidebar is on screen (an open, expanded sidebar pane). */
+	private onScreen(): boolean {
+		const el = this.containerEl as HTMLElement | undefined;
+		return typeof el?.isShown === "function" && el.isShown();
+	}
+
+	/**
+	 * 0.6.1 follow-zotero-selection: one poll of the Zotero selection, when the settings ask for it, the sidebar follows
+	 * the selection and is visible. A changed selection is shown (several or unindexed items are explained in place; an
+	 * empty selection keeps what is shown); an unchanged one does nothing. A failure pauses polling for a minute without a
+	 * Notice or a status change. Rendering never waits for it.
+	 */
+	async followSelection(trigger: PollTrigger): Promise<void> {
+		if (this.mode !== "selection" || this.reading) return;
+		const wasPaused = this.poller.paused();
+		const outcome = await this.poller.poll(trigger, followConfig(this.plugin.settings), this.onScreen(), () => this.plugin.bbt.selectedItems(undefined, { timeoutMs: FOLLOW_TIMEOUT_MS, quiet: true }));
+		if (this.mode !== "selection" || this.reading) return;
+		if (outcome.kind === "changed") this.showFollowed(outcome.items, wasPaused);
+		else if (outcome.kind === "failed" || (wasPaused && outcome.kind === "unchanged")) this.render();
+	}
+
+	private showFollowed(items: SelectedItem[], rerender: boolean): void {
+		const target = selectionTarget(this.plugin.cachedEntries(), items);
+		if (target.kind === "empty") { if (rerender) this.render(); return; }
+		if (target.kind === "resolved") {
+			const same = this.selected?.libraryID === target.entry.libraryID && this.selected.itemKey === target.entry.itemKey && this.selectionMessage === null;
+			if (same) { if (rerender) this.render(); return; }
+			this.selected = itemRef(target.entry);
+			this.selectionMessage = null;
+		} else {
+			this.selected = null;
+			this.selectionMessage = target.kind === "several" ? `${target.entries.length} indexed items are selected in Zotero. Select one item, or use Read selection to choose.` : notIndexedText(target.count);
+		}
+		this.saveState();
+		this.render();
+	}
+
+	/** The header line saying how the selection is followed, or "" when it is read only on demand. */
+	private followText(): string {
+		const config = followConfig(this.plugin.settings);
+		if (this.mode !== "selection" || config.mode === "off") return "";
+		if (this.poller.paused()) return "Following paused for a minute: Zotero did not answer.";
+		return config.mode === "focus" ? "Following the Zotero selection when Obsidian gets focus." : `Following the Zotero selection every ${config.intervalMs / 1000} s and on focus.`;
 	}
 
 	/** The index generation the sidebar shows (the saved snapshot's timestamp). */
@@ -264,6 +315,8 @@ export class AnnotationsView extends ItemView {
 			read.disabled = this.reading;
 			read.addEventListener("click", () => { void this.readSelection(); });
 		}
+		const following = this.followText();
+		if (following) header.createDiv({ cls: "setting-item-description cmds-zotero-selection-follow", text: following });
 		const search = toolbar.createEl("input", { type: "search", placeholder: "Filter text, comment, tag, page", attr: { "aria-label": "Filter annotations" } });
 		search.value = this.facets.query;
 		search.addEventListener("input", () => { this.facets.query = search.value; this.filterSoon(); });
@@ -503,4 +556,9 @@ export class AnnotationsView extends ItemView {
 /** `values` with `value` added, or removed when present. */
 function toggled(values: readonly string[], value: string): string[] {
 	return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
+}
+
+/** The in-place explanation for selected items that are not in the index. */
+function notIndexedText(count: number): string {
+	return `The ${count === 1 ? "item" : `${count} items`} selected in Zotero ${count === 1 ? "is" : "are"} not in the index. Refresh the index, or select another item.`;
 }

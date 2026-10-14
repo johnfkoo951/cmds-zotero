@@ -7,6 +7,7 @@ import { sourceLabel } from "../annotations/overlay";
 import { AnnotationSearchModal, type AnnotationSearchAction } from "../modals/annotation-search";
 import { ANNOTATION_DRAG_TYPE, dropText, parseDragPayload, resolveDragPayload } from "../annotations/drag-payload";
 import { annotationText } from "./annotation-insert";
+import type { PollTrigger } from "../library/selection-follow";
 
 /** The open Annotations sidebar, opened and revealed first. */
 async function annotationsView(plugin: CMDSZoteroPlugin): Promise<AnnotationsView> {
@@ -39,6 +40,7 @@ export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 		}).open();
 	} });
 	registerAnnotationDrop(plugin);
+	registerSelectionFollow(plugin);
 	// 0.6.1 annotation-card-actions: the card menu's actions on the card last clicked or focused in the sidebar.
 	const focusedView = (): AnnotationsView | null => plugin.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS).map(leaf => leaf.view).find((view): view is AnnotationsView => view instanceof AnnotationsView && view.focusedCard() !== null) ?? null;
 	for (const action of CARD_ACTIONS) {
@@ -93,4 +95,16 @@ export function registerAnnotationDrop(plugin: CMDSZoteroPlugin): void {
 			editor.replaceRange(dropText(text, at.ch), at);
 		});
 	}));
+}
+
+/**
+ * 0.6.1 follow-zotero-selection: a one-second check and the window's focus ask each annotations sidebar to poll; the
+ * sidebar decides from the settings, its mode, its visibility and its back-off whether a read is due. No listener.
+ */
+function registerSelectionFollow(plugin: CMDSZoteroPlugin): void {
+	const poll = (trigger: PollTrigger): void => {
+		for (const leaf of plugin.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS)) if (leaf.view instanceof AnnotationsView) void leaf.view.followSelection(trigger);
+	};
+	plugin.registerInterval(window.setInterval(() => poll("tick"), 1000));
+	plugin.registerDomEvent(window, "focus", () => poll("focus"));
 }

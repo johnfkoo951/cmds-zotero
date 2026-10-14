@@ -259,13 +259,15 @@ export class BbtService {
 	 * The items selected in Zotero's library pane right now (0.6.1), read once through Better BibTeX's export of the
 	 * selection with the request timeout. An empty selection is []. Read-only; there is no listener.
 	 */
-	async selectedItems(signal?: AbortSignal): Promise<SelectedItem[]> {
+	async selectedItems(signal?: AbortSignal, options: { timeoutMs?: number; quiet?: boolean } = {}): Promise<SelectedItem[]> {
 		const endpoint = `${this.settings.bbtEndpoint.replace(/\/$/, "")}/export/selected?jzon`;
-		const settings = this.settings;
-		return this.withSignal(signal, joined => this.observed(async () => {
-			const response = await httpRequest(endpoint, settings.requestTimeoutMs, undefined, joined);
+		const timeout = options.timeoutMs ?? this.settings.requestTimeoutMs;
+		const read = async (joined: AbortSignal): Promise<SelectedItem[]> => {
+			const response = await httpRequest(endpoint, timeout, undefined, joined);
 			return parseSelection(response.status, response.text, endpoint);
-		}));
+		};
+		// 0.6.1 follow-zotero-selection: a background poll is `quiet`, so its outcome never reaches the connection status.
+		return this.withSignal(signal, joined => options.quiet ? read(joined) : this.observed(() => read(joined)));
 	}
 
 	/** Parent items whose citekey is exactly `citekey`, in every library (a citekey is unique only within one library). */

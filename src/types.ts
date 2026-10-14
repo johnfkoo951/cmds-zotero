@@ -36,6 +36,13 @@ export interface CmdsZoteroSettings {
 	 * timeout (30–1800). Running out of it, or Cancel, is not a Better BibTeX failure.
 	 */
 	pickerWaitSeconds: number;
+	/**
+	 * 0.6.1 follow-zotero-selection: while the annotations sidebar follows the Zotero selection, read it again on window
+	 * focus, or also every `followZoteroSelectionSeconds` while the sidebar is visible. Off reads it only when asked.
+	 */
+	followZoteroSelection: "off" | "focus" | "interval";
+	/** 0.6.1: seconds between selection reads in the interval mode (3–30). */
+	followZoteroSelectionSeconds: number;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -61,6 +68,8 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	recentReadsDays: 30,
 	collectConcurrency: 4, // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
 	pickerWaitSeconds: 600, // 0.6 OPT-14: ten minutes
+	followZoteroSelection: "off", // 0.6.1 follow-zotero-selection: opt-in
+	followZoteroSelectionSeconds: 10,
 };
 
 export interface ItemIdentity {
