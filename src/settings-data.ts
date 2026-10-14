@@ -1,9 +1,11 @@
 import { DEFAULT_SETTINGS, type CitationTrigger, type CmdsZoteroSettings } from "./types";
 import { isAnnotationColor } from "./annotations/colors";
+import { annotationsHeading, calloutType, synthesisLines } from "./layout";
 
 function integer(value: unknown, fallback: number, min: number, max: number): number {
 	return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
+function flag(value: unknown, fallback: boolean): boolean { return typeof value === "boolean" ? value : fallback; }
 function text(value: unknown, fallback: string): string { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 
 /**
@@ -40,6 +42,20 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
 		collectConcurrency: integer(data.collectConcurrency, data.concurrency === undefined ? DEFAULT_SETTINGS.collectConcurrency : defaultCollectConcurrency(concurrency), 1, 8), // 0.6 OPT-10
 		pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800), // 0.6 OPT-14
+		// 0.6.1 R17: note layout.
+		noteAbstract: flag(data.noteAbstract, DEFAULT_SETTINGS.noteAbstract),
+		noteCitation: flag(data.noteCitation, DEFAULT_SETTINGS.noteCitation),
+		noteMetadata: flag(data.noteMetadata, DEFAULT_SETTINGS.noteMetadata),
+		noteLinks: flag(data.noteLinks, DEFAULT_SETTINGS.noteLinks),
+		noteZoteroNotes: flag(data.noteZoteroNotes, DEFAULT_SETTINGS.noteZoteroNotes),
+		noteSynthesis: flag(data.noteSynthesis, DEFAULT_SETTINGS.noteSynthesis),
+		calloutAbstract: calloutType(data.calloutAbstract, DEFAULT_SETTINGS.calloutAbstract),
+		calloutCite: calloutType(data.calloutCite, DEFAULT_SETTINGS.calloutCite),
+		calloutMetadata: calloutType(data.calloutMetadata, DEFAULT_SETTINGS.calloutMetadata),
+		calloutLinks: calloutType(data.calloutLinks, DEFAULT_SETTINGS.calloutLinks),
+		calloutSynthesis: calloutType(data.calloutSynthesis, DEFAULT_SETTINGS.calloutSynthesis),
+		synthesisLines: synthesisLines(data.synthesisLines),
+		annotationsHeading: annotationsHeading(data.annotationsHeading),
 	};
 }
 

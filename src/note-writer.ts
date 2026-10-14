@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import type { Annotation, CmdsZoteroSettings, ZoteroIndexEntry } from "./types";
 import { LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
 import { colorName } from "./annotations/colors";
+import { DEFAULT_ANNOTATIONS_HEADING, layoutOf } from "./layout";
 
 export const hashText = (text: string): string => createHash("sha256").update(text).digest("hex");
 // 0.5 R14: the marker that proves a literature note was created by this plugin for exactly this item.
@@ -345,7 +346,7 @@ const ANNOTATION_OPENING = /<!-- cmds-zotero:(annotation-[A-Za-z0-9]{1,32}-[A-Za
  * orders after it (detached blocks included); a block with no later neighbour is appended as before. `order` lists every
  * annotation section ID in reading order; `blocks` arrive in that order.
  */
-function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: string }[], order: readonly string[]): string {
+function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: string }[], order: readonly string[], heading: string): string {
 	const rank = new Map(order.map((id, position) => [id, position]));
 	let result = content;
 	for (const block of blocks) {
@@ -361,17 +362,22 @@ function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: s
 				break;
 			}
 		}
-		result = before === null ? spliceAnnotations(result, [block.text]) : `${result.slice(0, before)}${block.text}\n\n${result.slice(before)}`;
+		result = before === null ? spliceAnnotations(result, [block.text], heading) : `${result.slice(0, before)}${block.text}\n\n${result.slice(before)}`;
 	}
 	return result;
 }
-function spliceAnnotations(content: string, blocks: string[]): string {
+/** The `## <heading>` line new annotation blocks go under: the configured heading (0.6.1 R17), else `## Annotations`. */
+function annotationsHeadingLine(content: string, heading: string): RegExpExecArray | null {
+	const line = (text: string): RegExp => new RegExp(`^## ${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*$`, "m");
+	return line(heading).exec(content) ?? (heading === DEFAULT_ANNOTATIONS_HEADING ? null : line(DEFAULT_ANNOTATIONS_HEADING).exec(content));
+}
+function spliceAnnotations(content: string, blocks: string[], heading: string): string {
 	const joined = blocks.join("\n\n");
 	let at = -1;
 	for (const match of content.matchAll(/<!-- \/cmds-zotero:annotation-[A-Za-z0-9-]+ -->/g)) at = match.index + match[0].length;
 	if (at < 0) {
-		const heading = /^## Annotations[ \t]*$/m.exec(content);
-		if (heading) at = heading.index + heading[0].length;
+		const found = annotationsHeadingLine(content, heading);
+		if (found) at = found.index + found[0].length;
 	}
 	if (at < 0) return `${content.replace(/\n*$/, "\n")}\n${joined}\n`;
 	return `${content.slice(0, at)}\n\n${joined}${content.slice(at).replace(/^\n*(?=[^\n])/, "\n\n").replace(/^\n*$/, "\n")}`;
@@ -464,13 +470,17 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const journal = itemType === "journalArticle" ? metadataText(entry, "publicationTitle") : itemType === "preprint" ? metadataText(entry, "repository") : "";
 	const related = (context.related ?? []).filter(citekey => /^[A-Za-z0-9_:.+/-]+$/.test(citekey));
 	const sections = new Map<string, string>();
+	// 0.6.1 R17: a switched-off part renders as an empty body; the block, its ID and its markers stay.
+	const layout = layoutOf(settings);
+	const callout = layout.callouts;
 
-	const abstract = textFromHTML(entry.metadata.abstractNote);
-	sections.set("overview", [`# ${inline(entry.title)}`, abstract ? quoted(`[!Abstract]\nabstract:: ${abstract}`) : ""].filter(Boolean).join("\n\n"));
+	const abstract = layout.abstract ? textFromHTML(entry.metadata.abstractNote) : "";
+	sections.set("overview", [`# ${inline(entry.title)}`, abstract ? quoted(`[!${callout.abstract}]\nabstract:: ${abstract}`) : ""].filter(Boolean).join("\n\n"));
 	// 0.5 R12: without bibliography text an owned note keeps its `citation` section byte-identical (the section is simply
 	// not re-rendered); a new note is refused rather than written with a placeholder.
-	const citation = bibliographyText(bibliography);
-	if (citation) sections.set("citation", quoted(`[!Cite]\n${citation}`));
+	const citation = layout.citation ? bibliographyText(bibliography) : "";
+	if (!layout.citation) sections.set("citation", "");
+	else if (citation) sections.set("citation", quoted(`[!${callout.cite}]\n${citation}`));
 	else if (previous === null) throw new Error(BIBLIOGRAPHY_REQUIRED_MESSAGE);
 
 	const fields: [string, string][] = [];
@@ -490,14 +500,17 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	// Always present so the metadata hash does not flip merely because relations appear; the `[!Synth]` `Related::` line stays user-owned.
 	fields.push(["Zotero related", related.map(citekey => `[[@${citekey}]]`).join(", ")]);
 	const links = [`[Open in Zotero](${entry.zoteroSelectURI})`, ...entry.attachments.filter(a => a.path).map(a => `[${inline(a.title) || "Attachment"}](${fileURI(a.path ?? "")})`)];
-	sections.set("metadata", `${quoted(`[!md]\n${fields.map(([label, value]) => `**${label}**:: ${value}`).join("\n")}`)}\n\n${quoted(`[!LINK]\n${links.join(" · ")}`)}`);
+	sections.set("metadata", [
+		layout.metadata ? quoted(`[!${callout.metadata}]\n${fields.map(([label, value]) => `**${label}**:: ${value}`).join("\n")}`) : "",
+		layout.links ? quoted(`[!${callout.links}]\n${links.join(" · ")}`) : "",
+	].filter(Boolean).join("\n\n"));
 
 	const notes: unknown[] = Array.isArray(entry.metadata.notes) ? entry.metadata.notes : [];
 	const noteText = notes.map(n => {
 		const html: unknown = typeof n === "string" ? n : n && typeof n === "object" && "note" in n ? (n as Record<string, unknown>).note : "";
 		return typeof html === "string" ? noteBody(html, context.noteMarkdown) : "";
 	}).filter(Boolean).join("\n\n---\n\n");
-	sections.set("notes", `## Zotero notes\n\n${noteText || "*No Zotero notes.*"}`);
+	sections.set("notes", layout.zoteroNotes ? `## Zotero notes\n\n${noteText || "*No Zotero notes.*"}` : "");
 
 	const seen = new Set<string>();
 	for (const { attachment, annotation: a } of readingOrder(entry)) {
@@ -531,11 +544,13 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		// JSON scalars and flow sequences are valid YAML and keep quoting unambiguous.
 		const frontmatter = yaml.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n");
 		const intro = ["overview", "citation"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
-		const synthesis = "## Synthesis\n\n> [!Synth]\n> **Contribution**::\n> **Related**::";
+		// The Synthesis scaffold is user-owned from the start: written once, never managed.
+		const synthesis = layout.synthesis ? `## Synthesis\n\n${quoted([`[!${callout.synthesis}]`, ...layout.synthesisLines].join("\n"))}` : "";
 		const details = ["metadata", "notes"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
 		const annotations = [...sections].filter(([id]) => id.startsWith("annotation-")).map(([id, body]) => block(id, body)).join("\n\n");
 		for (const [id, body] of sections) report.push({ id, state: "fresh", reason: "new note", body });
-		return { content: `---\n${frontmatter}\n---\n\n${owner}\n\n${intro}\n\n${synthesis}\n\n${details}\n\n## Notes\n\n## Annotations\n\n${annotations}\n`, conflicts, softConflicts, detached, reset, sections: report, images };
+		const body = [owner, intro, synthesis, details, "## Notes", `## ${layout.annotationsHeading}`].filter(Boolean).join("\n\n");
+		return { content: `---\n${frontmatter}\n---\n\n${body}\n\n${annotations}\n`, conflicts, softConflicts, detached, reset, sections: report, images };
 	}
 	// 0.5 R5: per-block states; edited blocks are soft conflicts (kept verbatim, note still written), detached blocks are
 	// user-owned and never re-rendered, malformed/duplicate/missing markers stay hard.
@@ -610,6 +625,6 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 			report.push({ id, state: "missing", reason: "managed block not found", body: "" });
 		}
 	}
-	if (additions.length) content = spliceAnnotationsInOrder(content, additions, [...sections.keys()].filter(id => id.startsWith("annotation-")));
+	if (additions.length) content = spliceAnnotationsInOrder(content, additions, [...sections.keys()].filter(id => id.startsWith("annotation-")), layout.annotationsHeading);
 	return { content, conflicts, softConflicts, detached, reset, sections: report, images };
 }

@@ -36,6 +36,25 @@ export interface CmdsZoteroSettings {
 	 * timeout (30–1800). Running out of it, or Cancel, is not a Better BibTeX failure.
 	 */
 	pickerWaitSeconds: number;
+	// 0.6.1 R17 (layout.ts): parts of the built-in literature note. A switched-off part keeps its managed block with an
+	// empty body; the defaults reproduce the 0.6.0 note byte for byte.
+	noteAbstract: boolean;
+	noteCitation: boolean;
+	noteMetadata: boolean;
+	noteLinks: boolean;
+	noteZoteroNotes: boolean;
+	/** The user-owned Synthesis scaffold of new notes. */
+	noteSynthesis: boolean;
+	/** Obsidian callout types of the built-in note's callouts. */
+	calloutAbstract: string;
+	calloutCite: string;
+	calloutMetadata: string;
+	calloutLinks: string;
+	calloutSynthesis: string;
+	/** Lines of the Synthesis callout in new notes. */
+	synthesisLines: string[];
+	/** Text of the `## …` heading annotation blocks go under in new notes. */
+	annotationsHeading: string;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -61,6 +80,11 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	recentReadsDays: 30,
 	collectConcurrency: 4, // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
 	pickerWaitSeconds: 600, // 0.6 OPT-14: ten minutes
+	// 0.6.1 R17: the 0.6.0 note layout.
+	noteAbstract: true, noteCitation: true, noteMetadata: true, noteLinks: true, noteZoteroNotes: true, noteSynthesis: true,
+	calloutAbstract: "Abstract", calloutCite: "Cite", calloutMetadata: "md", calloutLinks: "LINK", calloutSynthesis: "Synth",
+	synthesisLines: ["**Contribution**::", "**Related**::"],
+	annotationsHeading: "Annotations",
 };
 
 export interface ItemIdentity {

@@ -1,0 +1,2 @@
+- Note layout settings: switch the abstract, bibliography entry, metadata fields, links, Zotero notes and the Synthesis scaffold on or off, rename the callout types, set the Synthesis lines and the annotations heading. A switched-off part keeps its place as an empty generated block; the defaults write exactly the notes 0.6.0 wrote.
+- Theme hooks: styles.css declares CSS variables for the highlight colours (also used by `<mark>` backgrounds, lighter in dark themes), status and row-state colours and sidebar card spacing, for themes and snippets to override.

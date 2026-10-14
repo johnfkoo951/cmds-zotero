@@ -139,5 +139,5 @@ export const peerVaultsField: Field<string> = {
 
 /** A deep copy of the stored settings that the tab edits until Save. */
 export function draftOf(settings: CmdsZoteroSettings): SettingsDraft {
-	return { ...settings, peerVaults: settings.peerVaults.map(peer => ({ ...peer })), excludedTags: [...settings.excludedTags], referencesHeadings: [...settings.referencesHeadings] };
+	return { ...settings, peerVaults: settings.peerVaults.map(peer => ({ ...peer })), excludedTags: [...settings.excludedTags], referencesHeadings: [...settings.referencesHeadings], synthesisLines: [...settings.synthesisLines] };
 }
