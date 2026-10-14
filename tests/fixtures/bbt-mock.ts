@@ -1,5 +1,5 @@
 // A synthetic Better BibTeX JSON-RPC server for collect-level tests (synthetic records only; no real library data).
-// It follows the BBT 9.0.71 behaviour the refresh relies on (scratchpad bbt.json and BBT's json-rpc.ts): errors come back
+// It follows the BBT 9.0.71 behaviour the refresh relies on (live-probed on Zotero 10.0.6, and BBT's json-rpc.ts): errors come back
 // as HTTP 200 with id null, a batch array is answered in request order, item.search takes Zotero condition arrays (the
 // subset the plugin sends), and item.export / item.attachments resolve citekeys inside one library.
 import * as http from "node:http";
