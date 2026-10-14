@@ -3,7 +3,7 @@ import type { Annotation, CmdsZoteroSettings, ZoteroIndexEntry } from "./types";
 import { LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
 import { colorName } from "./annotations/colors";
 import { richTextMarkdown } from "./annotations/rich-text";
-import { DEFAULT_ANNOTATIONS_HEADING, layoutOf } from "./layout";
+import { DEFAULT_ANNOTATIONS_HEADING, layoutOf, type LayoutSettings } from "./layout";
 import { displayPageLabel, joinContinuations } from "./annotations/join";
 import { extraFields, fieldsFor, RECORD_DATES, type FieldSpec } from "./item-fields";
 
@@ -195,6 +195,15 @@ export function readingOrder(entry: ZoteroIndexEntry): { attachment: ZoteroIndex
 		if (sortable) ordered.sort((a, b) => a.annotation.sortIndex === b.annotation.sortIndex ? a.position - b.position : (a.annotation.sortIndex ?? "") < (b.annotation.sortIndex ?? "") ? -1 : 1);
 		return ordered.map(({ annotation }) => ({ attachment, annotation }));
 	});
+}
+
+/**
+ * The annotations a note renders, in reading order; with "Join continued highlights" (0.6.1) a `+` continuation is
+ * folded into the block of the highlight it continues (annotations/join.ts).
+ */
+export function annotationsInOrder(entry: ZoteroIndexEntry, settings: Partial<LayoutSettings>): ReturnType<typeof readingOrder> {
+	const ordered = readingOrder(entry);
+	return layoutOf(settings).joinContinuations ? joinContinuations(ordered).map(({ item, annotation }) => ({ attachment: item.attachment, annotation })) : ordered;
 }
 
 /** Single-line text for callout titles and inline fields. */
@@ -455,8 +464,14 @@ export function annotationTagsLine(tags: readonly string[], settings: Pick<CmdsZ
 /** 0.6.1 G21: the body of an image annotation whose image was not copied (no cached image, or the sidebar). */
 export const IMAGE_NOT_CACHED = "Image not available in Zotero's cache; open it in Zotero.";
 
-/** Renders one annotation as CMDS callout Markdown; reused by the import and the annotation sidebar. */
-export function annotationBody(a: Annotation, image: string | undefined, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings): string {
+/** 0.6.1: the body of an image annotation inserted without its image (insert-item-content). */
+export const IMAGE_IN_ZOTERO = "Image annotation; open it in Zotero.";
+
+/**
+ * Renders one annotation as CMDS callout Markdown; reused by the import and the annotation sidebar. `imageNote`: the line
+ * an image annotation without a copied image shows.
+ */
+export function annotationBody(a: Annotation, image: string | undefined, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings, imageNote: string = IMAGE_NOT_CACHED): string {
 	const uri = annotationURI(a, entry);
 	// Zotero page labels can be placeholders such as "-"; fall back to the PDF page position unless the label carries a letter or digit.
 	const label = inline(displayPageLabel(a));
@@ -471,7 +486,7 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 	}
 	if (type === "image") {
 		// 0.6.1 G21: no cached image to copy — name it and link to it instead of an empty highlight.
-		return quoted([`[!Image] ${color ? `${color} · ` : ""}p. ${label}`, `*${IMAGE_NOT_CACHED}* ${link}`, comment, tags].filter(Boolean).join("\n"));
+		return quoted([`[!Image] ${color ? `${color} · ` : ""}p. ${label}`, `*${imageNote}* ${link}`, comment, tags].filter(Boolean).join("\n"));
 	}
 	if (type === "ink") {
 		// A freehand drawing has no text and BBT renders no image for it: name it and link to it.
@@ -491,37 +506,35 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 }
 
 
-/** Frontmatter is initialized once; existing YAML remains entirely user-owned. */
-export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, settings: CmdsZoteroSettings, previous: string | null, imageHashes: ReadonlyMap<string, string> = new Map(), context: RenderContext = {}): RenderedNote {
-	const owner = ownerMarker(entry.id);
-	const conflicts: string[] = [];
-	const softConflicts: string[] = [];
-	const detached: string[] = [];
-	const reset: string[] = [];
-	const report: SectionInfo[] = [];
-	const images: ImagePlan[] = [];
-	if (previous !== null && !previous.includes(owner)) return { content: previous, conflicts: ["Existing note is not owned by this Zotero item"], softConflicts, detached, reset, sections: report, images };
+// 0.6.1: the parts of the built-in note as separate renderers, shared by renderLiterature and the insert-item-content
+// fragments (fragments.ts). Each returns Markdown without managed markers.
+
+/** The journal (journal article) or repository (preprint) of the 0.6.0 `zotero_journal` key and `Journal` field. */
+function journalOf(entry: ZoteroIndexEntry): string {
+	const itemType = metadataText(entry, "itemType");
+	return itemType === "journalArticle" ? metadataText(entry, "publicationTitle") : itemType === "preprint" ? metadataText(entry, "repository") : "";
+}
+
+/** The abstract callout, or "" when the item has no abstract. */
+export function abstractCallout(entry: ZoteroIndexEntry, calloutName: string): string {
+	const abstract = textFromHTML(entry.metadata.abstractNote);
+	return abstract ? quoted(`[!${calloutName}]\nabstract:: ${abstract}`) : "";
+}
+
+/** The bibliography callout, or "" without bibliography text. */
+export function citationCallout(bibliography: string, calloutName: string): string {
+	const citation = bibliographyText(bibliography);
+	return citation ? quoted(`[!${calloutName}]\n${citation}`) : "";
+}
+
+/** The metadata fields callout. `related`: citekeys of related items present in the index. */
+export function metadataCallout(entry: ZoteroIndexEntry, settings: CmdsZoteroSettings, related: readonly string[] = []): string {
+	const layout = layoutOf(settings);
 	const creators = creatorNames(entry);
-	const authors = creators.filter(c => c.role === "author").map(c => c.name);
-	const authorList = authors.length ? authors : creators.length ? creators.map(c => c.name) : entry.authors;
 	const tags = filteredTags(entry.tags, settings);
 	const itemType = metadataText(entry, "itemType");
-	const journal = itemType === "journalArticle" ? metadataText(entry, "publicationTitle") : itemType === "preprint" ? metadataText(entry, "repository") : "";
-	const related = (context.related ?? []).filter(citekey => /^[A-Za-z0-9_:.+/-]+$/.test(citekey));
-	const sections = new Map<string, string>();
-	// 0.6.1 R17: a switched-off part renders as an empty body; the block, its ID and its markers stay.
-	const layout = layoutOf(settings);
-	const callout = layout.callouts;
-
-	const abstract = layout.abstract ? textFromHTML(entry.metadata.abstractNote) : "";
-	sections.set("overview", [`# ${richInline(entry.title)}`, abstract ? quoted(`[!${callout.abstract}]\nabstract:: ${abstract}`) : ""].filter(Boolean).join("\n\n"));
-	// 0.5 R12: without bibliography text an owned note keeps its `citation` section byte-identical (the section is simply
-	// not re-rendered); a new note is refused rather than written with a placeholder.
-	const citation = layout.citation ? bibliographyText(bibliography) : "";
-	if (!layout.citation) sections.set("citation", "");
-	else if (citation) sections.set("citation", quoted(`[!${callout.cite}]\n${citation}`));
-	else if (previous === null) throw new Error(BIBLIOGRAPHY_REQUIRED_MESSAGE);
-
+	const journal = journalOf(entry);
+	const relatedKeys = related.filter(citekey => /^[A-Za-z0-9_:.+/-]+$/.test(citekey));
 	const fields: [string, string][] = [];
 	for (const creator of creators) fields.push([creator.role.charAt(0).toUpperCase() + creator.role.slice(1), inline(creator.name)]);
 	if (!creators.length) for (const name of entry.authors) fields.push(["Author", inline(name)]);
@@ -553,25 +566,73 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		pushSpecs(RECORD_DATES);
 	}
 	// Always present so the metadata hash does not flip merely because relations appear; the `[!Synth]` `Related::` line stays user-owned.
-	fields.push(["Zotero related", related.map(citekey => `[[@${citekey}]]`).join(", ")]);
+	fields.push(["Zotero related", relatedKeys.map(citekey => `[[@${citekey}]]`).join(", ")]);
+	return quoted(`[!${layout.callouts.metadata}]\n${fields.map(([label, value]) => `**${label}**:: ${value}`).join("\n")}`);
+}
+
+/** The links callout: the item in Zotero and its attachment files. */
+export function linksCallout(entry: ZoteroIndexEntry, calloutName: string): string {
 	const links = [`[Open in Zotero](${entry.zoteroSelectURI})`, ...entry.attachments.filter(a => a.path).map(a => `[${inline(a.title) || "Attachment"}](${fileURI(a.path ?? "")})`)];
+	return quoted(`[!${calloutName}]\n${links.join(" · ")}`);
+}
+
+/** The item's Zotero child notes (BBT JSON `notes`), in Zotero's order: their raw HTML and, if present, their key. */
+export function zoteroChildNotes(entry: ZoteroIndexEntry): { html: string; key?: string }[] {
+	const notes: unknown[] = Array.isArray(entry.metadata.notes) ? entry.metadata.notes : [];
+	return notes.map(n => {
+		const record = n && typeof n === "object" ? n as Record<string, unknown> : null;
+		const html: unknown = typeof n === "string" ? n : record && "note" in record ? record.note : "";
+		const key = record && typeof record.key === "string" && /^[A-Za-z0-9]+$/.test(record.key) ? record.key : undefined;
+		return { html: typeof html === "string" ? html : "", ...(key ? { key } : {}) };
+	});
+}
+
+/** Each child note as note-section text (`noteBody`), in Zotero's order; an empty note gives "". */
+export function zoteroNoteBodies(entry: ZoteroIndexEntry, convert?: (html: string) => string): string[] {
+	return zoteroChildNotes(entry).map(note => note.html ? noteBody(note.html, convert) : "");
+}
+
+
+/** Frontmatter is initialized once; existing YAML remains entirely user-owned. */
+export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, settings: CmdsZoteroSettings, previous: string | null, imageHashes: ReadonlyMap<string, string> = new Map(), context: RenderContext = {}): RenderedNote {
+	const owner = ownerMarker(entry.id);
+	const conflicts: string[] = [];
+	const softConflicts: string[] = [];
+	const detached: string[] = [];
+	const reset: string[] = [];
+	const report: SectionInfo[] = [];
+	const images: ImagePlan[] = [];
+	if (previous !== null && !previous.includes(owner)) return { content: previous, conflicts: ["Existing note is not owned by this Zotero item"], softConflicts, detached, reset, sections: report, images };
+	const creators = creatorNames(entry);
+	const authors = creators.filter(c => c.role === "author").map(c => c.name);
+	const authorList = authors.length ? authors : creators.length ? creators.map(c => c.name) : entry.authors;
+	const tags = filteredTags(entry.tags, settings);
+	const journal = journalOf(entry);
+	const related = context.related ?? [];
+	const sections = new Map<string, string>();
+	// 0.6.1 R17: a switched-off part renders as an empty body; the block, its ID and its markers stay.
+	const layout = layoutOf(settings);
+	const callout = layout.callouts;
+
+	const abstract = layout.abstract ? abstractCallout(entry, callout.abstract) : "";
+	sections.set("overview", [`# ${richInline(entry.title)}`, abstract].filter(Boolean).join("\n\n"));
+	// 0.5 R12: without bibliography text an owned note keeps its `citation` section byte-identical (the section is simply
+	// not re-rendered); a new note is refused rather than written with a placeholder.
+	const citation = layout.citation ? citationCallout(bibliography, callout.cite) : "";
+	if (!layout.citation) sections.set("citation", "");
+	else if (citation) sections.set("citation", citation);
+	else if (previous === null) throw new Error(BIBLIOGRAPHY_REQUIRED_MESSAGE);
+
 	sections.set("metadata", [
-		layout.metadata ? quoted(`[!${callout.metadata}]\n${fields.map(([label, value]) => `**${label}**:: ${value}`).join("\n")}`) : "",
-		layout.links ? quoted(`[!${callout.links}]\n${links.join(" · ")}`) : "",
+		layout.metadata ? metadataCallout(entry, settings, related) : "",
+		layout.links ? linksCallout(entry, callout.links) : "",
 	].filter(Boolean).join("\n\n"));
 
-	const notes: unknown[] = Array.isArray(entry.metadata.notes) ? entry.metadata.notes : [];
-	const noteText = notes.map(n => {
-		const html: unknown = typeof n === "string" ? n : n && typeof n === "object" && "note" in n ? (n as Record<string, unknown>).note : "";
-		return typeof html === "string" ? noteBody(html, context.noteMarkdown) : "";
-	}).filter(Boolean).join("\n\n---\n\n");
+	const noteText = zoteroNoteBodies(entry, context.noteMarkdown).filter(Boolean).join("\n\n---\n\n");
 	sections.set("notes", layout.zoteroNotes ? `## Zotero notes\n\n${noteText || "*No Zotero notes.*"}` : "");
 
 	const seen = new Set<string>();
-	// 0.6.1: with "Join continued highlights" a `+` continuation renders inside the block of the highlight it continues.
-	const ordered = readingOrder(entry);
-	const annotationList = layout.joinContinuations ? joinContinuations(ordered).map(({ item, annotation }) => ({ attachment: item.attachment, annotation })) : ordered;
-	for (const { attachment, annotation: a } of annotationList) {
+	for (const { attachment, annotation: a } of annotationsInOrder(entry, settings)) {
 		const id = `annotation-${key(attachment.key)}-${key(a.key)}`;
 		if (a.attachmentKey !== attachment.key) throw new Error("Annotation attachment identity mismatch");
 		if (seen.has(id)) continue;

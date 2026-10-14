@@ -268,3 +268,21 @@ mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius
 .cmds-zotero-batch-progress button {
   align-self: flex-start;
 }
+
+/* 0.6.1 insert-item-content: the replace preview's line diff. */
+.cmds-zotero-diff {
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-smaller);
+}
+.cmds-zotero-diff-removed {
+  color: var(--cmds-zotero-state-error);
+}
+.cmds-zotero-diff-added {
+  color: var(--cmds-zotero-state-ok);
+}
+.cmds-zotero-diff-same {
+  color: var(--text-muted);
+}
