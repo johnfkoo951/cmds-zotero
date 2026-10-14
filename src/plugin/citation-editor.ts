@@ -206,7 +206,7 @@ export class CitationEditorController implements CitationEditorHost {
 			if (!page) { new Notice(`Page ${label} could not be found in this PDF; it opens where you stopped reading.`); void this.plugin.run(() => this.plugin.navigation.openPdf(entry, undefined, undefined, copy, target.attachment.key)); return; }
 			void this.plugin.run(async () => {
 				await this.plugin.navigation.openPdf(entry, page.page, undefined, copy, target.attachment.key);
-				if (page.source !== "label" || !copy) new Notice(pageSourceText(page, label));
+				if (page.source !== "label") new Notice(pageSourceText(page, label));
 			});
 		};
 		if (targets.length === 1) open(targets[0]);

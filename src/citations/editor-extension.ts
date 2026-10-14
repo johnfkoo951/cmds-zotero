@@ -38,8 +38,10 @@ function blockedLines(doc: Text, toLine: number): Set<number> {
 	const blocked = new Set<number>();
 	let fenced = false;
 	let frontmatter = doc.lines > 0 && doc.line(1).text.trim() === "---";
-	for (let number = 1; number <= toLine && number <= doc.lines; number++) {
-		const text = doc.line(number).text;
+	let number = 0;
+	// One sequential pass over the line texts (no per-line lookup); stops at the last visible line.
+	for (const text of doc.iterLines(1, Math.min(toLine, doc.lines) + 1)) {
+		number++;
 		if (frontmatter) { blocked.add(number); if (number > 1 && text.trim() === "---") frontmatter = false; continue; }
 		if (/^\s*(```|~~~)/.test(text)) { fenced = !fenced; blocked.add(number); continue; }
 		if (fenced) blocked.add(number);

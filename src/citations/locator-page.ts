@@ -36,7 +36,7 @@ export function locatorPageIn(attachment: Pick<Attachment, "key" | "annotations"
 
 /** What the Notice says about how the page was found. */
 export function pageSourceText(page: LocatorPage, label: string): string {
-	if (page.source === "label") return `Opened at the page labelled ${label} (page ${page.page} of the PDF).`;
-	if (page.source === "offset") return `Opened at page ${page.page} of the PDF: the annotated pages put printed page ${label} there.`;
+	if (page.source === "label") return `Printed page ${label} is page ${page.page} of the PDF (an annotation sits on it).`;
+	if (page.source === "offset") return `Printed page ${label} was taken as page ${page.page} of the PDF, from the offset between the annotated pages' labels and positions.`;
 	return `No annotation tells where printed page ${label} is, so ${label} was read as the PDF's page ${page.page}, counting from 1; the printed page may differ.`;
 }
