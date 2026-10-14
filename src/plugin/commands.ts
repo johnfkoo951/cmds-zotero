@@ -57,7 +57,7 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 			const request = parseProtocolRequest(params, plugin.app.vault.getName());
 			const result = await plugin.service.resolve({ itemKey: request.itemKey, libraryID: request.libraryID });
 			if (result.status !== "resolved") throw new Error(`Could not resolve this source: ${result.status}. Refresh the index and retry.`);
-			if (request.target === "pdf") await plugin.navigation.openPdf(result.entry, request.page ?? 1, request.annotation);
+			if (request.target === "pdf") await plugin.navigation.openPdf(result.entry, request.page, request.annotation);
 			else if (request.target === "import") await plugin.literature.previewImport(result.entry);
 			else await plugin.navigation.openNote(result.entry);
 		});

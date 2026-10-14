@@ -1,4 +1,4 @@
-import { parseZoteroURI, type ParsedZoteroURI } from "./uris";
+import { parseZoteroURI, pdfURI, type ParsedZoteroURI } from "./uris";
 import type { ZoteroIndex, ZoteroIndexEntry } from "./types";
 
 export interface ProtocolRequest {
@@ -104,6 +104,22 @@ export function resolveOpenPdfTarget(index: Pick<ZoteroIndex, "entries">, parsed
 	if (parents.length > 1) return { kind: "ambiguous" };
 	if (parents.length === 1) return { kind: "parent", entry: parents[0] };
 	return { kind: "not-found" };
+}
+
+/** One PDF attachment an "open PDF" action can open, with the link it opens. */
+export interface PdfTarget { attachment: ZoteroIndexEntry["attachments"][number]; uri: string }
+
+/**
+ * The PDF attachments of `entry` an "open PDF" action offers, each with its `zotero://open-pdf` link (0.6.1
+ * resume-reading-position). Without a page the link carries no `page` parameter, so Zotero's reader opens where the
+ * person stopped reading (Zotero keeps that position itself; Better BibTeX does not expose it). An explicit page and an
+ * annotation key are kept. `attachmentKey` and `annotationKey` narrow the choice to the attachments that hold them.
+ */
+export function pdfTargets(entry: ZoteroIndexEntry, page?: number, annotationKey?: string, attachmentKey?: string): PdfTarget[] {
+	let attachments = entry.attachments.filter(a => a.path?.toLowerCase().endsWith(".pdf") || a.annotations.length > 0);
+	if (attachmentKey) attachments = attachments.filter(a => a.key === attachmentKey); // 0.5 R15
+	if (annotationKey) attachments = attachments.filter(a => a.annotations.some(annotation => annotation.key === annotationKey));
+	return attachments.map(attachment => ({ attachment, uri: pdfURI(attachment.openURI, page, annotationKey) }));
 }
 
 export function citekeyAtCursor(line: string, column: number, selection = ""): string {
