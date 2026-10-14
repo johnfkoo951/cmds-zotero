@@ -14,12 +14,12 @@ Updates and batches:
 
 - The update preview lets you choose which parts to refresh (title and abstract, bibliography entry, metadata and links, Zotero notes, annotations); the rest stays byte for byte.
 - Update all owned literature notes, the new Import literature notes by search (`col:`, `tag:` and the other picker fields; new notes only, with progress and Cancel) and Adopt existing literature notes first show a review list with what happens to each note and a box per row. Nothing is read from Zotero or written before Apply.
-- New command Update literature notes changed in Zotero: lists only notes whose item or annotations changed since the note was last written or since a date you choose; an unknown date is never treated as unchanged.
+- New command Update literature notes changed in Zotero: lists only notes whose item or annotations changed (dates from the saved index, so refresh it first) since the note was last written or since a date you choose; an unknown date is never treated as unchanged.
 - Notes synced by Zotero Better Notes are skipped by batch updates and get a warning in single updates.
 
 Adopting and repairing notes:
 
-- Adopt current note as literature note (and Adopt existing literature notes for every matching note in the vault, after the review list): notes made by Zotero Integration, ZotLit or named by citekey are matched by citekey, DOI or Zotero link (several matching items are offered to choose from; a DOI-only match is unticked), get the missing identity keys line by line and the generated sections appended below your text, with a backup. Hubs, Raw Sources, Better Notes notes and notes CMDS already owns are refused.
+- Adopt current note as literature note (and Adopt existing literature notes for every matching note in the vault, after the review list): notes made by Zotero Integration, ZotLit or named by citekey are matched by citekey, DOI or Zotero link (several matching items are offered to choose from; a DOI-only match is unticked), get the missing identity keys line by line and the generated sections appended below your text, with a backup. Paper hubs and analyses, Raw Sources, Bookends and Better Notes notes, and notes CMDS already owns are refused.
 - Rebuild current literature note: after a backup, re-renders the generated sections and repairs damaged, duplicate and missing markers. Every line you wrote stays; an edited or detached duplicate keeps its text.
 - Per-note previewed frontmatter patches with backup and checks before, during and after the write: Refresh frontmatter of current note from Zotero (only the plugin's metadata keys the note already has; never `zoteroID` or `tags`), Remove legacy keys from current note (the keys 0.3 and 0.4 wrote; Report notes with legacy Zotero keys lists them vault-wide without changing anything), and Relink current note to merged Zotero item (when Zotero merged the item; only with a complete index, several candidates go to a chooser).
 
@@ -42,13 +42,13 @@ Citations:
 
 Bibliography, references and export:
 
-- Bibliography style from Zotero's installed styles (Settings → Choose style, or the command Choose bibliography style): Zotero's `styles` folder is listed read-only, and a style Better BibTeX cannot render is refused with the reason. Changing the style or locale by hand is checked the same way on Save.
+- Bibliography style from Zotero's installed styles (Settings → Choose an installed style, or the command Choose bibliography style from installed styles): Zotero's `styles` folder is listed read-only, and a style Better BibTeX cannot render is refused with the reason. Changing the style or locale by hand is checked the same way on Save.
 - Bibliography locale (for example `de-DE` or `ko-KR`; empty keeps the style's default). A note's `csl` and `lang` frontmatter set the style and locale for that note, its references sidebar, Insert bibliography and the export kit.
-- Copy bibliography puts formatted (HTML) and plain text on the clipboard, so it pastes formatted into word processors, and keeps the style's own order (Bibliography order: style, first citation or alphabetical).
+- Copy bibliography for current note puts formatted (HTML) and plain text on the clipboard, so it pastes formatted into word processors, and keeps the style's own order (Bibliography order: style, first citation or alphabetical).
 - The references sidebar follows pandoc: citations in code, HTML comments and `%%` comments, `\@` and e-mail addresses are not counted; `-@key` and `nocite` keys are. Each row can jump to the previous or next occurrence; palette commands do the same for the citation at the cursor.
 - New command Check citations in current note: unknown, ambiguous and former keys, keys without a literature note, and nocite keys, from the saved index; each occurrence opens in the note.
 - New command Insert or update references section: an opt-in, previewed, plugin-owned block at the end of the note (its own markers; the note is backed up before the first insert). An edited block is kept as it is, a detached one is never updated.
-- New command Export pandoc kit for current note: a cleaned copy (literature links become `[@key]`, callouts become blockquotes, comments and markers removed), the cited CSL-JSON, a pandoc defaults file and the command line on the clipboard, in *Export folder* (default `CMDS Zotero exports`). The plugin never runs pandoc, and an earlier kit you changed is never overwritten. See `docs/pandoc-docx.md`.
+- New command Export pandoc kit for current note: a cleaned copy (literature links become `[@key]`, callouts become blockquotes, comments and markers removed), the cited CSL-JSON, a pandoc defaults file and the command line on the clipboard, in *Export kit folder* (default `CMDS Zotero exports`). The plugin never runs pandoc, and an earlier kit you changed is never overwritten. See `docs/pandoc-docx.md`.
 
 Other:
 
