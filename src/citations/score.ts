@@ -1,13 +1,24 @@
 import type { ZoteroIndexEntry } from "../types";
 
+/**
+ * 0.6.2 suggester-unicode-query: the comparison form of suggester text. Composed and decomposed Korean (NFC/NFD) compare
+ * equal, and Latin diacritics are dropped (`é` → `e`, `ü` → `u`): decomposed, non-spacing marks removed, recomposed
+ * (Hangul syllables come back whole), lower-cased. ASCII text only changes case, so ASCII ranking is as before.
+ */
+export function searchFold(value: string): string {
+	// eslint-disable-next-line no-control-regex -- the ASCII fast path: no decomposition can apply
+	if (/^[\x00-\x7f]*$/.test(value)) return value.toLowerCase();
+	return value.normalize("NFD").replace(/\p{Mn}/gu, "").normalize("NFC").toLowerCase();
+}
+
 /** Ranks index entries for inline completion: exact citekey, citekey prefix, then all query terms across citekey/title/authors/year. Underscores stand in for spaces. */
 export function matchScore(entry: ZoteroIndexEntry, query: string): number {
-	const q = query.toLowerCase().replace(/_/g, " ").trim();
+	const q = searchFold(query).replace(/_/g, " ").trim();
 	if (!q) return 1;
 	const citekey = entry.citekey.toLowerCase();
 	if (citekey === q) return 100;
 	if (citekey.startsWith(q)) return 80;
-	const haystack = `${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`.toLowerCase();
+	const haystack = searchFold(`${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`);
 	const terms = q.split(/\s+/).filter(Boolean);
 	if (!terms.every(term => haystack.includes(term))) return 0;
 	return 40 + Math.min(terms.length, 5);
@@ -21,7 +32,7 @@ export interface CompletionRow {
 	readonly entry: ZoteroIndexEntry;
 	/** `entry.citekey`, lower-cased. */
 	readonly citekey: string;
-	/** Citekey, title, authors and year, lower-cased exactly as `matchScore` builds them. */
+	/** Citekey, title, authors and year, folded (`searchFold`) exactly as `matchScore` builds them. */
 	readonly haystack: string;
 }
 
@@ -32,7 +43,7 @@ export interface CompletionRow {
 export function completionRows(entries: readonly ZoteroIndexEntry[]): CompletionRow[] {
 	return entries.map(entry => {
 		const citekey = entry.citekey.toLowerCase();
-		return { entry, citekey, haystack: `${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`.toLowerCase() };
+		return { entry, citekey, haystack: searchFold(`${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`) };
 	}).sort((a, b) => a.entry.citekey.localeCompare(b.entry.citekey));
 }
 
@@ -49,7 +60,7 @@ function hasAllTerms(haystack: string, terms: readonly string[]): boolean {
  * term matches can be shown, so later term matches skip the substring test.
  */
 export function rankCompletions(rows: readonly CompletionRow[], query: string, limit = COMPLETION_LIMIT): ZoteroIndexEntry[] {
-	const text = query.toLowerCase().replace(/_/g, " ").trim();
+	const text = searchFold(query).replace(/_/g, " ").trim();
 	if (!text) return rows.slice(0, limit).map(row => row.entry);
 	const terms = text.split(/\s+/).filter(Boolean);
 	const exact: CompletionRow[] = [];

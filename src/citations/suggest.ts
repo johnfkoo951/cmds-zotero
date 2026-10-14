@@ -1,15 +1,38 @@
-import { Editor, EditorPosition, EditorSuggest, EditorSuggestContext, EditorSuggestTriggerInfo, TFile } from "obsidian";
+import { Editor, EditorPosition, EditorSuggest, EditorSuggestContext, EditorSuggestTriggerInfo, Keymap, Notice, TFile } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
 import { indexDerived } from "../index-derived";
 import { rankCompletions } from "./score";
 import { matchesQuery, queryContext, rankingQuery } from "../search/query";
+import { PickerModal } from "../modals/picker";
+import { authorDateLabel } from "./author-date";
+import { acceptEdit, bracketSpan, type LineEdit } from "./cluster";
 
-const KEY_CHARS = /^[A-Za-z0-9_:.+/-]*$/;
+/** 0.6.2 suggester-unicode-query: letters, marks and digits of any script (Korean in NFC or NFD, accented Latin) besides citekey characters. */
+const KEY_CHARS = /^[\p{L}\p{M}\p{N}_:.+/-]*$/u;
+
+/** The suggester's internal list; Shift+Enter and Mod+Enter accept the highlighted row through it. */
+interface SuggestList { useSelectedItem?(event: KeyboardEvent): boolean }
 
 /** Inline `[@` / `@` citekey completion backed by the local index; never calls BBT while typing. */
 export class CitekeySuggest extends EditorSuggest<ZoteroIndexEntry> {
-	constructor(private plugin: CMDSZoteroPlugin) { super(plugin.app); }
+	constructor(private plugin: CMDSZoteroPlugin) {
+		super(plugin.app);
+		// 0.6.2 suggester-alternate-insert: modifier keys insert the alternate forms; the hints show under the list.
+		this.setInstructions([
+			{ command: "↵", purpose: "cite" },
+			{ command: "shift ↵", purpose: "narrative @key" },
+			{ command: "mod ↵", purpose: "link the literature note" },
+		]);
+		for (const modifier of ["Shift", "Mod"] as const) {
+			this.scope.register([modifier], "Enter", event => {
+				const list = (this as unknown as { suggestions?: SuggestList }).suggestions;
+				if (!list?.useSelectedItem) return true;
+				list.useSelectedItem(event);
+				return false;
+			});
+		}
+	}
 
 	onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
 		const mode = this.plugin.settings.citationTrigger;
@@ -47,22 +70,41 @@ export class CitekeySuggest extends EditorSuggest<ZoteroIndexEntry> {
 		el.createDiv({ cls: "cmds-zotero-suggest-meta", text: `@${entry.citekey} · ${entry.authors.slice(0, 2).join("; ")}${entry.authors.length > 2 ? " et al." : ""} · ${entry.year}${entry.libraryType === "group" ? ` · group ${entry.groupID}` : ""}` });
 	}
 
+	/**
+	 * Enter cites (`[@key]`, or `@key` inside a bracket); typing `[@` right after a cluster adds the key to it (0.6.2
+	 * multi-source-citation-cluster). Shift inserts a narrative `@key`; Mod links the literature note.
+	 */
 	selectSuggestion(entry: ZoteroIndexEntry, event: MouseEvent | KeyboardEvent): void {
 		const context = this.context;
 		if (!context) return;
 		const editor = context.editor;
-		const before = editor.getLine(context.start.line).slice(0, context.start.ch);
-		const after = editor.getLine(context.end.line).slice(context.end.ch);
-		const wiki = before.endsWith("[[");
-		const insideBracket = !wiki && before.endsWith("[");
-		let text: string;
-		let closer = "";
-		if (wiki) { text = `@${entry.citekey}`; closer = after.startsWith("]]") ? "" : "]]"; }
-		else if (insideBracket) { text = `@${entry.citekey}`; closer = after.startsWith("]") ? "" : "]"; }
-		else if (event.shiftKey) text = `@${entry.citekey}`;
-		else text = /[[;]\s*-?$/.test(before) ? `@${entry.citekey}` : `[@${entry.citekey}]`;
-		editor.replaceRange(text + closer, context.start, context.end);
-		const ch = context.start.ch + text.length + (closer ? closer.length : 0);
-		editor.setCursor({ line: context.start.line, ch });
+		const line = editor.getLine(context.start.line);
+		if (Keymap.isModifier(event, "Mod") && this.insertNoteLink(entry, editor, context.file, context.start, context.end, line)) return;
+		apply(editor, context.start.line, acceptEdit(line, context.start.ch, context.end.ch, entry.citekey, event.shiftKey ? "narrative" : "default"));
 	}
+
+	/**
+	 * Mod+Enter: a link to the entry's literature note in place of the typed `[@query]`. False (the citation is inserted
+	 * instead) inside a multi-key cluster or when the vault has no note for the entry; several notes are offered to choose.
+	 */
+	private insertNoteLink(entry: ZoteroIndexEntry, editor: Editor, file: TFile | null, start: EditorPosition, end: EditorPosition, line: string): boolean {
+		const span = bracketSpan(line, start.ch, end.ch);
+		const index = this.plugin.lastIndex;
+		if (!span || !index) return false;
+		const files = this.plugin.links.localFiles(entry, index);
+		if (!files.length) { new Notice(`No literature note for @${entry.citekey} in this vault yet; inserted the citation instead.`); return false; }
+		const insert = (note: TFile): void => {
+			if (editor.getLine(start.line) !== line) { new Notice("The line changed while choosing; nothing was inserted."); return; }
+			const link = this.plugin.app.fileManager.generateMarkdownLink(note, file?.path ?? "", undefined, authorDateLabel(entry));
+			apply(editor, start.line, { from: span.from, to: span.to, text: link, cursor: span.from + link.length });
+		};
+		if (files.length === 1) insert(files[0]);
+		else new PickerModal(this.plugin.app, files, note => note.path, insert, `Choose the literature note of @${entry.citekey}…`).open();
+		return true;
+	}
+}
+
+function apply(editor: Editor, line: number, edit: LineEdit): void {
+	editor.replaceRange(edit.text, { line, ch: edit.from }, { line, ch: edit.to });
+	editor.setCursor({ line, ch: edit.cursor });
 }

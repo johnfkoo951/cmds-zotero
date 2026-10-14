@@ -1,6 +1,9 @@
-import { DEFAULT_SETTINGS, type AnnotationTagStyle, type CitationTrigger, type CmdsZoteroSettings } from "./types";
+import { DEFAULT_SETTINGS, type AnnotationTagStyle, type CitationFormatSetting, type CitationTrigger, type CmdsZoteroSettings } from "./types";
 import { isAnnotationColor } from "./annotations/colors";
 import { annotationsHeading, calloutType, synthesisLines } from "./layout";
+
+/** 0.6.2: the stored names of the fixed citation formats (the same list as citations/formats.ts, kept here so the offline core stays small). */
+export const CITATION_FORMAT_SETTINGS: readonly CitationFormatSetting[] = ["pandoc", "narrative", "wikilink", "author-date", "zotero-link", "note-link"];
 
 function integer(value: unknown, fallback: number, min: number, max: number): number {
 	return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
@@ -62,6 +65,13 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		annotationTagStyle: (["plain", "hashtag"] as const).includes(data.annotationTagStyle as AnnotationTagStyle) ? data.annotationTagStyle as AnnotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
 		followZoteroSelection: (["off", "focus", "interval"] as const).find(mode => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection, // 0.6.1
 		followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30),
+		// 0.6.2 WP5: citations editor.
+		citationFormat: CITATION_FORMAT_SETTINGS.find(format => format === data.citationFormat) ?? DEFAULT_SETTINGS.citationFormat,
+		citekeyProblemMarks: flag(data.citekeyProblemMarks, DEFAULT_SETTINGS.citekeyProblemMarks),
+		citationHover: flag(data.citationHover, DEFAULT_SETTINGS.citationHover),
+		authorDateRendering: flag(data.authorDateRendering, DEFAULT_SETTINGS.authorDateRendering),
+		citationClickAction: (["nothing", "note", "pdf"] as const).find(mode => mode === data.citationClickAction) ?? DEFAULT_SETTINGS.citationClickAction,
+		pasteZoteroLinks: flag(data.pasteZoteroLinks, DEFAULT_SETTINGS.pasteZoteroLinks),
 	};
 }
 
