@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.2 — 2026-10-15
+
+A citation editor, bibliographies in Zotero's installed styles and a pandoc export kit. Zotero stays read-only, nothing leaves your computer and the plugin runs no other program. Two defaults change what you see: citekey problems are underlined in the editor (Settings → Citations), and *Copy bibliography* keeps the style's own order (Bibliography order: citation restores 0.6.1's order). Literature notes and managed section IDs are unchanged.
+
+Citations:
+
+- The `[@` suggester finds Korean in composed or decomposed form and ignores accents (é matches e). Shift+Enter inserts a narrative `@key`, Mod+Enter a link to the literature note.
+- Citations join the one at the cursor: typing `[@` right after `[@a]`, or citing from Zotero's picker, the Zotero selection or the literature picker, gives `[@a; @b]` without repeating keys.
+- Pandoc prefixes, locators and suffixes are understood (`[see @key, pp. 33–35; also -@k2, ch. 1]`). New command Edit citation locator.
+- Named citation formats (pandoc, narrative, `[[@key]]`, author-date text, Zotero link, literature-note link), each with an insert command, plus a default format. These are fixed formats, not templates.
+- Citekeys the index does not have, that several items carry, or that are a former key are underlined (Settings → Citations → Mark citekey problems). Nothing is marked before the index loads, and an incomplete index never marks a key as unknown.
+- Optional hover card (title, authors, year, bibliography entry) and an optional author-date display such as "(Kim & Lee, 2020, p. 3)" in reading view and live preview. Both are off by default and never change the note text.
+- Mod+click on a citation can open its literature note or its PDF (off by default). Right-click entries act on the clicked citation, not the cursor.
+- New commands: Citation actions at cursor, Open literature note for citation at cursor (offers the import preview when there is no note), Open PDF at citation locator (the locator's page label is matched to Zotero's page labels when the index knows them; the Notice says how the page was found), Copy PDF page link for citation at cursor, Fix renamed citekey in this note (previewed, this note's body only, one undo step).
+- A citekey that several items carry now asks which item instead of failing.
+- Opt-in: pasting or dropping Zotero item links (`zotero://select/…`) inserts a citation, matched by library and item key; links the index does not know are pasted as they are.
+
+Bibliography, references and export:
+
+- Bibliography style from Zotero's installed styles (Settings → Choose style, or the command Choose bibliography style): Zotero's `styles` folder is listed read-only, and a style Better BibTeX cannot render is refused with the reason. Changing the style or locale by hand is checked the same way on Save.
+- Bibliography locale (for example `de-DE` or `ko-KR`; empty keeps the style's default). A note's `csl` and `lang` frontmatter set the style and locale for that note, its references sidebar, Insert bibliography and the export kit.
+- Copy bibliography puts formatted (HTML) and plain text on the clipboard, so it pastes formatted into word processors, and keeps the style's own order (Bibliography order: style, first citation or alphabetical).
+- The references sidebar follows pandoc: citations in code, HTML comments and `%%` comments, `\@` and e-mail addresses are not counted; `-@key` and `nocite` keys are. Each row can jump to the previous or next occurrence; palette commands do the same for the citation at the cursor.
+- New command Check citations in current note: unknown, ambiguous and former keys, keys without a literature note, and nocite keys, from the saved index; each occurrence opens in the note.
+- New command Insert or update references section: an opt-in, previewed, plugin-owned block at the end of the note (its own markers; the note is backed up before the first insert). An edited block is kept as it is, a detached one is never updated.
+- New command Export pandoc kit for current note: a cleaned copy (literature links become `[@key]`, callouts become blockquotes, comments and markers removed), the cited CSL-JSON, a pandoc defaults file and the command line on the clipboard, in *Export folder* (default `CMDS Zotero exports`). The plugin never runs pandoc, and an earlier kit you changed is never overwritten. See `docs/pandoc-docx.md`.
+
+Other:
+
+- The README's privacy section now also names the agent `pdf-text` action's reads of Zotero's PDFs and the read of each peer vault's plugin list; pruning old index backups no longer logs to the console.
+
 ## 0.6.1 — 2026-10-14
 
 Literature notes you can shape, a much richer annotations sidebar, fielded search and the Zotero selection on demand. Zotero stays read-only and nothing leaves your computer. With the default settings, existing literature notes render as 0.6.0 wrote them, with one exception: tags listed in *Excluded tags* are now also left out of annotation tags. Managed section IDs are unchanged.
