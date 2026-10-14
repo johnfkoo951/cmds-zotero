@@ -6,7 +6,7 @@ import { indexDerived } from "../index-derived";
 import { annotationBody, annotationURI } from "../note-writer";
 import { colorName } from "../annotations/colors";
 import {
-	ANNOTATION_GROUPS, ANNOTATION_SORTS, NO_COLOR, annotationRows, emptyListText, facetCounts, facetsActive, groupAnnotations, noFacets, sectionVisibility, sortAnnotations,
+	ANNOTATION_GROUPS, ANNOTATION_SORTS, NO_COLOR, annotationRows, emptyAnnotationsText, emptyListText, facetCounts, facetsActive, groupAnnotations, noFacets, sectionVisibility, sortAnnotations,
 	type AnnotationFacets, type AnnotationGroup, type AnnotationRow, type AnnotationSection, type AnnotationSort, type CommentFacet,
 } from "../annotations/filter";
 import { markdownLink } from "../uris";
@@ -14,7 +14,7 @@ import { citekeyAtCursor } from "../protocol";
 import { PickerModal } from "../modals/picker";
 import {
 	cursorTarget, emptySourceText, entryForRef, itemRef, parseViewState, selectionTarget, serializeViewState,
-	type AnnotationsViewState, type CursorTarget, type ItemRef, type SidebarMode,
+	type AnnotationsViewState, type CursorTarget, type ItemRef, type SelectionTarget, type SidebarMode,
 } from "../annotations/view-state";
 import { LiveOverlay, sourceLabel } from "../annotations/overlay";
 import { CARD_ACTIONS, annotationDataText, citationFor, identityLinkFor, scopedKey, type CardActionId } from "../annotations/card-actions";
@@ -45,8 +45,14 @@ export class AnnotationsView extends ItemView {
 	private mode: SidebarMode = "note";
 	private pinned: ItemRef | null = null;
 	private selected: ItemRef | null = null;
-	/** The in-place message of the last selection read that showed nothing (not persisted). */
-	private selectionMessage: string | null = null;
+	/**
+	 * The identities of the last Zotero selection read that did not settle on one indexed item (empty, several, not
+	 * indexed, or read before the index loaded). Resolved against the current entries at each render, so a later index
+	 * load or refresh shows it without reading Zotero again (not persisted).
+	 */
+	private selection: ItemRef[] | null = null;
+	/** The entry the attachment facet's keys belong to; null after a restore, until the restored item is shown. */
+	private facetsOwner: string | null = null;
 	private reading = false;
 	// 0.6.1 follow-zotero-selection: opt-in polling (window focus or an interval), never a listener.
 	private readonly poller = new SelectionPoller(() => Date.now());
@@ -96,6 +102,8 @@ export class AnnotationsView extends ItemView {
 
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
 		this.applyViewState(parseViewState(state));
+		this.selection = null;
+		this.facetsOwner = null;
 		await super.setState(state, result);
 		this.render();
 	}
@@ -133,7 +141,7 @@ export class AnnotationsView extends ItemView {
 		}
 		if (mode === "selection" && this.mode !== "selection") this.poller.reset();
 		this.mode = mode;
-		this.selectionMessage = null;
+		this.selection = null;
 		this.saveState();
 		this.render();
 	}
@@ -152,18 +160,19 @@ export class AnnotationsView extends ItemView {
 		try {
 			const items = await this.plugin.bbt.selectedItems();
 			this.poller.remember(items);
-			const target = selectionTarget(this.plugin.cachedEntries(), items);
-			if (target.kind === "resolved") { this.selected = itemRef(target.entry); this.selectionMessage = null; }
-			else if (target.kind === "several") {
+			// UI negatives only with a loaded snapshot: before the index loads, the raw selection waits for it.
+			const target = items.length && this.plugin.indexLoaded() ? selectionTarget(this.plugin.cachedEntries(), items) : null;
+			if (target?.kind === "resolved") { this.selected = itemRef(target.entry); this.selection = null; }
+			else if (target?.kind === "several") {
 				new PickerModal(this.app, target.entries, entry => `${entry.title} — @${entry.citekey} · library ${entry.libraryID}`, entry => {
 					this.selected = itemRef(entry);
-					this.selectionMessage = null;
+					this.selection = null;
 					this.saveState();
 					this.render();
 				}, "Several items are selected in Zotero. Choose one…").open();
 			} else {
 				this.selected = null;
-				this.selectionMessage = target.kind === "empty" ? "Nothing is selected in Zotero. Select an item there, then read the selection again." : notIndexedText(target.count);
+				this.selection = items.map(itemRef);
 			}
 		} catch (error) {
 			new Notice(`Could not read the Zotero selection: ${error instanceof Error ? error.message : String(error)}`);
@@ -196,16 +205,17 @@ export class AnnotationsView extends ItemView {
 	}
 
 	private showFollowed(items: SelectedItem[], rerender: boolean): void {
-		const target = selectionTarget(this.plugin.cachedEntries(), items);
-		if (target.kind === "empty") { if (rerender) this.render(); return; }
-		if (target.kind === "resolved") {
-			const same = this.selected?.libraryID === target.entry.libraryID && this.selected.itemKey === target.entry.itemKey && this.selectionMessage === null;
+		if (!items.length) { if (rerender) this.render(); return; }
+		// Before the index loads nothing is judged: the raw selection is kept and resolved once the index is there.
+		const target = this.plugin.indexLoaded() ? selectionTarget(this.plugin.cachedEntries(), items) : null;
+		if (target?.kind === "resolved") {
+			const same = this.selected?.libraryID === target.entry.libraryID && this.selected.itemKey === target.entry.itemKey && this.selection === null;
 			if (same) { if (rerender) this.render(); return; }
 			this.selected = itemRef(target.entry);
-			this.selectionMessage = null;
+			this.selection = null;
 		} else {
 			this.selected = null;
-			this.selectionMessage = target.kind === "several" ? `${target.entries.length} indexed items are selected in Zotero. Select one item, or use Read selection to choose.` : notIndexedText(target.count);
+			this.selection = items.map(itemRef);
 		}
 		this.saveState();
 		this.render();
@@ -261,11 +271,24 @@ export class AnnotationsView extends ItemView {
 		// UI negatives only with a loaded snapshot.
 		if (!this.plugin.indexLoaded()) return { entry: null, empty: "The index is not loaded yet." };
 		if (this.mode === "pinned") return { entry: entryForRef(entries, this.pinned), empty: emptySourceText("pinned") };
-		if (this.mode === "selection") return { entry: entryForRef(entries, this.selected), empty: this.reading ? "Reading the Zotero selection…" : this.selectionMessage ?? emptySourceText("selection", { selected: this.selected !== null }) };
+		if (this.mode === "selection") return this.selectionEntry(entries);
 		const key = this.cursorKey();
 		this.shownCursorKey = key;
 		const target: CursorTarget = cursorTarget(entries, key);
 		return { entry: target.kind === "resolved" ? target.entry : null, empty: emptySourceText("cursor", { cursor: target }) };
+	}
+
+	/** Selection mode: a pending selection read is resolved against the entries shown now; one indexed item settles it. */
+	private selectionEntry(entries: ZoteroIndexEntry[]): { entry: ZoteroIndexEntry | null; empty: string } {
+		const reading = this.reading ? "Reading the Zotero selection…" : null;
+		if (this.selection) {
+			const target = selectionTarget(entries, this.selection);
+			if (target.kind !== "resolved") return { entry: null, empty: reading ?? selectionText(target) };
+			this.selected = itemRef(target.entry);
+			this.selection = null;
+			this.saveState();
+		}
+		return { entry: entryForRef(entries, this.selected), empty: reading ?? emptySourceText("selection", { selected: this.selected !== null }) };
 	}
 
 	private noteEntry(entries: ZoteroIndexEntry[]): ZoteroIndexEntry | null {
@@ -287,14 +310,17 @@ export class AnnotationsView extends ItemView {
 		const container = this.contentEl;
 		container.empty();
 		container.addClass("cmds-zotero-sidebar");
-		const previous = this.entry;
 		const followed = this.followedEntry();
 		this.baseEntry = followed.entry;
 		// The first render uses the cached snapshot (and any live entry already fetched); it never waits for Zotero.
 		const live = followed.entry ? this.overlay.get(this.generation(), followed.entry.id) : null;
 		this.entry = live?.entry ?? followed.entry;
-		// Attachment keys belong to one item: another item starts without an attachment facet.
-		if (previous?.id !== this.entry?.id) this.facets.attachments = [];
+		// Attachment keys belong to one item: another item starts without an attachment facet. A restored filter belongs to
+		// the restored item, and showing nothing in between (no note, the index still loading) keeps it.
+		if (this.entry) {
+			if (this.facetsOwner !== null && this.facetsOwner !== this.entry.id) this.facets.attachments = [];
+			this.facetsOwner = this.entry.id;
+		}
 		const header = container.createDiv({ cls: "cmds-zotero-sidebar-header" });
 		this.status = header.createDiv({ cls: "cmds-zotero-sidebar-status", text: this.plugin.statusLine() }); // 0.5 R4
 		const toolbar = header.createDiv({ cls: "cmds-zotero-sidebar-toolbar" });
@@ -428,7 +454,9 @@ export class AnnotationsView extends ItemView {
 			group.heading?.toggleClass(FILTERED_OUT, !visibility.headings[index]);
 			group.cards.forEach((card, position) => card.toggleClass(FILTERED_OUT, !visibility.cards[index][position]));
 		});
-		this.message.setText(emptyListText(this.facets, entry.attachmentStatus));
+		// An item without annotations says so (or that the lookup failed) whatever filter is carried over.
+		const total = this.sections.reduce((n, section) => n + section.rows.length, 0);
+		this.message.setText(total ? emptyListText(this.facets, entry.attachmentStatus) : emptyAnnotationsText("", entry.attachmentStatus));
 		this.message.toggleClass(FILTERED_OUT, visibility.shown > 0);
 	}
 
@@ -556,6 +584,13 @@ export class AnnotationsView extends ItemView {
 /** `values` with `value` added, or removed when present. */
 function toggled(values: readonly string[], value: string): string[] {
 	return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
+}
+
+/** The in-place explanation for a selection that does not name one indexed item. */
+function selectionText(target: Exclude<SelectionTarget, { kind: "resolved" }>): string {
+	if (target.kind === "empty") return "Nothing is selected in Zotero. Select an item there, then read the selection again.";
+	if (target.kind === "several") return `${target.entries.length} indexed items are selected in Zotero. Select one item, or use Read selection to choose.`;
+	return notIndexedText(target.count);
 }
 
 /** The in-place explanation for selected items that are not in the index. */

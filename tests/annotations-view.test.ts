@@ -307,3 +307,65 @@ test("following the Zotero selection: opt-in polls, quiet reads, unchanged does 
 	await follow.followSelection("tick");
 	assert.equal(reads.length, 4, "only while the sidebar follows the selection");
 });
+
+test("a selection read before the index loads is resolved when it loads; not-indexed items resolve after a refresh", async () => {
+	let answer: unknown[] = [{ libraryID: 1, itemKey: "ITEM0002" }];
+	let reads = 0;
+	const bbt = { selectedItems: () => { reads++; return Promise.resolve(answer); } };
+	const { view, plugin, title, message } = await sidebar({ bbt });
+	const p = plugin as { indexLoaded: () => boolean; warmBackoffActive: () => boolean; cachedEntries: () => ZoteroIndexEntry[]; settings: unknown; lastIndex: unknown };
+	let loaded = false;
+	let entries: ZoteroIndexEntry[] = [];
+	p.indexLoaded = () => loaded;
+	p.warmBackoffActive = () => true;
+	p.cachedEntries = () => entries;
+	await view.readSelection();
+	assert.equal(message(), "The index is not loaded yet.");
+	loaded = true;
+	entries = [one, two];
+	view.render();
+	assert.equal(title(), "Synthetic item 2", "resolved at render against the loaded index");
+	assert.deepEqual(view.getState().selected, { libraryID: 1, itemKey: "ITEM0002" }, "and remembered for the layout");
+	// Read with the index loaded, but the item is not indexed yet: a later generation that has it shows it.
+	answer = [{ libraryID: 1, itemKey: "ITEM0003" }];
+	await view.readSelection();
+	assert.match(message(), /not in the index/);
+	const three = item(3, [note("ANNO0004", 1)]);
+	entries = [one, two, three];
+	view.render();
+	assert.equal(title(), "Synthetic item 3");
+	// The poll path: a change seen before the index loads is not judged, and an unchanged selection is never read again.
+	loaded = false;
+	entries = [];
+	const follow = view as unknown as View & { followSelection(trigger: string): Promise<void>; containerEl: unknown };
+	follow.containerEl = { isShown: () => true };
+	p.settings = { followZoteroSelection: "focus", followZoteroSelectionSeconds: 10 };
+	answer = [{ libraryID: 1, itemKey: "ITEM0001" }];
+	await follow.followSelection("focus");
+	assert.equal(message(), "The index is not loaded yet.");
+	loaded = true;
+	entries = [one, two, three];
+	view.render(); // what the plugin's refreshViews() does when the index is published
+	assert.equal(title(), "Synthetic item 1", "the polled selection resolves once the index is loaded");
+	await follow.followSelection("focus");
+	assert.equal(title(), "Synthetic item 1", "a later unchanged poll keeps it");
+});
+
+test("a restored attachment filter survives the restore; another item clears it", async () => {
+	const { view } = await sidebar();
+	await view.setState({ mode: "pinned", pinned: { libraryID: 1, itemKey: "ITEM0001" }, facets: { attachments: ["ATTA2345"] } }, {});
+	assert.deepEqual((view.getState().facets as { attachments: string[] }).attachments, ["ATTA2345"]);
+	view.follow("note");
+	view.pin(one);
+	assert.deepEqual((view.getState().facets as { attachments: string[] }).attachments, ["ATTA2345"], "showing nothing in between keeps it");
+	view.pin(two);
+	assert.deepEqual((view.getState().facets as { attachments: string[] }).attachments, [], "another item clears it");
+});
+
+test("an item without annotations says so whatever filter is carried over", async () => {
+	const failed = { ...item(4, []), attachments: [], attachmentStatus: "unavailable" } as ZoteroIndexEntry;
+	const { view, message } = await sidebar({ entries: [one, two, failed] });
+	await view.setState({ mode: "pinned", pinned: { libraryID: 1, itemKey: "ITEM0001" }, facets: { colors: ["red"] } }, {});
+	view.pin(failed);
+	assert.equal(message(), "Attachment lookup failed at the last refresh. Refresh the index.");
+});
