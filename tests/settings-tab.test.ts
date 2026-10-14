@@ -52,10 +52,10 @@ test("sections: one file per area, all registered, distinct ids, headings Obsidi
 	assert.ok(sections.find(section => section.id === "agents")?.rows.some(row => row.kind === "textarea" && row.field.key === "referencesHeadings"));
 });
 
-test("the References headings description says only the agent CLI reads the list", () => {
+test("the References headings description says only the agent CLI's cites and citing actions read the list", () => {
 	const row = rowFor("referencesHeadings");
 	assert.ok(row);
-	assert.match(row.desc, /agent CLI's cites action/);
+	assert.match(row.desc, /agent CLI's cites and citing actions/);
 	assert.match(row.desc, /references sidebar and the commands that copy CSL-JSON or write the pandoc bibliography sidecar do not read this list/);
 	assert.doesNotMatch(row.desc, /for the references check and the pandoc sidecar/);
 });
@@ -121,6 +121,8 @@ test("numbers are checked per field with an inline message and never reach the d
 	assert.equal(timeout.write(draft, "1.5"), null);
 	assert.equal(draft.requestTimeoutMs, 1500);
 	for (const bad of ["0.5", "181", "1.0001", "x", "", "-1"]) { assert.equal(timeout.write(draft, bad), "Enter seconds from 1 to 180.", bad); assert.equal(draft.requestTimeoutMs, 1500); }
+	// 0.6 review: values whose float product is not exact (16.1 * 1000) are accepted and stored rounded.
+	for (const [input, ms] of [["16.1", 16100], ["2.01", 2010], ["1.001", 1001], ["179.999", 179999]] as const) { assert.equal(timeout.write(draft, input), null, input); assert.equal(draft.requestTimeoutMs, ms, input); }
 	assert.equal(rowFor("concurrency")!.field.write(draft, "9"), "Enter a whole number from 1 to 8.");
 	assert.equal(rowFor("recentReadsDays")!.field.write(draft, "400"), "Choose one of the listed values.");
 });

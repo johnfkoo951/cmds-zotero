@@ -29,6 +29,8 @@ function bbtJson(library: MockLibrary, item: MockItem): Record<string, unknown> 
 		libraryID: library.id, itemKey: item.itemKey, uri: itemURI(library, item.itemKey), select: `zotero://select/${scope(library)}/items/${item.itemKey}`,
 		citationKey: item.citekey, itemType: item.itemType ?? "journalArticle", title: item.title ?? `Synthetic ${item.itemKey}`, date: "2026-03-01",
 		creators: [{ firstName: "Example", lastName: "Author" }], tags: [], notes: [],
+		// BBT JSON lists the keys of the item's collections; membership searches turn them into paths.
+		...(item.collections ? { collections: item.collections } : {}),
 		attachments: (item.attachments ?? []).map(attachment => ({ select: `zotero://select/${scope(library)}/items/${attachment.key}`, title: attachment.title ?? "Synthetic attachment", ...(attachment.path ? { path: attachment.path } : {}), ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}) })),
 	};
 }

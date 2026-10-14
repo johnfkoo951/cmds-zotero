@@ -57,7 +57,8 @@ export interface SearchedItem extends Scope { citekey: string; itemKey: string }
  * with another identity), `invalid-item` (metadata the index cannot hold).
  */
 export type SkipReason = "duplicate-citekey" | "missing-citekey" | "invalid-uri" | "library-scope" | "library-name" | "export-failed" | "export-mismatch" | "invalid-item";
-export interface SkippedItem { reason: SkipReason; library: string; libraryID?: number; itemKey?: string; citekey?: string; detail?: string }
+/** `scope` is the item URI scope of a `library-name` skip, so its previous entry can still be found (0.6 review). */
+export interface SkippedItem { reason: SkipReason; library: string; libraryID?: number; itemKey?: string; citekey?: string; detail?: string; scope?: Scope }
 
 export interface LibraryRows {
 	/** Items to export, in row order, one per item key. */
@@ -147,8 +148,9 @@ export function groupRowsByLibraryName(rows: readonly unknown[]): { libraries: M
 		for (const row of libraries.get(name) ?? []) {
 			const citekey = record(row) ? text(row.citekey) : "";
 			let itemKey: string | undefined;
-			try { itemKey = parseItemURI(text((row as Record<string, unknown>).id)).itemKey; } catch { itemKey = undefined; }
-			skipped.push({ reason: "library-name", library: name, ...(itemKey ? { itemKey } : {}), ...(citekey ? { citekey } : {}), detail: "several libraries share this name" });
+			let scope: Scope | undefined;
+			try { const parsed = parseItemURI(text((row as Record<string, unknown>).id)); itemKey = parsed.itemKey; scope = { libraryType: parsed.libraryType, ...(parsed.groupID !== undefined ? { groupID: parsed.groupID } : {}) }; } catch { itemKey = undefined; }
+			skipped.push({ reason: "library-name", library: name, ...(itemKey ? { itemKey } : {}), ...(citekey ? { citekey } : {}), ...(scope ? { scope } : {}), detail: "several libraries share this name" });
 		}
 		libraries.delete(name);
 	}

@@ -33,7 +33,11 @@ export class IdentityMap {
 	private readonly changed = new Set<string>();
 	/** A folder moved or disappeared: the listing itself is read again. */
 	private relist = false;
-	/** The first unreadable note: every answer fails with it, as the per-preview folder scan did. */
+	/**
+	 * The first unreadable note of the last round. While it is set, every answer reads the whole folder again first and
+	 * fails only if a note is still unreadable: the per-preview folder scan of 0.5 did the same, so a note that was
+	 * briefly unreadable (removed by sync while still listed) fails one answer, not the rest of the batch.
+	 */
 	private failure: { error: unknown } | null = null;
 	private round: Promise<void> | null = null;
 	private readonly prefix: string;
@@ -44,7 +48,7 @@ export class IdentityMap {
 
 	/**
 	 * Reads every note below `folder` once, `concurrency` reads in flight, outcomes taken in listing order. The first note
-	 * that cannot be read stops the build, and every later answer fails with its error.
+	 * that cannot be read stops the build; later answers read the folder again and fail while a note stays unreadable.
 	 */
 	static async build(folder: string, source: IdentitySource, concurrency = SCAN_CONCURRENCY): Promise<IdentityMap> {
 		const map = new IdentityMap(folder, source, concurrency);
@@ -83,14 +87,15 @@ export class IdentityMap {
 	/** Applies reported changes, one round at a time; a round that starts while another runs waits for it. */
 	private async catchUp(): Promise<void> {
 		while (this.round) await this.round;
-		if (this.failure || (!this.relist && !this.changed.size)) return;
-		const round = this.relist ? this.rebuild() : this.reread();
+		if (!this.failure && !this.relist && !this.changed.size) return;
+		const round = this.relist || this.failure ? this.rebuild() : this.reread();
 		this.round = round;
 		try { await round; } finally { if (this.round === round) this.round = null; }
 	}
 
 	private async rebuild(): Promise<void> {
 		this.relist = false;
+		this.failure = null;
 		this.changed.clear();
 		this.idOf.clear();
 		this.pathsOf.clear();

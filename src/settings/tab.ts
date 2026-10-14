@@ -72,7 +72,9 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		if (!requireApiVersion("1.13.0")) return [];
 		const group = (section: SectionSpec): SettingDefinitionGroup => ({ type: "group", heading: section.heading, items: section.rows.map(row => this.definition(row)) });
-		const save = (): SettingDefinition => ({ name: "Save configuration", searchable: false, render: setting => this.renderSave(setting) });
+		// A value edited in Obsidian's settings search only reaches the draft, so Save is found by every row's name too.
+		const rowNames = this.sections.flatMap(section => section.rows.flatMap(row => row.kind === "note" || row.kind === "action" ? [] : [row.name, row.field.key]));
+		const save = (): SettingDefinition => ({ name: "Save configuration", aliases: rowNames, render: setting => this.renderSave(setting) });
 		const advanced = this.sections.filter(item => item.advanced);
 		return [
 			...this.sections.filter(item => !item.advanced).map(group),

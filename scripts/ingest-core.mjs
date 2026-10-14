@@ -11201,6 +11201,7 @@ async function annotationsAction(host, request) {
     try {
       reads = (await host.readOnDay?.(day) ?? []).filter((read) => read.readOn === day);
     } catch (error) {
+      if (isZoteroVersionError(error)) return fail("zotero-too-old", error.message);
       const bbtError = bbtErrorPayload(error);
       return fail(bbtError ? "bbt-unreachable" : "invalid-request", describeBbtError(error), bbtError ? { bbtError } : {});
     }
@@ -11293,7 +11294,7 @@ async function citingAction(host, request) {
   });
   const reader = scanOf(host);
   const skipped = [.../* @__PURE__ */ new Set([...reader.skipped, ...unreadable])].sort();
-  const scan = { skipped, truncated: reader.truncated, complete: !reader.truncated && skipped.length === 0 };
+  const scan = { skipped, truncated: reader.truncated, complete: keys.size > 0 && !reader.truncated && skipped.length === 0, ...keys.size ? {} : { performed: false } };
   const hits = sortCitingNotes(found.filter((item) => item !== null));
   const shown = hits.slice(0, CITING_MAX_NOTES);
   const failure = reader.truncated ? { reason: "discovery-incomplete", message: `Vault discovery was truncated at the note limit, so notes beyond it were not scanned and the list of citing notes may be incomplete (${skipped.length} notes skipped).` } : void 0;
@@ -11357,7 +11358,7 @@ function text3(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 function defaultCollectConcurrency(concurrency) {
-  return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
+  return concurrency;
 }
 function normalizeSettings(raw) {
   const data = raw && typeof raw === "object" ? raw : {};
@@ -11385,7 +11386,7 @@ function normalizeSettings(raw) {
     referencesHeadings: referencesHeadings(data.referencesHeadings),
     // 0.5 R10
     recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
-    collectConcurrency: integer(data.collectConcurrency, defaultCollectConcurrency(concurrency), 1, 8),
+    collectConcurrency: integer(data.collectConcurrency, data.concurrency === void 0 ? DEFAULT_SETTINGS.collectConcurrency : defaultCollectConcurrency(concurrency), 1, 8),
     // 0.6 OPT-10
     pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800)
     // 0.6 OPT-14

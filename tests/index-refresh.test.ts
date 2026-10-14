@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as http from "node:http";
 import { createRequire } from "node:module";
-import { BbtService, attachmentConcurrency } from "../src/bbt";
+import { BbtService } from "../src/bbt";
+import { normalizeSettings } from "../src/settings-data";
 import { IndexService } from "../src/index-service";
 import { DEFAULT_SETTINGS, type ZoteroIndex, type ZoteroIndexEntry } from "../src/types";
 import { entryHash, sealEntry, validateAndSealIndex, validateEntry, validateEntryStructure, validateIndex, verifyEntry, verifyIndex } from "../src/identity";
@@ -254,19 +255,20 @@ test("bibliography and the index service still refuse entries and candidates thi
 	} finally { bbt.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
-test("0.6 OPT-10: attachment reads go out in JSON-RPC batches of 25, collectConcurrency batches in flight; exports keep the configured value", async () => {
-	assert.deepEqual([1, 2, 3, 4, 5, 8].map(attachmentConcurrency), [2, 4, 6, 8, 8, 8], "the wave-1 doubling survives as the default for older settings files");
-	assert.deepEqual([0, 9, 2.5, Number.NaN].map(attachmentConcurrency), [0, 9, 2.5, Number.NaN], "out-of-range values still reach mapBounded's check");
-	for (const [collectConcurrency, items] of [[2, 100], [1, 60], [4, 100]] as const) {
-		const batches = Math.ceil(items / 25);
-		const api = await mockBbt(items, { attachmentsInFlight: Math.min(collectConcurrency, batches) });
+test("0.6 OPT-10: attachment reads go out in batches of collectConcurrency requests, one batch in flight; exports keep the configured value", async () => {
+	assert.equal(normalizeSettings({ concurrency: 1 }).collectConcurrency, 1, "a 0.5 settings file keeps its attachment bound");
+	assert.equal(normalizeSettings({ concurrency: 3 }).collectConcurrency, 3);
+	assert.equal(normalizeSettings({}).collectConcurrency, 4, "fresh installs get the 0.6 default");
+	for (const [collectConcurrency, items] of [[2, 9], [1, 3], [4, 10]] as const) {
+		const batches = Math.ceil(items / collectConcurrency);
+		const api = await mockBbt(items, { attachmentsInFlight: 1 });
 		const bbt = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, collectConcurrency });
 		try {
 			const index = await bbt.collect();
 			assert.equal(index.count, items);
 			assert.equal(index.complete, true);
-			assert.deepEqual(api.batchSizes, Array.from({ length: batches }, (_, i) => Math.min(25, items - i * 25)), `${items} parents: ${batches} POSTs of at most 25 requests`);
-			assert.equal(api.peak.get("item.attachments[]"), Math.min(collectConcurrency, batches), `collectConcurrency ${collectConcurrency}: attachment batches in flight`);
+			assert.deepEqual(api.batchSizes, Array.from({ length: batches }, (_, i) => Math.min(collectConcurrency, items - i * collectConcurrency)), `${items} parents: POSTs of at most ${collectConcurrency} requests`);
+			assert.equal(api.peak.get("item.attachments[]"), 1, "one attachment batch in flight");
 			assert.equal(api.peak.get("item.attachments"), undefined, "no single attachment calls when the batches succeed");
 		} finally { bbt.dispose(); await api.close(); }
 	}

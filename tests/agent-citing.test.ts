@@ -95,6 +95,8 @@ test("a key another item also carries is excluded and reported, never attributed
 	const none = await run("citing", { itemKey: "GRPS2345", libraryID: 2 }, { notes: NOTES, entries: [SMITH, SMITH_GROUP] });
 	assert.deepEqual(none.keys.searched, []);
 	assert.deepEqual(none.notes, [], "nothing can be attributed when every key is shared");
+	assert.deepEqual(none.scan, { skipped: [], truncated: false, complete: false, performed: false }, "an empty list from no scan is never proof of absence");
+	assert.equal(shared.scan.complete, true);
 });
 
 test("selector outcomes: ambiguous never picks one; not-found is withheld on a stale index; a missing index fails", async () => {

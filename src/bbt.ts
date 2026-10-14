@@ -2,7 +2,6 @@ import type { Capabilities, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } 
 import { BbtTransportError, httpRequest, isBbtTransportError, isUnknownConditionFault, mapBounded, rpc, rpcBatch, zoteroMajor, ZoteroVersionError, type BbtTransportReason } from "./api/transport";
 import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, primaryPdfPath, text } from "./api/normalize";
 import { collectIndex } from "./index/collector";
-import { defaultCollectConcurrency } from "./settings-data";
 import { record, sealEntry, verifyEntry, verifyIndex } from "./identity";
 import { positiveInteger } from "./uris";
 import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentItem, recentKey, windowTerms, type RecentRead } from "./recent/recent-reads";
@@ -12,12 +11,6 @@ import { afterTerms, dateByBisection } from "./recent/read-dating";
 const RECENT_DAY_BATCH = 7;
 /** Search conditions only Zotero 10 knows; refusing them is how an older Zotero answers a reading-history search. */
 const ZOTERO_10_CONDITIONS: readonly string[] = ["resultLevel", "lastRead"];
-
-/**
- * The wave-1 refresh concurrency for `concurrency` (twice the value, at most 8). Since 0.6 OPT-10 refreshes use the
- * separate `collectConcurrency` setting, whose default for an older settings file is this value.
- */
-export function attachmentConcurrency(concurrency: number): number { return defaultCollectConcurrency(concurrency); }
 
 /**
  * Identity a fresh single-item collection must reproduce; the cached citekey is only the lookup handle. `libraryID` is the

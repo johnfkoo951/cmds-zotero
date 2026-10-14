@@ -1,4 +1,5 @@
 import test from "node:test";
+import { ZoteroVersionError } from "../src/api/transport";
 import assert from "node:assert/strict";
 import { annotationsAction, validateActionRequest, AGENT_ACTIONS, ACTION_API_VERSION, type FreshSubject } from "../src/agent/actions";
 import { annotationColorInfo, imageCopyPrefix, normalizeHex, parseAnnotationFilters, parseColorFilter, vaultImageCopies } from "../src/agent/annotations";
@@ -186,6 +187,13 @@ test("fresh with Zotero unreachable is refused with the typed fault; allowStale 
 });
 
 const read = (citekey: string, itemKey: string, readOn: string | null = "2026-10-13"): RecentRead => ({ itemKey, libraryType: "user", library: "My Library", citekey, title: `Title of ${citekey}`, year: "2020", authors: ["Smith, Alex"], readOn });
+
+test("today on a Zotero older than 10 is zotero-too-old, as for recent", async () => {
+	const result = await run("annotations", { today: true }, { extra: { readOnDay: async () => { throw new ZoteroVersionError("Zotero's reading history", 10, "7.0.11"); } } });
+	assert.equal(result.ok, false);
+	assert.equal(result.reason, "zotero-too-old");
+	assert.match(String(result.message), /needs Zotero 10 or later/);
+});
 
 test("today resolves only when exactly one paper was opened today: none is not-found, several are candidates", async () => {
 	const days: string[] = [];

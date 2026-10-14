@@ -215,7 +215,7 @@ test("an unreadable library keeps its previous entries; unreadable collections a
 		]);
 		assert.match(second.diagnostics.find(diagnostic => diagnostic.code === "library-not-indexed")?.message ?? "", /Library "Shared" could not be read \(synthetic search failure\); its 1 previous entry was kept\./);
 		assert.equal(second.retracted, undefined, "an unread flag is absent, not empty");
-		assert.deepEqual(second.entries.find(entry => entry.id === "1:AAAA0001")?.collections, ["Thesis"], "entries keep the previous refresh's collections");
+		assert.deepEqual(second.entries.find(entry => entry.id === "1:AAAA0001")?.collections, ["Thesis"], "without membership searches the export's own collection keys become paths through the tree");
 		assert.equal(second.collections?.find(collection => collection.key === "COLL0001")?.items, undefined, "membership that could not be read is absent");
 		assert.equal(membersOf(second, 1, "COLL0001"), null);
 		assert.ok(validateIndex(JSON.parse(JSON.stringify(second))));
@@ -224,9 +224,17 @@ test("an unreadable library keeps its previous entries; unreadable collections a
 
 test("without user.groups the 0.5 name-based search is used and same-named libraries are skipped, not fatal", async () => {
 	const libraries = synthetic().slice(0, 3);
-	const api = await startMockBbt(libraries, { override: (call: MockCall) => { if (call.method === "user.groups") throw new RpcFault(-32601, "Method not found: user.groups"); return undefined; } });
+	let groups = true;
+	const api = await startMockBbt(libraries, { override: (call: MockCall) => { if (call.method === "user.groups" && !groups) throw new RpcFault(-32601, "Method not found: user.groups"); return undefined; } });
 	const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint });
 	try {
+		// 0.6 review: items skipped for a shared library name keep their entries from a previous refresh.
+		const before = await service.collect();
+		groups = false;
+		const kept = await service.collect(before);
+		const shared = before.entries.filter(entry => !entry.id.startsWith("1:")).map(entry => entry.id);
+		assert.ok(shared.length > 0);
+		for (const id of shared) assert.ok(kept.entries.some(entry => entry.id === id), `${id} keeps its previous entry`);
 		const index = await service.collect();
 		assert.deepEqual(index.entries.map(entry => entry.id), ["1:AAAA0001", "1:AAAA0002", "1:AAAA0004", "1:AAAA0005"]);
 		assert.deepEqual(index.diagnostics.filter(diagnostic => diagnostic.code === "item-skipped").map(diagnostic => diagnostic.citekey), ["Same2026", "Same2026"]);

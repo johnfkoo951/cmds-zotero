@@ -375,7 +375,8 @@ returns no annotations; with `--allow-stale` it answers from the saved index ins
 warning. Offline, `--fresh` and `--today` are `requires-obsidian`; the snapshot is never substituted silently. `item.attachments`
 may make Zotero render a missing image-annotation cache file into its own cache folder; the library is not changed.
 
-`--today` selects the paper Zotero opened on the current local calendar day (the `lastRead` search of `recent`, live only). It
+`--today` selects the paper Zotero opened on the current local calendar day (the `lastRead` search of `recent`, live only;
+a Zotero older than 10 is `reason: zotero-too-old`, as for `recent`). It
 resolves only when exactly one paper qualifies: none is `status: not-found`, several are `status: ambiguous` with `candidates`
 (`citekey`, `itemKey`, `libraryType`, `groupID`, `library`, `title`, `year`, `authors`, `readOn`, `id`, `inIndex`) and no
 annotations; the response carries `today {day, reads}`. A paper the saved index does not know is `ok:false, reason: stale-index`
@@ -405,7 +406,8 @@ query). Outcomes are those of `resolve` (`ambiguous` and `not-found` return no n
 (`keys.searched`, each `{key, kind: current|former}`). A key another item also carries, as its current or a former citekey
 (for example the same key in a group library, or a former key a later item reused), cannot be attributed to this item and is
 left out and reported in `keys.excluded` (`reason: shared`, `sharedWith` up to five `{id, citekey, libraryID}`); when every key
-is excluded the vault is not scanned.
+is excluded the vault is not scanned, and `scan` says so (`performed: false`, `complete: false`), so the empty `notes` list
+proves nothing.
 
 A note is scanned exactly as `cites` scans it, so the two actions agree on what a citation is. Counted in the body: Pandoc
 `[@key]` (with locators, prefixes and `;`-separated groups), narrative `@key`, suppressed-author `-@key` and wikilinks

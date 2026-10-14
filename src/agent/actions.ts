@@ -814,6 +814,8 @@ export async function annotationsAction(host: ActionHost, request: AnnotationsRe
 		let reads: RecentRead[];
 		try { reads = (await host.readOnDay?.(day) ?? []).filter(read => read.readOn === day); }
 		catch (error) {
+			// Same refusal as `recent`: Zotero answered, but reading history needs Zotero 10.
+			if (isZoteroVersionError(error)) return fail("zotero-too-old", error.message);
 			const bbtError = bbtErrorPayload(error);
 			return fail(bbtError ? "bbt-unreachable" : "invalid-request", describeBbtError(error), bbtError ? { bbtError } : {});
 		}
@@ -903,7 +905,8 @@ export async function citingAction(host: ActionHost, request: CitingRequest): Pr
 	});
 	const reader = scanOf(host);
 	const skipped = [...new Set([...reader.skipped, ...unreadable])].sort();
-	const scan = { skipped, truncated: reader.truncated, complete: !reader.truncated && skipped.length === 0 };
+	// No key can be attributed to this item (all are shared): nothing was scanned, so an empty list proves nothing.
+	const scan = { skipped, truncated: reader.truncated, complete: keys.size > 0 && !reader.truncated && skipped.length === 0, ...(keys.size ? {} : { performed: false as const }) };
 	const hits = sortCitingNotes(found.filter((item): item is CitingNote => item !== null));
 	const shown = hits.slice(0, CITING_MAX_NOTES);
 	const failure = reader.truncated ? { reason: "discovery-incomplete" as const, message: `Vault discovery was truncated at the note limit, so notes beyond it were not scanned and the list of citing notes may be incomplete (${skipped.length} notes skipped).` } : undefined;

@@ -11,14 +11,12 @@ import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, primaryPdfP
 import { record, sealEntry, verifyIndex } from "../identity";
 import { collectionsUnavailableDiagnostic, indexDiagnostics, libraryDiagnostics, retractedDiagnostics, retractionUnavailableDiagnostic, skippedItemDiagnostic, type LibraryReport } from "../diagnostics";
 import { collectionTerms, groupRowsByLibraryName, legacyParentTerms, parentTerms, parseGroups, planLibraryRows, type LibraryInfo, type Scope, type SearchedItem, type SkippedItem } from "./collect-plan";
-import { collectionId, entryCollectionPaths, type CollectionNode } from "../library/collections";
+import { collectionId, collectionPaths, entryCollectionPaths, type CollectionNode } from "../library/collections";
 import { retractedIdsFromRows, retractedTerms } from "../library/retraction";
 import { positiveInteger } from "../uris";
 
 /** Parent items per `item.export` call (unchanged since 0.3). */
 export const EXPORT_BATCH = 50;
-/** `item.attachments` requests per JSON-RPC batch POST (BBT answers a batch in order; 25 matched the live probe). */
-export const ATTACHMENT_BATCH = 25;
 
 export interface CollectorTransport {
 	call: (method: string, params: unknown[], timeoutMs?: number) => Promise<unknown>;
@@ -190,8 +188,9 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 		}
 		for (const item of plan.skipped) {
 			if (!item.itemKey) continue;
-			const candidate = plan.libraryID !== undefined ? previous.get(`${plan.libraryID}:${item.itemKey}`) : plan.scope ? previousByScope.get(scopeKey(plan.scope, item.itemKey)) : undefined;
-			if (!candidate || freshIds.has(candidate.id) || (plan.scope && scopeKey(candidate, candidate.itemKey) !== scopeKey(plan.scope, item.itemKey))) continue;
+			const scope = plan.scope ?? item.scope ?? null;
+			const candidate = plan.libraryID !== undefined ? previous.get(`${plan.libraryID}:${item.itemKey}`) : scope ? previousByScope.get(scopeKey(scope, item.itemKey)) : undefined;
+			if (!candidate || freshIds.has(candidate.id) || (scope && scopeKey(candidate, candidate.itemKey) !== scopeKey(scope, item.itemKey))) continue;
 			kept.set(candidate.id, candidate);
 			keptBySkip.add(item);
 		}
@@ -203,7 +202,17 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 	const collections: IndexCollection[] = [];
 	const freshByLibrary = new Map<number, ZoteroIndexEntry[]>();
 	for (const entry of fresh) freshByLibrary.set(entry.libraryID, [...(freshByLibrary.get(entry.libraryID) ?? []), entry]);
-	const keepCollections = (entries: readonly ZoteroIndexEntry[]): void => { for (const entry of entries) entry.collections = previous.get(entry.id)?.collections ?? []; };
+	// Without membership searches an entry keeps what its own export says (collection keys, the 0.5 value), turned into
+	// "Parent/Child" paths when the library's tree is known; a previous refresh's value is never carried forward, so keys
+	// and paths are not mixed and new items are not emptied (0.6 review).
+	const keepCollections = (entries: readonly ZoteroIndexEntry[], nodes: readonly CollectionNode[] | null = null, libraryID?: number): void => {
+		const paths = nodes && libraryID !== undefined ? collectionPaths(nodes) : null;
+		for (const entry of entries) {
+			if (!paths || libraryID === undefined) continue;
+			const resolved = entry.collections.flatMap(key => { const path = paths.get(collectionId(libraryID, key)); return path === undefined ? [] : [path]; });
+			entry.collections = [...new Set(resolved)].sort(byCodeUnit);
+		}
+	};
 	for (const plan of plans) {
 		const libraryID = plan.libraryID;
 		const libraryEntries = libraryID !== undefined ? freshByLibrary.get(libraryID) ?? [] : [];
@@ -236,7 +245,7 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 		} catch (error) {
 			if (zoteroGone(error, signal)) throw error;
 			extra.push(collectionsUnavailableDiagnostic(plan.name, libraryID, reasonText(error)));
-			keepCollections(libraryEntries);
+			keepCollections(libraryEntries, nodes, libraryID);
 			collections.push(...nodes.map(node => ({ libraryID, key: node.key, name: node.name, parentKey: node.parentKey })));
 			continue;
 		}
@@ -273,12 +282,20 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 			if (!sealEntry(entry)) throw new Error("Invalid normalized parent item");
 		}
 	};
-	await mapBounded(chunks(fresh, ATTACHMENT_BATCH), settings.collectConcurrency, async group => {
+	// Better BibTeX runs the requests of one batch POST at once, so a batch holds `collectConcurrency` requests and only one
+	// batch is in flight: Zotero works on exactly as many attachment reads as the setting says (0.6 review of OPT-10).
+	await mapBounded(chunks(fresh, settings.collectConcurrency), 1, async group => {
 		let settled: RpcSettled[] | null = null;
+		let timedOut: unknown = null;
 		try { settled = await batch(group.map(entry => ({ method: "item.attachments", params: [entry.citekey, entry.libraryID] })), settings.attachmentTimeoutMs); }
-		catch (error) { if (signal.aborted) throw error; }
+		catch (error) {
+			if (signal.aborted) throw error;
+			// Zotero is still working on a batch that timed out: sending its requests again one by one would only add load.
+			if (isBbtTransportError(error) && error.reason === "timeout") timedOut = error;
+		}
 		for (const [index, entry] of group.entries()) {
 			if (settled) { apply(entry, settled[index]); continue; }
+			if (timedOut) { apply(entry, { ok: false, error: timedOut }); continue; }
 			try { apply(entry, { ok: true, result: await call("item.attachments", [entry.citekey, entry.libraryID], settings.attachmentTimeoutMs) }); }
 			catch (error) {
 				if (signal.aborted) throw error;

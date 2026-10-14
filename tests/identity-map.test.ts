@@ -110,7 +110,7 @@ test("writes are taken from their text, reported changes are read again once, an
 	assert.deepEqual([...state.reads].sort(), ["Lit/@b.md", "Lit/@new.md", "Lit/moved/@e.md"]);
 });
 
-test("the first unreadable note in listing order fails every answer, like the per-preview scan did", async () => {
+test("an unreadable note fails every answer while it stays unreadable, like the per-preview scan did", async () => {
 	const files: Record<string, string> = {};
 	for (let i = 0; i < 30; i++) files[`Lit/n${String(i).padStart(2, "0")}.md`] = note(`1:ITEM${String(i).padStart(4, "0")}`);
 	const state = vault(files);
@@ -127,6 +127,11 @@ test("the first unreadable note in listing order fails every answer, like the pe
 	healthy.failing.add("Lit/a.md");
 	later.noteChanged("Lit/a.md");
 	await assert.rejects(later.pathsFor("1:AAAA0001"), /refused/);
+	// 0.6 review: a note that becomes readable again fails no later answer (0.5 scanned the folder per preview).
+	healthy.failing.delete("Lit/a.md");
+	assert.deepEqual(await later.pathsFor("1:AAAA0001"), ["Lit/a.md"]);
+	state.failing.clear();
+	assert.deepEqual(await map.pathsFor("1:ITEM0029"), ["Lit/n29.md"], "the first map recovers without a reported change too");
 });
 
 test("an unsafe folder is refused when the map is built", async () => {

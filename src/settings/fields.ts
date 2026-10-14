@@ -74,7 +74,8 @@ export function secondsField(key: KeysOf<number>, min: number, max: number): Fie
 		key, read: draft => String(draft[key] / 1000),
 		write: (draft, input) => {
 			const value = input.trim();
-			const ms = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) * 1000 : Number.NaN;
+			// Rounded, not tested for an exact product: 16.1 * 1000 is 16100.000000000002 in floating point.
+			const ms = /^\d+(?:\.\d{1,3})?$/.test(value) ? Math.round(Number(value) * 1000) : Number.NaN;
 			if (!Number.isInteger(ms) || ms < min * 1000 || ms > max * 1000) return `Enter seconds from ${min} to ${max}.`;
 			draft[key] = ms;
 			return null;

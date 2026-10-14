@@ -7,12 +7,11 @@ function integer(value: unknown, fallback: number, min: number, max: number): nu
 function text(value: unknown, fallback: string): string { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 
 /**
- * 0.6 OPT-10: the refresh concurrency a settings file without `collectConcurrency` gets: twice `concurrency`, at most 8,
- * which is what refreshes used for attachment reads since 0.6 wave 1. An out-of-range value is passed through unchanged.
+ * 0.6 OPT-10: the refresh concurrency a settings file without `collectConcurrency` gets: `concurrency` itself, the value
+ * 0.5 bounded attachment reads with, so a user who lowered Parallel requests for a slow Zotero keeps that bound. Fresh
+ * installs get DEFAULT_SETTINGS.collectConcurrency.
  */
-export function defaultCollectConcurrency(concurrency: number): number {
-	return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
-}
+export function defaultCollectConcurrency(concurrency: number): number { return concurrency; }
 
 export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 	const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
@@ -39,7 +38,7 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
 		referencesHeadings: referencesHeadings(data.referencesHeadings), // 0.5 R10
 		recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
-		collectConcurrency: integer(data.collectConcurrency, defaultCollectConcurrency(concurrency), 1, 8), // 0.6 OPT-10
+		collectConcurrency: integer(data.collectConcurrency, data.concurrency === undefined ? DEFAULT_SETTINGS.collectConcurrency : defaultCollectConcurrency(concurrency), 1, 8), // 0.6 OPT-10
 		pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800), // 0.6 OPT-14
 	};
 }
