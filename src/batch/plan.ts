@@ -5,6 +5,7 @@
  * (update-changed-since) and the Better Notes guard (better-notes-guard). Pure: no `obsidian` import.
  */
 import type { ZoteroIndexEntry } from "../types";
+import { localDay } from "../recent/recent-reads";
 
 export type PlannedAction = "create" | "update" | "adopt" | "skip";
 export interface ReviewRow<T = unknown> {
@@ -69,7 +70,7 @@ export function unchangedReason(entry: ZoteroIndexEntry, since: ChangedSince, no
 	if (cutoff === null) return null;
 	const changed = lastZoteroChange(entry);
 	if (changed === null || changed > cutoff) return null;
-	return since.kind === "note" ? "no change in Zotero since the note was last written" : `no change in Zotero since ${new Date(cutoff).toISOString().slice(0, 10)}`;
+	return since.kind === "note" ? "no change in Zotero since the note was last written" : `no change in Zotero since ${localDay(new Date(cutoff))}`;
 }
 
 /** A `YYYY-MM-DD` day (local midnight) in epoch milliseconds, or null. */

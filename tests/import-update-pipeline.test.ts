@@ -187,7 +187,7 @@ test("batch plans: review rows, summary, changed-since and Zotero dates", () => 
 	assert.equal(unchangedReason(item, { kind: "any" }, null), null);
 	assert.equal(unchangedReason(item, { kind: "note" }, Date.UTC(2024, 6, 1)), "no change in Zotero since the note was last written");
 	assert.equal(unchangedReason(item, { kind: "note" }, Date.UTC(2024, 4, 1)), null);
-	assert.equal(unchangedReason(item, { kind: "date", time: Date.UTC(2024, 6, 1) }, null), "no change in Zotero since 2024-07-01");
+	assert.equal(unchangedReason(item, { kind: "date", time: localDayStart("2024-07-01") ?? 0 }, null), "no change in Zotero since 2024-07-01");
 	assert.equal(unchangedReason(entry({ metadata: {} }), { kind: "date", time: Date.UTC(2030, 0, 1) }, null), null, "an unknown date is never proof of no change");
 	assert.equal(localDayStart("2024-02-30"), null);
 	assert.equal(localDayStart("2024-02-03"), new Date(2024, 1, 3).getTime());

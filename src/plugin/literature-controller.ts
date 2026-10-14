@@ -164,23 +164,40 @@ export class LiteratureController {
 		return file instanceof TFile ? this.plugin.app.vault.read(file) : "";
 	}
 
-	async previewImport(entry: ZoteroIndexEntry): Promise<void> {
+	/**
+	 * The import/update preview of one item. 0.6.3: `rebuild` repairs the note's markers first (rebuild-or-repair-note);
+	 * `expectPath` refuses when the item's literature note is another note (update-current-note); `adoptPath` previews
+	 * adopting that note instead (adopt-existing-notes).
+	 */
+	async previewImport(entry: ZoteroIndexEntry, options: { rebuild?: boolean; expectPath?: string; adoptPath?: string } = {}): Promise<void> {
 		await this.plugin.run(async () => {
 			// Related items come from the saved snapshot (no full refresh); the item itself is read fresh from Zotero so
 			// annotations made since the index was saved are included.
 			const index = await this.plugin.indexing.loadIndexForRead();
 			const current = await this.freshEntry(entry);
 			if (!current.fresh) new Notice(`${describeBbtError(current.error)} Previewing from the saved index (${formatIndexAge(this.plugin.index.ageMinutes(index))} old); annotations made since then are not included.`);
-			const preview = await this.plugin.importer.preview(current.entry, index, current.fresh || !this.isOfflineError(current.error) ? {} : { offline: true });
-			new ImportPreviewModal(this.plugin.app, preview, async choices => {
+			const offline = current.fresh || !this.isOfflineError(current.error) ? {} : { offline: true };
+			const preview = options.adoptPath
+				? await this.plugin.importer.adoptPreview(current.entry, options.adoptPath, index, offline)
+				: await this.plugin.importer.preview(current.entry, index, { ...offline, ...(options.rebuild ? { rebuild: true } : {}) });
+			if (options.expectPath && preview.path !== options.expectPath && !preview.conflicts.length) throw new Error(`The literature note of @${entry.citekey} is ${preview.path}, not this note. Open that note to update it.`);
+			new ImportPreviewModal(this.plugin.app, preview, async (choices, shown) => {
 				// 0.5 R5: detach/reset choices travel with the apply; edited sections no longer block the note.
-				const result = await this.plugin.importer.apply(preview, choices);
+				const result = await this.plugin.importer.apply(shown, choices);
 				if (result.conflicts.length) throw new Error(result.conflicts.join("; "));
 				await this.plugin.app.workspace.openLinkText(result.path, "", true);
 				this.plugin.indexing.noteChanged(result.path);
-				new Notice(result.preserved.length ? `Literature note imported. Edited sections kept: ${result.preserved.join(", ")}.` : "Literature note imported. User-written sections were preserved.");
-			}).open();
+				const done = shown.mode === "adopt" ? "Note adopted as a literature note." : shown.mode === "rebuild" ? "Literature note rebuilt." : "Literature note imported.";
+				new Notice([result.preserved.length ? `${done} Edited sections kept: ${result.preserved.join(", ")}.` : `${done} User-written sections were preserved.`, result.backup ? `Backup: ${result.backup}.` : "", result.unverified ?? ""].filter(Boolean).join(" "));
+			}, (shown, scope) => this.plugin.importer.revise(shown, scope)).open();
 		});
+	}
+
+	/** 0.6.3 open-or-create-note: opens the item's literature note (anywhere in the vault), else its import preview. */
+	async openOrImport(entry: ZoteroIndexEntry): Promise<void> {
+		const index = await this.plugin.indexing.loadIndexForRead();
+		if (this.plugin.links.localFiles(entry, index).length) await this.plugin.navigation.openNote(entry);
+		else await this.previewImport(entry);
 	}
 
 	/**
