@@ -141,6 +141,32 @@ export function zoteroMajor(version: string | null | undefined): number | null {
 	return match ? Number(match[1]) : null;
 }
 
+/**
+ * A feature this Zotero cannot provide (0.6 recent-reads-efficiency): reading history needs Zotero 10. Not a transport
+ * fault: Zotero answered, so it is never reported as Better BibTeX being unreachable. `found` is the reported Zotero
+ * version, or null when only the refused search condition told.
+ */
+export class ZoteroVersionError extends Error {
+	readonly name = "ZoteroVersionError";
+	constructor(readonly feature: string, readonly required: number, readonly found: string | null, readonly cause?: unknown) {
+		super(`${feature} needs Zotero ${required} or later${found ? `; this Zotero is ${found}` : "; this Zotero does not support the search it needs"}. Update Zotero, then retry.`);
+	}
+}
+
+export function isZoteroVersionError(error: unknown): error is ZoteroVersionError {
+	return error instanceof ZoteroVersionError || (error instanceof Error && error.name === "ZoteroVersionError" && typeof (error as { required?: unknown }).required === "number");
+}
+
+/**
+ * True for Zotero's refusal of a search condition it does not know (`Invalid condition 'lastRead' in hasOperator()`,
+ * JSON-RPC -32603), which is how a Zotero older than 10 answers a `resultLevel` or `lastRead` search.
+ */
+export function isUnknownConditionFault(error: unknown, conditions: readonly string[]): boolean {
+	if (!isBbtTransportError(error) || error.reason !== "rpc") return false;
+	const message = error.rpcMessage ?? "";
+	return /Invalid condition/i.test(message) && conditions.some(condition => message.includes(`'${condition}'`));
+}
+
 /** The additive `bbtError` payload field: the typed reason and the endpoint that failed, or null for non-transport errors. */
 export function bbtErrorPayload(error: unknown): { reason: BbtTransportReason; endpoint: string } | null {
 	return isBbtTransportError(error) ? { reason: error.reason, endpoint: error.endpoint } : null;

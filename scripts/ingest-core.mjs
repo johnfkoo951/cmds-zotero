@@ -8050,6 +8050,19 @@ function describeBbtError(error) {
       return `${observed}.`;
   }
 }
+var ZoteroVersionError = class extends Error {
+  constructor(feature, required, found, cause) {
+    super(`${feature} needs Zotero ${required} or later${found ? `; this Zotero is ${found}` : "; this Zotero does not support the search it needs"}. Update Zotero, then retry.`);
+    this.feature = feature;
+    this.required = required;
+    this.found = found;
+    this.cause = cause;
+    this.name = "ZoteroVersionError";
+  }
+};
+function isZoteroVersionError(error) {
+  return error instanceof ZoteroVersionError || error instanceof Error && error.name === "ZoteroVersionError" && typeof error.required === "number";
+}
 function bbtErrorPayload(error) {
   return isBbtTransportError(error) ? { reason: error.reason, endpoint: error.endpoint } : null;
 }
@@ -10631,6 +10644,7 @@ async function recentAction(host, request) {
   } catch (error) {
     const bbtError = bbtErrorPayload(error);
     const message = error instanceof Error ? error.message : "Zotero's reading history could not be read.";
+    if (isZoteroVersionError(error)) return { ...envelope(host, "recent", 2, { reason: "zotero-too-old", message }) };
     return { ...envelope(host, "recent", 2, { reason: bbtError ? "bbt-unreachable" : "invalid-request", message }), ...bbtError ? { bbtError } : {} };
   }
   const today = localDay(host.now);

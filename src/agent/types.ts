@@ -138,7 +138,7 @@ export type FailureReason =
 	| "attachment-file-missing" | "pdf-too-large" | "pdf-invalid" | "pdfjs-unavailable" | "no-cache" | "quotes-empty"
 	| "inline-too-large" | "timeout" | "plugin-too-old" | "legacy-plugin-enabled"
 	| "index-incomplete" | "invalid-request" | "cache-invalid" | "source-changed" | "apply-failed" | "scan-incomplete"
-	| "discovery-incomplete" | "note-conflict";
+	| "discovery-incomplete" | "note-conflict" | "zotero-too-old";
 
 /** Every response carries this envelope; v1 actions keep `apiVersion: 1`, new actions use 2. */
 export interface Envelope {

@@ -1,14 +1,17 @@
 import type { Capabilities, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { BbtTransportError, httpRequest, isBbtTransportError, mapBounded, rpc, rpcBatch, type BbtTransportReason } from "./api/transport";
+import { BbtTransportError, httpRequest, isBbtTransportError, isUnknownConditionFault, mapBounded, rpc, rpcBatch, zoteroMajor, ZoteroVersionError, type BbtTransportReason } from "./api/transport";
 import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, primaryPdfPath, text } from "./api/normalize";
 import { collectIndex } from "./index/collector";
 import { defaultCollectConcurrency } from "./settings-data";
 import { record, sealEntry, verifyEntry, verifyIndex } from "./identity";
 import { positiveInteger } from "./uris";
 import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentItem, recentKey, windowTerms, type RecentRead } from "./recent/recent-reads";
+import { afterTerms, dateByBisection } from "./recent/read-dating";
 
-/** Calendar days probed concurrently while dating recent reads; the probes are single indexed SQLite queries in Zotero. */
+/** Calendar days probed concurrently when an item's reading day must be found by exact-day probes. */
 const RECENT_DAY_BATCH = 7;
+/** Search conditions only Zotero 10 knows; refusing them is how an older Zotero answers a reading-history search. */
+const ZOTERO_10_CONDITIONS: readonly string[] = ["resultLevel", "lastRead"];
 
 /**
  * The wave-1 refresh concurrency for `concurrency` (twice the value, at most 8). Since 0.6 OPT-10 refreshes use the
@@ -140,13 +143,18 @@ export class BbtService {
 
 	/**
 	 * Items whose attachment Zotero opened within the last `days` calendar days, newest first (Zotero 10
-	 * `attachmentLastRead`). One window search, then exact-day searches backwards from today until every item has its day;
-	 * each probe is one cheap Zotero search. Read-only. Rows without a citekey (standalone PDFs) are left out.
+	 * `attachmentLastRead`). One window search, then the day of each item's latest read by bisection over the window
+	 * (0.6 OPT-19: date-form `lastRead isAfter` searches, about log2(days) per distinct reading day instead of one per day),
+	 * each proposed day confirmed by one exact-day search.
+	 * Read-only. Rows without a citekey (standalone PDFs) are left out. A Zotero that refuses the Zotero 10 search
+	 * conditions raises `ZoteroVersionError`, never a Better BibTeX outage.
 	 */
 	async recentlyRead(days: number, options: { signal?: AbortSignal; now?: Date } = {}): Promise<RecentRead[]> {
 		const window = clampRecentDays(days);
 		const search = async (terms: unknown[]): Promise<unknown[]> => {
-			const result = await this.call("item.search", [terms], this.settings.requestTimeoutMs, options.signal);
+			let result: unknown;
+			try { result = await this.call("item.search", [terms], this.settings.requestTimeoutMs, options.signal); }
+			catch (error) { throw await this.zotero10Gate(error, options.signal); }
 			if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
 			return result as unknown[];
 		};
@@ -155,20 +163,53 @@ export class BbtService {
 			const parsed = parseRecentItem(raw);
 			if (parsed) rows.set(recentKey(parsed), { ...parsed, readOn: null });
 		}
+		if (!rows.size) return [];
 		const today = localDay(options.now ?? new Date());
-		let undated = rows.size;
-		for (let offset = 0; offset < window && undated > 0; offset += RECENT_DAY_BATCH) {
+		const concurrency = Math.max(1, this.settings.concurrency);
+		const keysOf = (found: unknown[]): Set<string> => {
+			const keys = new Set<string>();
+			for (const raw of found) { const parsed = parseRecentItem(raw); if (parsed) keys.add(recentKey(parsed)); }
+			return keys;
+		};
+		// Bisection proposes each item's day; one exact-day search per proposed day (the `is` form verified live in 0.5)
+		// confirms it. An item its proposed day does not confirm is dated by exact-day probes backwards from today, as before
+		// 0.6, so a Zotero that compares `isAfter` differently costs searches but never mis-dates a read.
+		const proposed = await dateByBisection([...rows.keys()], addDays(today, -(window - 1)), today, async day => keysOf(await search(afterTerms(day))), concurrency);
+		const byDay = new Map<string, string[]>();
+		for (const [key, day] of proposed) byDay.set(day, [...(byDay.get(day) ?? []), key]);
+		const proposedDays = [...byDay.keys()];
+		const confirmed = await mapBounded(proposedDays, concurrency, async day => keysOf(await search(dayTerms(day))));
+		const undated = new Set(rows.keys());
+		proposedDays.forEach((day, index) => {
+			for (const key of byDay.get(day) ?? []) {
+				const row = rows.get(key);
+				if (row && confirmed[index].has(key)) { row.readOn = day; undated.delete(key); }
+			}
+		});
+		for (let offset = 0; offset < window && undated.size > 0; offset += RECENT_DAY_BATCH) {
 			const daysToProbe = Array.from({ length: Math.min(RECENT_DAY_BATCH, window - offset) }, (_, step) => addDays(today, -(offset + step)));
-			const results = await mapBounded(daysToProbe, Math.max(1, this.settings.concurrency), day => search(dayTerms(day)));
+			const results = await mapBounded(daysToProbe, concurrency, async day => keysOf(await search(dayTerms(day))));
 			results.forEach((found, step) => {
-				for (const raw of found) {
-					const parsed = parseRecentItem(raw);
-					const row = parsed ? rows.get(recentKey(parsed)) : undefined;
-					if (row && row.readOn === null) { row.readOn = daysToProbe[step]; undated--; }
+				for (const key of found) {
+					const row = rows.get(key);
+					if (row && undated.has(key)) { row.readOn = daysToProbe[step]; undated.delete(key); }
 				}
 			});
 		}
 		return orderRecent([...rows.values()]);
+	}
+
+	/**
+	 * 0.6 recent-reads-efficiency: a refused Zotero 10 search condition (`Invalid condition 'resultLevel'`, JSON-RPC
+	 * -32603) becomes a `ZoteroVersionError` naming the version `api.ready` reports, unless that version is 10 or later
+	 * (then the original fault stands). Any other error is returned unchanged.
+	 */
+	private async zotero10Gate(error: unknown, signal?: AbortSignal): Promise<unknown> {
+		if (!isUnknownConditionFault(error, ZOTERO_10_CONDITIONS)) return error;
+		let found: string | null = null;
+		try { found = (await this.capabilities({ signal })).zotero; } catch { /* the refused condition alone tells */ }
+		const major = zoteroMajor(found);
+		return major !== null && major >= 10 ? error : new ZoteroVersionError("Zotero's reading history", 10, found, error);
 	}
 
 	/** Parent items whose citekey is exactly `citekey`, in every library (a citekey is unique only within one library). */

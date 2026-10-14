@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runAction, validateActionRequest, type ActionHost } from "../src/agent/actions";
 import { buildConnection } from "../src/agent/connection";
-import { BbtTransportError } from "../src/api/transport";
+import { BbtTransportError, ZoteroVersionError } from "../src/api/transport";
 import { IngestAPI } from "../src/ingest-api";
 import { DEFAULT_SETTINGS, type ZoteroIndex } from "../src/types";
 import type { ImportNoteResult, RecentReport } from "../src/recent/recent-reads";
@@ -77,6 +77,15 @@ test("recent reports an unreachable Zotero with the typed transport fault", asyn
 	assert.equal(result.ok, false);
 	assert.equal(result.reason, "bbt-unreachable");
 	assert.deepEqual(result.bbtError, { reason: "connection-refused", endpoint: "http://127.0.0.1:23119/better-bibtex/json-rpc" });
+});
+
+test("recent on a Zotero older than 10 is zotero-too-old, never bbt-unreachable (0.6)", async () => {
+	const refusal = new BbtTransportError("rpc", "http://127.0.0.1:23119/better-bibtex/json-rpc", "Invalid condition 'resultLevel' in hasOperator()");
+	const result = await runAction(host({ recentReads: async () => { throw new ZoteroVersionError("Zotero's reading history", 10, "9.0.4", refusal); } }), "recent", {});
+	assert.equal(result.ok, false);
+	assert.equal(result.reason, "zotero-too-old");
+	assert.match(String(result.message), /needs Zotero 10 or later; this Zotero is 9\.0\.4/);
+	assert.equal(result.bbtError, undefined);
 });
 
 const item = { id: "1:ABCD2345", citekey: "Example2026", title: "Synthetic example", year: "2026", libraryID: 1, itemKey: "ABCD2345" };
