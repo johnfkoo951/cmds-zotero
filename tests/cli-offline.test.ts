@@ -98,7 +98,7 @@ test("standalone core parses YAML without the repository node_modules or a globa
 	const isolated = mkdtempSync(join(tmpdir(), "zotero-standalone-"));
 	temporaryRoots.push(isolated);
 	copyFileSync(join(process.cwd(), "scripts", "ingest-core.mjs"), join(isolated, "core.mjs"));
-	writeFileSync(join(isolated, "run.mjs"), 'import {runAction} from "./core.mjs"; const original=globalThis.require; const result=await runAction({action:"cites",vault:"Research",vaultPath:process.argv[2],request:{path:"note.md"}}); if(globalThis.require!==original)throw Error("Global require was mutated");console.log(JSON.stringify(result));');
+	writeFileSync(join(isolated, "run.mjs"), 'import {runAction} from "./core.mjs"; const original=globalThis.require; const result=await runAction({action:"cites",vault:"Research",vaultPath:process.argv[2],configDir:".obsidian",request:{path:"note.md"}}); if(globalThis.require!==original)throw Error("Global require was mutated");console.log(JSON.stringify(result));');
 	const result = spawnSync(process.execPath, [join(isolated, "run.mjs"), root], { cwd: isolated, encoding: "utf8", env: { ...process.env, NODE_PATH: "" } });
 	assert.equal(result.status, 0, result.stderr);
 	const payload = JSON.parse(result.stdout);

@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parse as parseYamlText } from "yaml";
 import { readLocalFile } from "../local-file";
 import { parseNoteText } from "../frontmatter-read";
-import type { NoteRecord, VaultReader } from "../agent/types";
+import type { NoteRecord, ScanSkip, VaultReader } from "../agent/types";
 import { findNote as findListedNote, notePathCandidates } from "../agent/note-lookup";
 import { normalizeSettings } from "../settings-data";
 import type { CmdsZoteroSettings } from "../types";
@@ -14,22 +14,18 @@ export const MAX_LISTED_NOTES = 20000;
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 
 /**
- * HYG-02: Obsidian's default configuration folder, the one place the offline CLI names it. The CLI runs without
- * Obsidian, so there is no `Vault#configDir` to read: the folder is a parameter (`--config-dir`) and this is only its
- * default. The `obsidianmd/hardcoded-config-path` warning on this line is expected; the plugin's lint configuration
- * forbids disabling `obsidianmd/*` rules inline.
+ * HYG-02: a configuration folder name as Obsidian accepts one: a single path segment that starts with a dot. The offline CLI
+ * runs without Obsidian, so there is no `Vault#configDir` to ask. The folder is therefore always a parameter (`--config-dir`),
+ * and the command line wrapper (scripts/ingest.mjs) supplies Obsidian's default when none is given: no plugin source names
+ * the default folder, which `obsidianmd/hardcoded-config-path` forbids and its configuration does not let a file disable.
  */
-export const DEFAULT_CONFIG_DIR = ".obsidian";
-
-/** A configuration folder name as Obsidian accepts one: a single path segment that starts with a dot. Null means the default. */
-export function configDirOf(value: string | null | undefined): string {
-	if (value === null || value === undefined) return DEFAULT_CONFIG_DIR;
-	if (!/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
+export function configDirOf(value: string): string {
+	if (typeof value !== "string" || !/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
 	return value;
 }
 
 /** One step of the scan order: a note file, an entry the scan passes without reading, or a path it reports as skipped. */
-type WalkEvent = { kind: "note"; path: string; basename: string } | { kind: "skip"; path: string } | { kind: "pass" };
+type WalkEvent = { kind: "note"; path: string; basename: string } | { kind: "skip"; path: string; reason: "unreadable" | "symlink" } | { kind: "pass" };
 
 export interface VaultLocation { name: string; path: string }
 
@@ -61,10 +57,12 @@ export function parseFrontmatter(text: string): ReturnType<typeof parseNoteText>
 
 /** Offline read-only vault access over the filesystem: refuses symlinks and anything outside the vault root. */
 export class FsVaultReader implements VaultReader {
-	private report = { skipped: [] as string[], truncated: false };
+	private report = { skipped: [] as string[], truncated: false, skippedDetail: [] as ScanSkip[] };
 	/** `limit` is the note cap of one scan (MAX_LISTED_NOTES); tests lower it. */
 	constructor(private root: string, private name: string, private limit = MAX_LISTED_NOTES) {}
-	scanWarnings(): { skipped: string[]; truncated: boolean } { return { skipped: [...this.report.skipped], truncated: this.report.truncated }; }
+	scanWarnings(): { skipped: string[]; truncated: boolean; skippedDetail: ScanSkip[] } { return { skipped: [...this.report.skipped], truncated: this.report.truncated, skippedDetail: this.report.skippedDetail.map(item => ({ ...item })) }; }
+	// 0.5 R8: every skipped path carries its kind so reconcile apply can veto on unreadable or symlinked entries only.
+	private skip(path: string, kind: ScanSkip["kind"]): void { this.report.skipped.push(path); this.report.skippedDetail.push({ path, kind }); }
 
 	vaultName(): string { return this.name; }
 
@@ -85,11 +83,11 @@ export class FsVaultReader implements VaultReader {
 	private async *walk(dir: string): AsyncGenerator<WalkEvent> {
 		yield { kind: "pass" };
 		let entries: Dirent[];
-		try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { yield { kind: "skip", path: relative(this.root, dir) }; return; }
+		try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { yield { kind: "skip", path: relative(this.root, dir).split(sep).join("/"), reason: "unreadable" }; return; }
 		entries.sort((a, b) => a.name.localeCompare(b.name));
 		for (const entry of entries) {
 			const full = join(dir, entry.name);
-			if (entry.isSymbolicLink()) { yield { kind: "skip", path: relative(this.root, full) }; continue; }
+			if (entry.isSymbolicLink()) { yield { kind: "skip", path: relative(this.root, full).split(sep).join("/"), reason: "symlink" }; continue; }
 			if (entry.isDirectory()) { yield { kind: "pass" }; if (!entry.name.startsWith(".")) yield* this.walk(full); continue; }
 			if (!entry.isFile() || !entry.name.endsWith(".md")) { yield { kind: "pass" }; continue; }
 			yield { kind: "note", path: relative(this.root, full).split(sep).join("/"), basename: entry.name.replace(/\.md$/, "") };
@@ -98,15 +96,15 @@ export class FsVaultReader implements VaultReader {
 
 	async listNotes(): Promise<NoteRecord[]> {
 		const notes: NoteRecord[] = [];
-		this.report = { skipped: [], truncated: false };
+		this.report = { skipped: [], truncated: false, skippedDetail: [] };
 		// PERF-07: up to SCAN_CONCURRENCY notes are read ahead while the walk is visited in order, so notes, skipped and
 		// truncated equal the sequential walk's (a note read past the cap is discarded).
 		await scanInOrder(this.walk(this.root), SCAN_CONCURRENCY, event => event.kind === "note" ? this.readNote(event.path).then(parseFrontmatter) : null, (event, outcome) => {
 			if (notes.length >= this.limit) { this.report.truncated = true; return false; }
-			if (event.kind === "skip") { this.report.skipped.push(event.path); return true; }
+			if (event.kind === "skip") { this.skip(event.path, event.reason); return true; }
 			if (event.kind === "pass") return true;
-			if (!outcome?.ok) { this.report.skipped.push(event.path); return true; }
-			if (outcome.value.frontmatterParse === "error") this.report.skipped.push(event.path);
+			if (!outcome?.ok) { this.skip(event.path, "unreadable"); return true; }
+			if (outcome.value.frontmatterParse === "error") this.skip(event.path, "parse-error");
 			notes.push({ path: event.path, basename: event.basename, frontmatter: outcome.value.frontmatter, frontmatterParse: outcome.value.frontmatterParse });
 			return true;
 		});
@@ -174,21 +172,21 @@ export class FsVaultReader implements VaultReader {
 }
 
 /** Plugin settings as persisted by Obsidian in the vault's configuration folder, normalized exactly like the plugin does; defaults when absent. */
-export async function readPluginSettings(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<{ settings: CmdsZoteroSettings; present: boolean }> {
+export async function readPluginSettings(root: string, configDir: string): Promise<{ settings: CmdsZoteroSettings; present: boolean }> {
 	try {
 		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
 		return { settings: normalizeSettings(raw), present: true };
 	} catch { return { settings: normalizeSettings({}), present: false }; }
 }
 
-export async function readEnabledPlugins(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<string[] | null> {
+export async function readEnabledPlugins(root: string, configDir: string): Promise<string[] | null> {
 	try {
 		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "community-plugins.json"), "utf8"));
 		return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : null;
 	} catch { return null; }
 }
 
-export async function readInstalledPluginVersion(root: string, configDir = DEFAULT_CONFIG_DIR): Promise<string | null> {
+export async function readInstalledPluginVersion(root: string, configDir: string): Promise<string | null> {
 	try {
 		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "manifest.json"), "utf8"));
 		const version = raw && typeof raw === "object" ? (raw as { version?: unknown }).version : undefined;

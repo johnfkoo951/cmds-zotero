@@ -5,6 +5,7 @@
  */
 import type { CmdsZoteroSettings, Diagnostic, ZoteroIndex, ZoteroIndexEntry } from "../types";
 import type { ConnectionInfo, Envelope, FailureReason, IndexView, NoteRecord, NoteRef, RankedItem, ResolveOutcome, ScanReport, Selector, VaultNotes, VaultReader } from "./types";
+import type { ReconcileScanReport, ScanSkip, YamlCodec } from "./types"; // 0.5 R8
 import { HUB_IDENTITY_KEYS, noteRef } from "./types";
 import { buildEnvelope, infoWarnings, staleGate } from "./connection";
 import { resolveIndex, selectorKind } from "./resolve";
@@ -17,9 +18,12 @@ import type { NoteLookups } from "./cites-core";
 // 0.5 R10
 import { BIBLIOGRAPHY_FORMATS, DEFAULT_REFERENCES_HEADING, defaultSidecarPath, groupResolvedByLibrary, isStructuredFormat, mergeExports, sidecarContent, sidecarWriteDecision, structuredReferencesPayload, validateSidecarPath } from "./cites-core";
 import type { BibliographyExporter, BibliographyFormat, ReferencesPayload, StructuredExport, StructuredReferencesPayload } from "./cites-core";
-import { reconcileNotes } from "./reconcile-core";
+import { inFolders, reconcileNotes } from "./reconcile-core";
 import type { ReconcileResult } from "./reconcile-core";
 import { findNote } from "./note-lookup";
+// 0.6: annotations and citing
+import { attachVaultCopies, describeFilters, hasImages, parseAnnotationFilters, readCandidates, selectAnnotations, type AnnotationFilterRequest } from "./annotations";
+import { CITING_MAX_NOTES, CITING_READ_CONCURRENCY, citingKeys, citingNote, sortCitingNotes, type CitingNote } from "./citing";
 import { diagnostic } from "../diagnostics";
 import type { AgentDiagnostic } from "../diagnostics";
 import { cachePrefix, parseCacheName, pickNewest, validateCache, verifyCache, PDF_TEXT_CACHE_DIR } from "../pdf/cache";
@@ -28,10 +32,10 @@ import type { ExtractResult } from "../pdf/extract";
 import { extractQuoteCallouts, locateBatch } from "../pdf/locate";
 import type { LocateRequest } from "../pdf/locate";
 import { createHash } from "node:crypto";
-import { bbtErrorPayload } from "../api/transport";
-import { IndexRefusalError } from "../index-service";
+import { bbtErrorPayload, describeBbtError, mapBounded } from "../api/transport";
+import { formatIndexAge, IndexRefusalError } from "../index-service";
 import { textLayerReport, textLayerWarning } from "../pdf/text-layer";
-import { describeNoteStatus, describeSendOutcome, localDay, needsSending, readLabel, type ImportNoteResult, type RecentReport } from "../recent/recent-reads";
+import { describeNoteStatus, describeSendOutcome, indexEntryFor, localDay, needsSending, readLabel, type ImportNoteResult, type RecentRead, type RecentReport } from "../recent/recent-reads";
 
 export { findNote };
 
@@ -43,6 +47,7 @@ export interface BibliographyProvider {
 }
 
 export interface PdfCacheReader {
+	/** File names directly inside a vault-relative folder (empty when it is absent); also lists the image folder for `annotations`. */
 	list(dir: string): Promise<string[]>;
 	read(path: string): Promise<string | null>;
 	statLocal(absolutePath: string): Promise<{ size: number; mtimeMs: number } | null>;
@@ -53,10 +58,10 @@ export interface PdfCacheReader {
 	fileHash(vaultRelativePath: string): Promise<{ sha256: string; absolutePath: string } | null>;
 }
 
-export type AgentAction = "connection" | "info" | "refresh" | "resolve" | "identity" | "cites" | "reconcile" | "diagnostics" | "pdf-text" | "locate" | "recent" | "import";
-export const AGENT_ACTIONS: readonly AgentAction[] = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate", "recent", "import"];
+export type AgentAction = "connection" | "info" | "refresh" | "resolve" | "identity" | "cites" | "reconcile" | "diagnostics" | "pdf-text" | "locate" | "recent" | "import" | "annotations" | "citing";
+export const AGENT_ACTIONS: readonly AgentAction[] = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate", "recent", "import", "annotations", "citing"];
 export const ACTION_API_VERSION: Readonly<Record<AgentAction, 1 | 2>> = {
-	connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, "pdf-text": 2, locate: 2, recent: 2, import: 2
+	connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, "pdf-text": 2, locate: 2, recent: 2, import: 2, annotations: 2, citing: 2
 };
 
 export interface ActionHost {
@@ -84,7 +89,20 @@ export interface ActionHost {
 	recentReads?: (days: number) => Promise<RecentReport[]>;
 	/** Live host only: the literature-note import the plugin UI uses; writes only when `request.apply` is true. */
 	importNote?: (request: ImportRequest) => Promise<ImportNoteResult>;
+	/** 0.5 R8: YAML codec for the informational `yamlNormalisable` flag on reconcile rows; absent hosts omit the flag. */
+	yaml?: YamlCodec;
+	/**
+	 * 0.6, live host only: an item as Zotero has it now (one fresh export plus its attachments, annotations made since the index was
+	 * saved included). A fault comes back as `error` (with `entry` the saved item, or null for a paper the index lacks), never as a throw.
+	 */
+	freshEntry?: (subject: FreshSubject) => Promise<FreshEntryResult>;
+	/** 0.6, live host only: the papers whose PDF Zotero opened on this local calendar day (`YYYY-MM-DD`); throws when Zotero cannot answer. */
+	readOnDay?: (day: string) => Promise<RecentRead[]>;
 }
+
+/** What `freshEntry` reads: a saved index entry, or a paper from Zotero's reading history that the index may not know. */
+export type FreshSubject = { entry: ZoteroIndexEntry } | { read: RecentRead };
+export interface FreshEntryResult { entry: ZoteroIndexEntry | null; fresh: boolean; error?: unknown }
 
 /** 0.5 R10: vault-relative sidecar access; `read` returns null when absent, `write` ensures the private ignore file and folders and returns the byte count. */
 export interface SidecarStore {
@@ -102,7 +120,11 @@ export interface RefreshRequest { ifOlderThanMinutes?: number }
 export interface PdfTextRequest { citekey?: string; itemKey?: string; libraryID?: number; file?: string; attachment?: string; pages?: string; force?: boolean }
 export interface RecentRequest { days?: number }
 export interface ImportRequest { citekey?: string; itemKey?: string; libraryID?: number; apply?: boolean; allowStale?: boolean }
-export type ActionRequest = ResolveRequest | IdentityRequest | CitesRequest | ReconcileRequest | LocateRequestArgs | RefreshRequest | PdfTextRequest | RecentRequest | ImportRequest | CommonRequest | Record<string, never>;
+/** 0.6: exactly one of `citekey`, `itemKey` (with `libraryID`) or `today`. */
+export interface AnnotationsRequest extends CommonRequest, AnnotationFilterRequest { citekey?: string; itemKey?: string; libraryID?: number; today?: boolean; fresh?: boolean }
+/** 0.6: one selector family, exactly as `resolve` takes it. */
+export type CitingRequest = Selector & CommonRequest;
+export type ActionRequest = ResolveRequest | IdentityRequest | CitesRequest | ReconcileRequest | LocateRequestArgs | RefreshRequest | PdfTextRequest | RecentRequest | ImportRequest | AnnotationsRequest | CitingRequest | CommonRequest | Record<string, never>;
 
 type Payload = Envelope & Record<string, unknown>;
 
@@ -384,7 +406,37 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	return { ...payload, out: { path: outPath, written: true, bytes } };
 }
 
-export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest, listedNotes?: NoteRecord[]): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean }> {
+// 0.5 R8
+/**
+ * The reconcile scan report: every skipped path classified. A reader without `skippedDetail` is classified from the
+ * listing (rows whose frontmatter failed to parse are parse errors; any other skipped path counts as unreadable).
+ */
+function reconcileScanOf(host: ActionHost, listed: NoteRecord[]): ReconcileScanReport {
+	const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+	const parseErrors = new Set(listed.filter(note => note.frontmatterParse === "error").map(note => note.path));
+	const skippedDetail: ScanSkip[] = scan.skippedDetail ? scan.skippedDetail.map(item => ({ ...item })) : scan.skipped.map(path => ({ path, kind: parseErrors.has(path) ? "parse-error" : "unreadable" }));
+	for (const item of skippedDetail) if (item.kind === "parse-error") parseErrors.add(item.path);
+	return { skipped: [...scan.skipped], truncated: scan.truncated, skippedDetail, parseErrors: [...parseErrors].sort() };
+}
+
+const listPaths = (paths: string[]): string => { const shown = paths.slice(0, 10); return `${shown.join(", ")}${paths.length > shown.length ? ` (+${paths.length - shown.length} more)` : ""}`; };
+
+/**
+ * Why `--apply` is refused for the whole vault: a truncated scan, an unreadable or symlinked entry, or a parse-error note
+ * inside the apply scope (under `--folders`, or one of the candidate hubs). Parse errors elsewhere are echoed in
+ * `scan.parseErrors`; a hub they mention is withheld individually (`blocked-by-parse-error`), never the vault.
+ */
+function applyScanVeto(scan: ReconcileScanReport, result: ReconcileResult): string | null {
+	if (scan.truncated) return "Vault discovery was truncated at the note limit; hubs may be missing, so reconcile apply is refused.";
+	const unreadable = scan.skippedDetail.filter(item => item.kind !== "parse-error").map(item => item.path);
+	if (unreadable.length) return `Vault discovery skipped ${unreadable.length} unreadable or symlinked ${unreadable.length === 1 ? "entry" : "entries"} (${listPaths(unreadable)}); reconcile apply is refused.`;
+	const candidates = new Set(result.notes.filter(note => note.type === "paper-hub" && note.proposalEligible && note.proposed).map(note => note.path));
+	const inScope = scan.parseErrors.filter(path => candidates.has(path) || (result.folders.length > 0 && inFolders(path, result.folders)));
+	if (inScope.length) return `${inScope.length} ${inScope.length === 1 ? "note" : "notes"} with unparseable frontmatter ${inScope.length === 1 ? "lies" : "lie"} inside the apply scope (${listPaths(inScope)}); repair ${inScope.length === 1 ? "it" : "them"} or narrow --folders. Parse errors outside the scope are listed in scan.parseErrors and do not veto apply.`;
+	return null;
+}
+
+export async function reconcileDryRun(host: ActionHost, request: ReconcileRequest, listedNotes?: NoteRecord[]): Promise<{ result: ReconcileResult; view: IndexView | null; stale: boolean; scan: ReconcileScanReport }> {
 	const view = host.indexView;
 	// Preserve raw freshness for proposals/apply: allowStale relaxes reporting only and never turns stale evidence fresh.
 	const stale = view ? host.connection.index.complete !== true || host.connection.index.stale !== false : true;
@@ -396,20 +448,27 @@ export async function reconcileDryRun(host: ActionHost, request: ReconcileReques
 		else notes.push(note);
 	}
 	const pdfPaths = await host.vaultPdfPaths();
-	const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders });
+	// 0.5 R8: parse-error notes are read once so hubs they mention can be withheld; one that vanished since the listing is unreadable.
+	const scan = reconcileScanOf(host, listed);
+	const parseErrorSources: { path: string; text: string }[] = [];
+	for (const path of scan.parseErrors) {
+		try { parseErrorSources.push({ path, text: await host.reader.readNote(path) }); }
+		catch { scan.skippedDetail.push({ path, kind: "unreadable" }); if (!scan.skipped.includes(path)) scan.skipped.push(path); }
+	}
+	const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders, parseErrorSources, ...(host.yaml ? { yaml: host.yaml } : {}) });
 	const sourceByPath = new Map(notes.filter(note => note.body !== undefined).map(note => [note.path, note.body as string]));
 	for (const note of result.notes) {
 		const source = sourceByPath.get(note.path);
 		if (source !== undefined) (note as typeof note & { sourceHash: string }).sourceHash = createHash("sha256").update(source).digest("hex");
 	}
-	return { result, view, stale };
+	return { result, view, stale, scan };
 }
 
 export async function reconcileAction(host: ActionHost, request: ReconcileRequest): Promise<Payload> {
-	const { result, view } = await reconcileDryRun(host, request);
-	const scan = scanOf(host);
+	const { result, view, scan } = await reconcileDryRun(host, request);
 	if (!request.apply) return { ...envelope(host, "reconcile", 2), mode: "dry-run", ...result, scan, apply: { mode: "dry-run" }, generatedAt: view?.index.generatedAt ?? null };
-	if (scan.truncated || scan.skipped.length) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: "Vault discovery was incomplete; reconcile apply is refused." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete" }, generatedAt: view?.index.generatedAt ?? null };
+	const veto = applyScanVeto(scan, result); // 0.5 R8: scoped scan policy replaces the any-skip veto
+	if (veto) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: veto }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete", refusedMessage: veto }, generatedAt: view?.index.generatedAt ?? null };
 	if (!host.applyReconcile) return { ...envelope(host, "reconcile", 2, { reason: "requires-obsidian", message: "reconcile --apply requires the live Obsidian host." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "requires-obsidian" }, generatedAt: view?.index.generatedAt ?? null };
 	const applied = await host.applyReconcile(result, request);
 	const applyState = applied && typeof applied === "object" ? applied as { mode?: unknown; refusedReason?: unknown; notes?: unknown } : {};
@@ -593,18 +652,21 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale"], // 0.5 R10: format/out/force
 		"pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"], locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
 		recent: ["days"], import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"],
+		// 0.6
+		annotations: ["citekey", "itemKey", "libraryID", "today", "attachment", "color", "type", "tag", "fresh", "allowStale"],
+		citing: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale"],
 	};
 	for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
-	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
-	for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote"]) { const value = request[key]; if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`); }
+	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
+	for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote", "color", "type", "tag"]) { const value = request[key]; if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`); }
 	if ("libraryID" in request && (!Number.isSafeInteger(request.libraryID) || (request.libraryID as number) < 1)) throw new Error("libraryID must be a positive integer.");
 	if ("ifOlderThanMinutes" in request && (!Number.isSafeInteger(request.ifOlderThanMinutes) || (request.ifOlderThanMinutes as number) < 1 || (request.ifOlderThanMinutes as number) > 10080)) throw new Error("ifOlderThanMinutes must be between 1 and 10080.");
 	if ("folders" in request && (!Array.isArray(request.folders) || request.folders.some(folder => typeof folder !== "string" || !folder.trim()))) throw new Error("folders must be an array of non-empty paths.");
 	if (request.itemKey !== undefined && (typeof request.itemKey !== "string" || !/^[A-Z0-9]{8}$/.test(request.itemKey) || request.libraryID === undefined)) throw new Error("itemKey requires eight uppercase letters/digits and libraryID.");
 	if ((request.year !== undefined || request.author !== undefined) && request.title === undefined && request.query === undefined) throw new Error("year and author narrow title or query only.");
-	if (action === "resolve" || action === "identity") {
+	if (action === "resolve" || action === "identity" || action === "citing") {
 		const selectors = ["citekey", "itemKey", "doi", "arxiv", "title", "query"].filter(key => request[key] !== undefined);
-		if (action === "resolve" && selectors.length !== 1) throw new Error("resolve requires exactly one selector.");
+		if ((action === "resolve" || action === "citing") && selectors.length !== 1) throw new Error(`${action} requires exactly one selector.`);
 		if (action === "identity" && (selectors.length < 1 || selectors.filter(key => key !== "citekey").length > 1)) throw new Error("identity requires one selector and may pair a vault citekey with one lookup selector.");
 	}
 	if (action === "cites" && request.path === undefined) throw new Error("cites requires path.");
@@ -615,6 +677,11 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 	if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined).length !== 1) throw new Error("pdf-text requires exactly one target.");
 	if (action === "recent" && request.days !== undefined && (!Number.isSafeInteger(request.days) || (request.days as number) < 1 || (request.days as number) > 365)) throw new Error("days must be an integer between 1 and 365.");
 	if (action === "import" && ["citekey", "itemKey"].filter(key => request[key] !== undefined).length !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID.");
+	if (action === "annotations") {
+		if (["citekey", "itemKey"].filter(key => request[key] !== undefined).length + (request.today === true ? 1 : 0) !== 1) throw new Error("annotations requires exactly one selector: citekey, itemKey with libraryID, or today.");
+		const filters = parseAnnotationFilters(request);
+		if ("error" in filters) throw new Error(filters.error);
+	}
 	if (action === "locate") {
 		const targets = ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined);
 		if (request.path === undefined && (targets.length !== 1 || request.quote === undefined)) throw new Error("locate requires path, or one target with quote.");
@@ -722,6 +789,134 @@ export async function importAction(host: ActionHost, request: ImportRequest): Pr
 	return { ...envelope(host, "import", 2), ...body };
 }
 
+/**
+ * `annotations` (0.6): a paper's annotations for agents, grouped by attachment in Zotero's reading order, optionally filtered
+ * by color, type, tag and attachment. The default answers from the saved index (offline-capable); `fresh` reads the item from
+ * Zotero now (live only) and `today` selects the one paper Zotero opened today. Read-only.
+ */
+export async function annotationsAction(host: ActionHost, request: AnnotationsRequest): Promise<Payload> {
+	const fail = (reason: FailureReason, message: string, extra: Record<string, unknown> = {}): Payload => ({ ...envelope(host, "annotations", 2, { reason, message }), ...extra });
+	const parsed = parseAnnotationFilters(request);
+	if ("error" in parsed) return fail("invalid-request", parsed.error);
+	const filters = parsed.filters;
+	const wantsFresh = request.fresh === true;
+	const wantsToday = request.today === true;
+	if (wantsFresh && !host.freshEntry) return fail("requires-obsidian", "annotations --fresh requires the live Obsidian host and a running Zotero.");
+	if (wantsToday && !host.readOnDay) return fail("requires-obsidian", "annotations --today requires the live Obsidian host and a running Zotero.");
+	const view = host.indexView;
+	let entry: ZoteroIndexEntry | null = null;
+	let subject: FreshSubject | null = null;
+	let selection: Record<string, unknown>;
+	if (wantsToday) {
+		const day = localDay(host.now);
+		let reads: RecentRead[];
+		try { reads = (await host.readOnDay?.(day) ?? []).filter(read => read.readOn === day); }
+		catch (error) {
+			const bbtError = bbtErrorPayload(error);
+			return fail(bbtError ? "bbt-unreachable" : "invalid-request", describeBbtError(error), bbtError ? { bbtError } : {});
+		}
+		if (reads.length !== 1) {
+			const none = reads.length === 0;
+			return { ...envelope(host, "annotations", 2), status: none ? "not-found" : "ambiguous", today: { day, reads: reads.length }, ...(none ? {} : { candidates: readCandidates(reads, view?.index.entries ?? []) }), message: none ? "Zotero reports no paper opened today." : `${reads.length} papers were opened today; pass --citekey, or --item-key with --library.` };
+		}
+		const known = view ? indexEntryFor(reads[0], view.index.entries) : null;
+		entry = known;
+		subject = known ? { entry: known } : { read: reads[0] };
+		selection = { today: { day, reads: 1 } };
+		if (!known && !wantsFresh) return fail("stale-index", `The paper opened today (@${reads[0].citekey}) is not in the saved index; pass --fresh to read it from Zotero, or refresh the index.`, { status: "unavailable", today: { day, reads: 1 }, candidates: readCandidates(reads, view?.index.entries ?? []) });
+	} else {
+		const required = requireIndex(host, "annotations", 2);
+		if ("failure" in required) return required.failure;
+		const outcome = resolveIndex(required.view.index, selectorOf(request));
+		const echo = { matchedBy: outcome.matchedBy, query: outcome.query };
+		if (outcome.status === "not-found" && staleGate(host.connection, request.allowStale === true)) {
+			return fail("stale-index", `The index is ${required.view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.`, { status: "unavailable", indexAnswer: "not-found", ...echo, ranked: outcome.ranked });
+		}
+		if (outcome.status !== "resolved" || !outcome.entry) return { ...envelope(host, "annotations", 2), status: outcome.status, ...echo, ...(outcome.message ? { message: outcome.message } : {}), ranked: outcome.ranked, generatedAt: required.view.index.generatedAt };
+		entry = outcome.entry;
+		subject = { entry };
+		selection = { ...echo, ...(outcome.matchedHistory ? { matchedHistory: true } : {}) };
+	}
+	let used: ZoteroIndexEntry | null = entry;
+	let source: "snapshot" | "fresh" = "snapshot";
+	const warnings: string[] = [];
+	if (wantsFresh && subject) {
+		const found = await host.freshEntry?.(subject) ?? { entry: null, fresh: false };
+		if (found.fresh && found.entry) { used = found.entry; source = "fresh"; }
+		else {
+			const bbtError = bbtErrorPayload(found.error);
+			const detail = found.error === undefined ? "Zotero did not answer." : describeBbtError(found.error);
+			if (request.allowStale !== true || !entry) return fail(bbtError ? "bbt-unreachable" : "invalid-request", `${detail} The annotations could not be read fresh from Zotero${entry ? "; pass --allow-stale to answer from the saved index (annotations made since it was saved are missing)" : ""}.`, { ...(bbtError ? { bbtError } : {}), ...(entry ? { item: reducedItem(entry) } : {}) });
+			warnings.push(`${detail} Answered from the saved index (${formatIndexAge(host.connection.index.ageMinutes ?? 0)} old); annotations made since then are missing.`);
+		}
+	}
+	if (!used) return fail("invalid-request", "No item could be selected.");
+	if (source === "snapshot" && host.connection.index.stale === true && !warnings.length) warnings.push(`The saved index is ${host.connection.index.ageMinutes ?? 0} minutes old; annotations made since then are missing (use --fresh with Obsidian and Zotero running).`);
+	const selected = selectAnnotations(used, filters);
+	if (selected.unknownAttachment) return fail("invalid-request", `${filters.attachment ?? "That key"} is not an attachment of @${used.citekey}.`, { item: reducedItem(used), attachments: used.attachments.map(attachment => ({ key: attachment.key, title: attachment.title, annotationCount: attachment.annotations.length })) });
+	if (hasImages(selected)) {
+		try { attachVaultCopies(used, selected, host.settings.imageFolder, await host.pdfCache.list(host.settings.imageFolder)); }
+		catch (error) { warnings.push(`The image folder could not be listed (${error instanceof Error ? error.message : "unreadable"}); vaultCopies are empty.`); }
+	}
+	return {
+		...envelope(host, "annotations", 2),
+		status: "resolved",
+		...selection,
+		item: reducedItem(used),
+		source, fresh: source === "fresh",
+		annotationsAsOf: source === "fresh" ? host.now.toISOString() : view?.index.generatedAt ?? null,
+		filters: describeFilters(filters),
+		summary: { total: selected.total, matched: selected.matched, attachments: selected.attachments.length, byType: selected.byType, byColor: selected.byColor },
+		attachments: selected.attachments,
+		warnings,
+		generatedAt: view?.index.generatedAt ?? null,
+	};
+}
+
+/**
+ * `citing` (0.6): the vault notes that cite one Zotero item under its current or a former citekey, with the line, column and
+ * excerpt of each body citation and the frontmatter citations flagged apart. Keys another item also carries are excluded.
+ * Read-only and offline-capable; an empty list proves absence only when `scan.complete` is true.
+ */
+export async function citingAction(host: ActionHost, request: CitingRequest): Promise<Payload> {
+	const index = requireIndex(host, "citing", 2);
+	if ("failure" in index) return index.failure;
+	const view = index.view;
+	const outcome = resolveIndex(view.index, selectorOf(request));
+	const echo = { matchedBy: outcome.matchedBy, query: outcome.query };
+	if (outcome.status === "not-found" && staleGate(host.connection, request.allowStale === true)) {
+		return { ...envelope(host, "citing", 2, { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` }), status: "unavailable", indexAnswer: "not-found", ...echo, ranked: outcome.ranked, generatedAt: view.index.generatedAt };
+	}
+	if (outcome.status !== "resolved" || !outcome.entry) return { ...envelope(host, "citing", 2), status: outcome.status, ...echo, ...(outcome.message ? { message: outcome.message } : {}), ranked: outcome.ranked, generatedAt: view.index.generatedAt };
+	const entry = outcome.entry;
+	const { searched, excluded } = citingKeys(entry, view.index.entries);
+	const keys = new Set(searched.map(item => item.key));
+	const listed = keys.size ? await host.reader.listNotes() : [];
+	const headings = host.settings.referencesHeadings;
+	const unreadable: string[] = [];
+	// Bounded concurrency: a cold vault of thousands of notes reads several times faster than one note at a time.
+	const found = await mapBounded(listed, CITING_READ_CONCURRENCY, async note => {
+		try { return citingNote(host.vault, { ...note, body: await host.reader.readNote(note.path) }, keys, headings); }
+		catch { unreadable.push(note.path); return null; }
+	});
+	const reader = scanOf(host);
+	const skipped = [...new Set([...reader.skipped, ...unreadable])].sort();
+	const scan = { skipped, truncated: reader.truncated, complete: !reader.truncated && skipped.length === 0 };
+	const hits = sortCitingNotes(found.filter((item): item is CitingNote => item !== null));
+	const shown = hits.slice(0, CITING_MAX_NOTES);
+	const failure = reader.truncated ? { reason: "discovery-incomplete" as const, message: `Vault discovery was truncated at the note limit, so notes beyond it were not scanned and the list of citing notes may be incomplete (${skipped.length} notes skipped).` } : undefined;
+	return {
+		...envelope(host, "citing", 2, failure),
+		status: "resolved", ...echo, ...(outcome.matchedHistory ? { matchedHistory: true } : {}),
+		item: reducedItem(entry),
+		keys: { searched, excluded },
+		notes: shown,
+		summary: { notes: hits.length, listed: shown.length, citations: hits.reduce((sum, item) => sum + item.count, 0), frontmatterCitations: hits.reduce((sum, item) => sum + item.frontmatterCount, 0), scanned: listed.length - unreadable.length, truncated: hits.length > shown.length },
+		scan,
+		generatedAt: view.index.generatedAt,
+	};
+}
+
 export async function runAction(host: ActionHost, action: AgentAction, request: unknown = {}): Promise<Payload> {
 	validateActionRequest(action, request);
 	let effectiveHost = host;
@@ -742,5 +937,7 @@ export async function runAction(host: ActionHost, action: AgentAction, request: 
 		case "locate": return locateAction(host, request as LocateRequestArgs);
 		case "recent": return recentAction(host, request as RecentRequest);
 		case "import": return importAction(host, request as ImportRequest);
+		case "annotations": return annotationsAction(host, request as AnnotationsRequest);
+		case "citing": return citingAction(host, request as CitingRequest);
 	}
 }

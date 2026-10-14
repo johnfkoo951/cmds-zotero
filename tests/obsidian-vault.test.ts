@@ -10,11 +10,11 @@ import { build } from "esbuild";
 import { parse as parseYaml } from "yaml";
 import { parseNoteText } from "../src/frontmatter-read";
 import { findNote } from "../src/agent/note-lookup";
-import type { NoteRecord } from "../src/agent/types";
+import type { NoteRecord, ScanSkip } from "../src/agent/types";
 
 interface FakeFile { path: string; basename: string; extension: string; stat: { size: number } }
 interface ReaderModule {
-	ObsidianVaultReader: new (app: unknown, limit?: number) => { listNotes(): Promise<NoteRecord[]>; scanWarnings(): { skipped: string[]; truncated: boolean }; findNote(path: string): Promise<NoteRecord | null>; readNote(path: string): Promise<string> };
+	ObsidianVaultReader: new (app: unknown, limit?: number) => { listNotes(): Promise<NoteRecord[]>; scanWarnings(): { skipped: string[]; truncated: boolean; skippedDetail: ScanSkip[] }; findNote(path: string): Promise<NoteRecord | null>; readNote(path: string): Promise<string> };
 	TFile: new (path: string, size: number) => FakeFile;
 	FileSystemAdapter: new (base: string) => { getBasePath(): string; calls: number };
 	MAX_LISTED_NOTES: number;
@@ -73,18 +73,18 @@ async function fakeApp(root: string, module: ReaderModule, extra: string[] = [])
 	return { app, adapter };
 }
 
-// The 0.5.0 sequential scan, kept verbatim as the reference (reads through the reader's own readNote).
-async function sequentialList(reader: { readNote(path: string): Promise<string> }, app: { vault: { getMarkdownFiles(): FakeFile[] } }, limit: number): Promise<{ notes: NoteRecord[]; skipped: string[]; truncated: boolean }> {
+// The 0.5.0 sequential scan, kept as the reference (reads through the reader's own readNote); 0.5 R8 adds the kind of each skip.
+async function sequentialList(reader: { readNote(path: string): Promise<string> }, app: { vault: { getMarkdownFiles(): FakeFile[] } }, limit: number): Promise<{ notes: NoteRecord[]; skipped: string[]; truncated: boolean; skippedDetail: ScanSkip[] }> {
 	const notes: NoteRecord[] = [];
-	const report = { skipped: [] as string[], truncated: false };
+	const report = { skipped: [] as string[], truncated: false, skippedDetail: [] as ScanSkip[] };
 	const files = app.vault.getMarkdownFiles().filter(file => !file.path.split("/").some(part => part.startsWith("."))).sort((a, b) => a.path.localeCompare(b.path));
 	for (const file of files) {
 		if (notes.length >= limit) { report.truncated = true; break; }
 		try {
 			const parsed = parseNoteText(await reader.readNote(file.path), parseYaml);
-			if (parsed.frontmatterParse === "error") report.skipped.push(file.path);
+			if (parsed.frontmatterParse === "error") { report.skipped.push(file.path); report.skippedDetail.push({ path: file.path, kind: "parse-error" }); }
 			notes.push({ path: file.path, basename: file.basename, frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse });
-		} catch { report.skipped.push(file.path); }
+		} catch { report.skipped.push(file.path); report.skippedDetail.push({ path: file.path, kind: "unreadable" }); }
 	}
 	return { notes, ...report };
 }
@@ -122,7 +122,7 @@ test("PERF-07: the live scan lists, skips and truncates exactly like the 0.5.0 s
 		const reader = new module.ObsidianVaultReader(app, limit);
 		adapter.calls = 0;
 		assert.deepEqual(await reader.listNotes(), expected.notes, `notes at limit ${limit}`);
-		assert.deepEqual(reader.scanWarnings(), { skipped: expected.skipped, truncated: expected.truncated }, `report at limit ${limit}`);
+		assert.deepEqual(reader.scanWarnings(), { skipped: expected.skipped, truncated: expected.truncated, skippedDetail: expected.skippedDetail }, `report at limit ${limit}`);
 		assert.ok(adapter.calls <= 1, `the vault root was resolved ${adapter.calls} times in one scan`);
 	}
 });
@@ -145,5 +145,5 @@ test("PERF-07: the live findNote gives the listing's answer, reading only candid
 	assert.equal((await reader.findNote("b/zeta"))?.frontmatter?.type, "paper-hub");
 	assert.equal(await reader.findNote("b/missing"), null);
 	assert.deepEqual(reads, ["b/zeta.md"], "only the candidate note was read");
-	assert.deepEqual(reader.scanWarnings(), { skipped: [], truncated: false }, "no scan ran");
+	assert.deepEqual(reader.scanWarnings(), { skipped: [], truncated: false, skippedDetail: [] }, "no scan ran");
 });

@@ -8103,6 +8103,24 @@ async function rpc(endpoint, method, params, timeoutMs, signal) {
   if (!("result" in parsed)) throw new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`);
   return parsed.result;
 }
+async function mapBounded(items, concurrency, fn) {
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("Concurrency must be between 1 and 8");
+  const results = new Array(items.length);
+  let cursor = 0;
+  let failed = false;
+  await Promise.all(Array.from({ length: Math.min(items.length, concurrency) }, async () => {
+    while (!failed && cursor < items.length) {
+      const index = cursor++;
+      try {
+        results[index] = await fn(items[index], index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }));
+  return results;
+}
 
 // src/index-service.ts
 var IndexRefusalError = class extends Error {
@@ -8113,6 +8131,13 @@ var IndexRefusalError = class extends Error {
     if (cause !== void 0) this.cause = cause;
   }
 };
+function formatIndexAge(minutes) {
+  if (minutes === null) return "unknown age";
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)} h`;
+  return `${Math.round(minutes / 1440)} d`;
+}
 
 // src/agent/connection.ts
 var CONTRACT_API_VERSIONS = [1, 2];
@@ -8211,6 +8236,27 @@ var ZOTERO_NOTE_TYPES = ["zotero", "paper-hub", "paper-analysis", "raw-source", 
 
 // src/note-aliases.ts
 var FOREIGN_LINK = /\b(?:bookends|x-devonthink-item):\/\//;
+function claim(map, key, id) {
+  if (!map.has(key)) map.set(key, id);
+  else if (map.get(key) !== id) map.set(key, null);
+}
+function selectKey(libraryType, groupID, itemKey) {
+  return `${libraryType}/${groupID ?? 0}/${itemKey}`;
+}
+function buildAliasIndex(entries) {
+  const ids = new Set(entries.map((entry) => entry.id));
+  const aliases = /* @__PURE__ */ new Map();
+  const selects = /* @__PURE__ */ new Map();
+  const itemKeys = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    for (const alias of /* @__PURE__ */ new Set([entry.citekey, ...entry.citekeyHistory])) claim(aliases, alias, entry.id);
+    if (typeof entry.itemKey === "string" && ITEM_KEY.test(entry.itemKey)) {
+      claim(selects, selectKey(entry.libraryType, entry.groupID, entry.itemKey), entry.id);
+      claim(itemKeys, entry.itemKey, entry.id);
+    }
+  }
+  return { ids, aliases, selects, itemKeys, singleLibrary: new Set(entries.map((entry) => entry.libraryID)).size === 1 };
+}
 function typeOf(frontmatter) {
   return typeof frontmatter.type === "string" ? frontmatter.type.trim() : "";
 }
@@ -9168,6 +9214,22 @@ function diagnostic(code, message, extra = {}) {
   return result;
 }
 
+// src/agent/frontmatter-patch.ts
+var KEY_SET = new Set(HUB_WRITABLE_KEYS);
+function readFrontmatterBlock(text4) {
+  const bom = text4.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const source = text4.slice(bom.length);
+  if (!/^---\r?\n/.test(source)) return source === "---" || source === "---\r" ? "unterminated" : null;
+  const eol = source.startsWith("---\r\n") ? "\r\n" : "\n";
+  const lines2 = source.slice(3 + eol.length).split("\n");
+  const close = lines2.findIndex((line) => line === "---" || line === "---\r");
+  if (close < 0) return "unterminated";
+  return { bom, eol, yamlLines: lines2.slice(0, close), rest: lines2.slice(close) };
+}
+function frontmatterText(block) {
+  return block.yamlLines.join("\n").replace(/\r$/, "");
+}
+
 // src/agent/reconcile-core.ts
 var HUB_FINDINGS = [
   "missing-zoteroID",
@@ -9188,8 +9250,10 @@ var HUB_FINDINGS = [
   "index-incomplete",
   "raw-source-path",
   "frontmatter-parse-error",
-  "legacy-frontmatter-dialect"
+  "legacy-frontmatter-dialect",
   // 0.5 R14: report-only, literature notes carrying pre-0.5 keys
+  "blocked-by-parse-error"
+  // 0.5 R8: a parse-error note mentions this hub's citekey; the hub is not apply-eligible until it is repaired
 ];
 var APPLY_ELIGIBLE_FINDINGS = ["missing-zoteroID", "missing-zoteroSelectURI", "missing-zoteroStatus", "missing-zoteroCheckedAt", "citekeyProvisional-absent"];
 var DESYNC_FINDINGS = ["malformed-identity", "identity-conflict", "zoteroID-mismatch", "s01-says-unregistered", "citekeyProvisional-absent", "zoteroStatus-stale"];
@@ -9651,7 +9715,42 @@ function reconcileNote(note, type, index, vault, opts) {
   if (verdict2.pinInstruction !== void 0) result.pinInstruction = verdict2.pinInstruction;
   const skippedReason = skippedReasonFor(type, verdict2.classification, orderedFindings, opts.stale, resolution.indexComplete);
   if (skippedReason) result.skippedReason = skippedReason;
+  if (hub) annotateHub(result, note, opts);
   return result;
+}
+function mentions(text4, citekey) {
+  let from = 0;
+  for (; ; ) {
+    const at = text4.indexOf(citekey, from);
+    if (at < 0) return false;
+    const before = at === 0 ? "" : text4.charAt(at - 1);
+    const after = text4.charAt(at + citekey.length);
+    if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) return true;
+    from = at + 1;
+  }
+}
+function annotateHub(result, note, opts) {
+  const blockedBy = result.citekey ? (opts.parseErrorSources ?? []).filter((source) => mentions(source.text, result.citekey)).map((source) => source.path).sort() : [];
+  if (blockedBy.length) {
+    result.findings = orderFindings([...result.findings, finding("blocked-by-parse-error", `${blockedBy.length === 1 ? "A note" : `${blockedBy.length} notes`} with unparseable frontmatter mention${blockedBy.length === 1 ? "s" : ""} citekey "${result.citekey}"; repair ${blockedBy.length === 1 ? "it" : "them"} before applying.`, blockedBy.join(", "))]);
+    result.blockedBy = blockedBy;
+    result.proposalEligible = false;
+    result.proposed = null;
+    result.skippedReason = "blocked-by-parse-error";
+  }
+  if (opts.yaml && note.body !== void 0) {
+    const block = readFrontmatterBlock(note.body);
+    if (block && block !== "unterminated") {
+      const yaml = frontmatterText(block);
+      let normalisable = false;
+      try {
+        normalisable = opts.yaml.stringify(opts.yaml.parse(yaml)).replace(/\n$/, "") === yaml;
+      } catch {
+        normalisable = false;
+      }
+      result.yamlNormalisable = normalisable;
+    }
+  }
 }
 function noteDiagnostics(note) {
   const extra = { citekey: note.citekey, path: note.path, ...note.index ? { itemID: note.index.id } : {} };
@@ -9723,8 +9822,410 @@ function findNote(notes, path) {
   return notes.find((note) => note.path === clean || note.path === withExtension) ?? null;
 }
 
+// src/annotations/colors.ts
+var ANNOTATION_COLORS = ["yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray"];
+var PALETTE = {
+  yellow: [255, 212, 0],
+  red: [255, 102, 102],
+  green: [95, 178, 54],
+  blue: [46, 168, 229],
+  purple: [162, 138, 229],
+  magenta: [229, 110, 238],
+  orange: [241, 152, 55],
+  gray: [170, 170, 170]
+};
+function parseHexColor(value) {
+  const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+  if (!match) return null;
+  const hex = match[1].length === 3 ? [...match[1]].map((c) => c + c).join("") : match[1];
+  return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+}
+function hsl([r, g, b]) {
+  const red = r / 255, green = g / 255, blue = b / 255;
+  const max = Math.max(red, green, blue), min = Math.min(red, green, blue);
+  const light = (max + min) / 2;
+  const delta = max - min;
+  if (delta === 0) return [0, 0, light];
+  const saturation = delta / (1 - Math.abs(2 * light - 1));
+  let hue = max === red ? (green - blue) / delta % 6 : max === green ? (blue - red) / delta + 2 : (red - green) / delta + 4;
+  hue = (hue * 60 + 360) % 360;
+  return [hue, saturation, light];
+}
+function colorName(value) {
+  const rgb = parseHexColor(value);
+  if (!rgb) return null;
+  const [hue, saturation] = hsl(rgb);
+  if (saturation < 0.2) return "gray";
+  let best = null;
+  let bestDistance = Infinity;
+  for (const name of ANNOTATION_COLORS) {
+    if (name === "gray") continue;
+    const [paletteHue] = hsl(PALETTE[name]);
+    const distance = Math.min(Math.abs(hue - paletteHue), 360 - Math.abs(hue - paletteHue));
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = name;
+    }
+  }
+  return best;
+}
+function isAnnotationColor(value) {
+  return ANNOTATION_COLORS.includes(value);
+}
+
+// src/note-writer.ts
+import { createHash as createHash2 } from "crypto";
+function readingOrder(entry) {
+  return entry.attachments.flatMap((attachment) => {
+    const sortable = attachment.annotations.every((annotation) => annotation.sortIndex);
+    const ordered = attachment.annotations.map((annotation, position) => ({ annotation, position }));
+    if (sortable) ordered.sort((a, b) => a.annotation.sortIndex === b.annotation.sortIndex ? a.position - b.position : (a.annotation.sortIndex ?? "") < (b.annotation.sortIndex ?? "") ? -1 : 1);
+    return ordered.map(({ annotation }) => ({ attachment, annotation }));
+  });
+}
+
+// src/citations/score.ts
+function completionRows(entries) {
+  return entries.map((entry) => {
+    const citekey = entry.citekey.toLowerCase();
+    return { entry, citekey, haystack: `${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`.toLowerCase() };
+  }).sort((a, b) => a.entry.citekey.localeCompare(b.entry.citekey));
+}
+
+// src/index-derived.ts
+var NONE = /* @__PURE__ */ Object.freeze([]);
+function groupBy(entries, keys) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    for (const key of keys(entry)) {
+      const group = groups.get(key);
+      if (group) group.push(entry);
+      else groups.set(key, [entry]);
+    }
+  }
+  return groups;
+}
+var IndexDerived = class {
+  constructor(entries) {
+    this.entries = entries;
+    this.alias = null;
+    this.byCitekey = null;
+    this.byId = null;
+    this.byItemKey = null;
+    this.completion = null;
+  }
+  /** `buildAliasIndex(entries)`: the identity evidence vault notes are resolved against. */
+  get aliasIndex() {
+    if (!this.alias) this.alias = buildAliasIndex(this.entries);
+    return this.alias;
+  }
+  /** Citekey-completion rows in completion order (`completionRows`). */
+  get completionRows() {
+    if (!this.completion) this.completion = completionRows(this.entries);
+    return this.completion;
+  }
+  /** Entries whose current or a previous citekey is `citekey`, in index order (several when libraries share a key). */
+  entriesWithCitekey(citekey) {
+    if (!this.byCitekey) this.byCitekey = groupBy(this.entries, (entry) => /* @__PURE__ */ new Set([entry.citekey, ...entry.citekeyHistory]));
+    return this.byCitekey.get(citekey) ?? NONE;
+  }
+  /** Entries with this id, in index order: exactly one in a validated index. */
+  entriesWithId(id) {
+    if (!this.byId) this.byId = groupBy(this.entries, (entry) => [entry.id]);
+    return this.byId.get(id) ?? NONE;
+  }
+  /** The first entry with this id, or null. */
+  entryById(id) {
+    return this.entriesWithId(id)[0] ?? null;
+  }
+  /** Entries with this Zotero item key, in index order; libraries are independent, so the key alone is not an identity. */
+  entriesWithItemKey(itemKey) {
+    if (!this.byItemKey) this.byItemKey = groupBy(this.entries, (entry) => [entry.itemKey]);
+    return this.byItemKey.get(itemKey) ?? NONE;
+  }
+};
+var derived = /* @__PURE__ */ new WeakMap();
+function indexDerived(entries) {
+  let value = derived.get(entries);
+  if (!value) {
+    value = new IndexDerived(entries);
+    derived.set(entries, value);
+  }
+  return value;
+}
+
+// src/recent/recent-reads.ts
+function pad(value) {
+  return String(value).padStart(2, "0");
+}
+function noon(day) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) throw new Error("Invalid calendar day");
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12);
+}
+function localDay(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function daysBetween(later, earlier) {
+  return Math.round((noon(later).getTime() - noon(earlier).getTime()) / 864e5);
+}
+function readLabel(readOn, today) {
+  if (!readOn) return "read recently";
+  const days = daysBetween(today, readOn);
+  if (days <= 0) return "read today";
+  if (days === 1) return "read yesterday";
+  if (days < 14) return `read ${days} days ago`;
+  return `read on ${readOn}`;
+}
+function indexEntryFor(row, entries) {
+  return indexDerived(entries).entriesWithItemKey(row.itemKey).find((entry) => entry.itemKey === row.itemKey && entry.libraryType === row.libraryType && (entry.groupID ?? 0) === (row.groupID ?? 0)) ?? null;
+}
+function describeNoteStatus(status) {
+  const kept = status.orphaned ? `; ${status.orphaned} block${status.orphaned === 1 ? "" : "s"} for annotations deleted in Zotero kept` : "";
+  switch (status.state) {
+    case "none":
+      return status.annotations ? `No literature note yet \xB7 ${status.annotations} annotation${status.annotations === 1 ? "" : "s"} in Zotero` : "No literature note yet";
+    case "behind":
+      return `${status.missing} new annotation${status.missing === 1 ? "" : "s"} not in the note${kept}`;
+    case "current":
+      return `Note is up to date${kept}`;
+    case "foreign":
+      return "A note with this Zotero identity exists but was not created by CMDS Zotero; it is never overwritten";
+    case "duplicate":
+      return "Several notes claim this Zotero identity; resolve the duplicate first";
+  }
+}
+function needsSending(status) {
+  return status.state === "none" || status.state === "behind";
+}
+function describeSendOutcome(outcome) {
+  const kept = outcome.preserved.length ? `; your edits kept in ${outcome.preserved.length} section${outcome.preserved.length === 1 ? "" : "s"}` : "";
+  switch (outcome.status) {
+    case "created":
+      return `Created ${outcome.path}`;
+    case "updated":
+      return `Updated ${outcome.path}${kept}`;
+    case "unchanged":
+      return `Already up to date${kept}`;
+    case "refused":
+      return `Not written: ${outcome.message ?? "conflict"}`;
+  }
+}
+
+// src/agent/annotations.ts
+var ANNOTATION_TYPES = ["highlight", "underline", "note", "text", "image", "ink"];
+function isAnnotationType(value) {
+  return ANNOTATION_TYPES.includes(value);
+}
+function normalizeHex(value) {
+  const rgb = parseHexColor(value);
+  return rgb ? `#${rgb.map((part) => part.toString(16).padStart(2, "0")).join("")}` : null;
+}
+function parseColorFilter(value) {
+  const text4 = value.trim().toLowerCase();
+  if (isAnnotationColor(text4)) return { kind: "name", name: text4 };
+  if (text4.startsWith("#") || /^[0-9a-f]{6}$/.test(text4)) {
+    const hex = normalizeHex(text4);
+    return hex ? { kind: "hex", hex } : null;
+  }
+  return null;
+}
+function parseAnnotationFilters(request) {
+  const filters = {};
+  if (request.color !== void 0) {
+    const color = parseColorFilter(request.color);
+    if (!color) return { error: `color must be one of ${ANNOTATION_COLORS.join(", ")} or a hex value such as #ffd400.` };
+    filters.color = color;
+  }
+  if (request.type !== void 0) {
+    const type = request.type.trim().toLowerCase();
+    if (!isAnnotationType(type)) return { error: `type must be one of ${ANNOTATION_TYPES.join(", ")}.` };
+    filters.type = type;
+  }
+  if (request.tag !== void 0) {
+    const tag = request.tag.trim();
+    if (!tag) return { error: "tag must not be empty." };
+    filters.tag = tag;
+  }
+  if (request.attachment !== void 0) {
+    const attachment = request.attachment.trim();
+    if (!/^[A-Za-z0-9]{8}$/.test(attachment)) return { error: "attachment must be an eight-character Zotero attachment key." };
+    filters.attachment = attachment;
+  }
+  return { filters };
+}
+function describeFilters(filters) {
+  return {
+    ...filters.color ? { color: filters.color.kind === "name" ? filters.color.name : filters.color.hex } : {},
+    ...filters.type ? { type: filters.type } : {},
+    ...filters.tag ? { tag: filters.tag } : {},
+    ...filters.attachment ? { attachment: filters.attachment } : {}
+  };
+}
+function annotationColorInfo(color) {
+  return { name: colorName(color), hex: normalizeHex(color) };
+}
+function matchesColor(annotation, filter) {
+  return filter.kind === "name" ? colorName(annotation.color) === filter.name : normalizeHex(annotation.color) === filter.hex;
+}
+function matchesFilters(annotation, filters) {
+  if (filters.type && annotation.type.trim().toLowerCase() !== filters.type) return false;
+  if (filters.color && !matchesColor(annotation, filters.color)) return false;
+  if (filters.tag) {
+    const wanted = filters.tag.toLowerCase();
+    if (!annotation.tags.some((tag) => tag.toLowerCase() === wanted)) return false;
+  }
+  return true;
+}
+function annotationRow(annotation) {
+  return {
+    key: annotation.key,
+    attachmentKey: annotation.attachmentKey,
+    type: annotation.type,
+    color: annotationColorInfo(annotation.color),
+    page: annotation.page,
+    pageLabel: annotation.pageLabel,
+    text: annotation.text,
+    comment: annotation.comment,
+    tags: [...annotation.tags],
+    uri: annotation.uri,
+    ...annotation.sortIndex ? { sortIndex: annotation.sortIndex } : {},
+    dateModified: annotation.dateModified,
+    ...annotation.imagePath ? { image: { cachePath: annotation.imagePath, private: true, vaultCopies: [] } } : {}
+  };
+}
+function selectAnnotations(entry, filters) {
+  const total = entry.attachments.reduce((sum, attachment) => sum + attachment.annotations.length, 0);
+  const unknownAttachment = filters.attachment !== void 0 && !entry.attachments.some((attachment) => attachment.key === filters.attachment);
+  const byType = {};
+  const byColor = {};
+  const rowsByAttachment = /* @__PURE__ */ new Map();
+  let matched = 0;
+  for (const { attachment, annotation } of readingOrder(entry)) {
+    if (filters.attachment && attachment.key !== filters.attachment) continue;
+    if (!matchesFilters(annotation, filters)) continue;
+    const row = annotationRow(annotation);
+    matched++;
+    byType[row.type || "unknown"] = (byType[row.type || "unknown"] ?? 0) + 1;
+    byColor[row.color.name ?? "unknown"] = (byColor[row.color.name ?? "unknown"] ?? 0) + 1;
+    const rows = rowsByAttachment.get(attachment.key);
+    if (rows) rows.push(row);
+    else rowsByAttachment.set(attachment.key, [row]);
+  }
+  const attachments = [];
+  for (const attachment of entry.attachments) {
+    const annotations = rowsByAttachment.get(attachment.key);
+    if (!annotations) continue;
+    attachments.push({ key: attachment.key, title: attachment.title, openURI: attachment.openURI, ...attachment.contentType ? { contentType: attachment.contentType } : {}, annotationCount: attachment.annotations.length, annotations });
+  }
+  return { attachments, total, matched, byType, byColor, unknownAttachment };
+}
+var COPY_TAIL = /^[a-f0-9]{64}\.(?:png|jpe?g|gif|webp)$/i;
+function imageCopyPrefix(entry, attachmentKey, annotationKey) {
+  const library = entry.libraryType === "group" ? entry.groupID : entry.libraryID;
+  if (library === void 0 || !Number.isSafeInteger(library) || library < 0) return null;
+  return `${entry.libraryType}-${library}-${attachmentKey}-${annotationKey}-`;
+}
+function vaultImageCopies(entry, row, folder, names) {
+  const prefix = imageCopyPrefix(entry, row.attachmentKey, row.key);
+  if (prefix === null) return [];
+  const base = folder.replace(/\/+$/, "");
+  return names.filter((name) => name.startsWith(prefix) && COPY_TAIL.test(name.slice(prefix.length))).sort().map((name) => `${base}/${name}`);
+}
+function hasImages(selected) {
+  return selected.attachments.some((attachment) => attachment.annotations.some((row) => row.image));
+}
+function attachVaultCopies(entry, selected, folder, names) {
+  for (const attachment of selected.attachments) {
+    for (const row of attachment.annotations) if (row.image) row.image.vaultCopies = vaultImageCopies(entry, row, folder, names);
+  }
+}
+function readCandidates(reads, entries) {
+  return reads.map((read) => {
+    const entry = indexEntryFor(read, entries);
+    return {
+      citekey: read.citekey,
+      itemKey: read.itemKey,
+      libraryType: read.libraryType,
+      ...read.groupID !== void 0 ? { groupID: read.groupID } : {},
+      library: read.library,
+      title: read.title,
+      year: read.year,
+      authors: read.authors,
+      readOn: read.readOn,
+      id: entry?.id ?? null,
+      inIndex: entry !== null
+    };
+  });
+}
+
+// src/agent/citing.ts
+var CITING_MAX_NOTES = 500;
+var CITING_MAX_POSITIONS = 20;
+var EXCERPT_CHARS = 120;
+var CITING_READ_CONCURRENCY = 8;
+function citingKeys(entry, entries) {
+  const derived2 = indexDerived(entries);
+  const candidates = [{ key: entry.citekey, kind: "current" }, ...[...new Set(entry.citekeyHistory)].filter((key) => key !== entry.citekey).map((key) => ({ key, kind: "former" }))];
+  const searched = [];
+  const excluded = [];
+  for (const candidate2 of candidates) {
+    if (!candidate2.key) continue;
+    const others = derived2.entriesWithCitekey(candidate2.key).filter((other) => other.id !== entry.id);
+    if (others.length) excluded.push({ ...candidate2, reason: "shared", sharedWith: others.slice(0, 5).map((other) => ({ id: other.id, citekey: other.citekey, libraryID: other.libraryID })) });
+    else searched.push(candidate2);
+  }
+  return { searched, excluded };
+}
+function excerptAround(line, column, max = EXCERPT_CHARS) {
+  const text4 = line.replace(/\s+$/, "");
+  if (text4.length <= max) return text4.trim();
+  let start = Math.max(0, Math.min(column, text4.length) - Math.floor(max / 3));
+  let end = Math.min(text4.length, start + max);
+  start = Math.max(0, end - max);
+  if (start > 0 && /[\udc00-\udfff]/.test(text4.charAt(start))) start++;
+  if (end < text4.length && /[\ud800-\udbff]/.test(text4.charAt(end - 1))) end--;
+  return `${start > 0 ? "\u2026" : ""}${text4.slice(start, end).trim()}${end < text4.length ? "\u2026" : ""}`;
+}
+function citingNote(vault, note, keys, headings = DEFAULT_REFERENCES_HEADINGS) {
+  let mentioned = false;
+  for (const key of keys) if (note.body.includes(key)) {
+    mentioned = true;
+    break;
+  }
+  if (!mentioned) return null;
+  const { citations } = scanNote(note, headings);
+  const lines2 = note.body.split(/\r?\n/);
+  const body = [];
+  const frontmatter = [];
+  for (const item of citations) {
+    if (!keys.has(item.citekey)) continue;
+    if (item.where === "frontmatter") {
+      if (item.field) frontmatter.push({ key: item.citekey, field: item.field, form: item.form === "pandoc" ? "pandoc" : "bare" });
+      continue;
+    }
+    if (item.line === void 0 || item.column === void 0 || item.form === void 0) continue;
+    body.push({ key: item.citekey, line: item.line, column: item.column, form: item.form, excerpt: excerptAround(lines2[item.line - 1] ?? "", item.column - 1) });
+  }
+  if (!body.length && !frontmatter.length) return null;
+  const ref = noteRef(vault, note.path);
+  return {
+    path: note.path,
+    basename: ref.basename,
+    uri: ref.uri,
+    count: body.length + frontmatter.length,
+    frontmatterCount: frontmatter.length,
+    citations: body.slice(0, CITING_MAX_POSITIONS),
+    frontmatter,
+    ...body.length > CITING_MAX_POSITIONS ? { positionsTruncated: true } : {}
+  };
+}
+function sortCitingNotes(notes) {
+  return [...notes].sort((a, b) => b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
 // src/pdf/cache.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 var PDF_TEXT_CACHE_DIR = ".cmds-zotero/pdf-text";
 var MAX_CACHE_BYTES = 32 * 1024 * 1024;
 var CACHE_SCHEMA = {
@@ -9740,7 +10241,7 @@ function normalizeVaultPath(path) {
 function filePathHash(path) {
   const normalized = typeof path === "string" ? normalizeVaultPath(path) : "";
   if (!normalized) throw new Error("Invalid vault path for the PDF text cache");
-  return createHash2("sha256").update(normalized).digest("hex").slice(0, 16);
+  return createHash3("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 function cachePrefix(scope) {
   if (scope.kind === "file") return `file-${filePathHash(scope.path)}`;
@@ -9974,73 +10475,9 @@ function textLayerWarning(report, pageCount) {
   return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (figure-only, blank or scanned pages)${report.ocrRecommended ? "; run OCR for them before relying on the text" : "; if those pages are scanned text, run OCR for them"}.`;
 }
 
-// src/note-writer.ts
-import { createHash as createHash3 } from "crypto";
-
-// src/annotations/colors.ts
-var ANNOTATION_COLORS = ["yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray"];
-function isAnnotationColor(value) {
-  return ANNOTATION_COLORS.includes(value);
-}
-
-// src/recent/recent-reads.ts
-function pad(value) {
-  return String(value).padStart(2, "0");
-}
-function noon(day) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
-  if (!match) throw new Error("Invalid calendar day");
-  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12);
-}
-function localDay(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-function daysBetween(later, earlier) {
-  return Math.round((noon(later).getTime() - noon(earlier).getTime()) / 864e5);
-}
-function readLabel(readOn, today) {
-  if (!readOn) return "read recently";
-  const days = daysBetween(today, readOn);
-  if (days <= 0) return "read today";
-  if (days === 1) return "read yesterday";
-  if (days < 14) return `read ${days} days ago`;
-  return `read on ${readOn}`;
-}
-function describeNoteStatus(status) {
-  const kept = status.orphaned ? `; ${status.orphaned} block${status.orphaned === 1 ? "" : "s"} for annotations deleted in Zotero kept` : "";
-  switch (status.state) {
-    case "none":
-      return status.annotations ? `No literature note yet \xB7 ${status.annotations} annotation${status.annotations === 1 ? "" : "s"} in Zotero` : "No literature note yet";
-    case "behind":
-      return `${status.missing} new annotation${status.missing === 1 ? "" : "s"} not in the note${kept}`;
-    case "current":
-      return `Note is up to date${kept}`;
-    case "foreign":
-      return "A note with this Zotero identity exists but was not created by CMDS Zotero; it is never overwritten";
-    case "duplicate":
-      return "Several notes claim this Zotero identity; resolve the duplicate first";
-  }
-}
-function needsSending(status) {
-  return status.state === "none" || status.state === "behind";
-}
-function describeSendOutcome(outcome) {
-  const kept = outcome.preserved.length ? `; your edits kept in ${outcome.preserved.length} section${outcome.preserved.length === 1 ? "" : "s"}` : "";
-  switch (outcome.status) {
-    case "created":
-      return `Created ${outcome.path}`;
-    case "updated":
-      return `Updated ${outcome.path}${kept}`;
-    case "unchanged":
-      return `Already up to date${kept}`;
-    case "refused":
-      return `Not written: ${outcome.message ?? "conflict"}`;
-  }
-}
-
 // src/agent/actions.ts
 var MAX_CITES_FILES = 2e3;
-var AGENT_ACTIONS = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate", "recent", "import"];
+var AGENT_ACTIONS = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate", "recent", "import", "annotations", "citing"];
 var ACTION_API_VERSION = {
   connection: 1,
   info: 2,
@@ -10053,7 +10490,9 @@ var ACTION_API_VERSION = {
   "pdf-text": 2,
   locate: 2,
   recent: 2,
-  import: 2
+  import: 2,
+  annotations: 2,
+  citing: 2
 };
 function envelope(host, action, apiVersion, failure) {
   return buildEnvelope(action, host.vault, apiVersion, host.connection, host.now, failure);
@@ -10296,6 +10735,26 @@ async function citesAction(host, request) {
   const bytes = await host.sidecar.write(outPath, sidecarContent(format, content));
   return { ...payload, out: { path: outPath, written: true, bytes } };
 }
+function reconcileScanOf(host, listed) {
+  const scan = host.reader.scanWarnings?.() ?? { skipped: [], truncated: false };
+  const parseErrors = new Set(listed.filter((note) => note.frontmatterParse === "error").map((note) => note.path));
+  const skippedDetail = scan.skippedDetail ? scan.skippedDetail.map((item) => ({ ...item })) : scan.skipped.map((path) => ({ path, kind: parseErrors.has(path) ? "parse-error" : "unreadable" }));
+  for (const item of skippedDetail) if (item.kind === "parse-error") parseErrors.add(item.path);
+  return { skipped: [...scan.skipped], truncated: scan.truncated, skippedDetail, parseErrors: [...parseErrors].sort() };
+}
+var listPaths = (paths) => {
+  const shown = paths.slice(0, 10);
+  return `${shown.join(", ")}${paths.length > shown.length ? ` (+${paths.length - shown.length} more)` : ""}`;
+};
+function applyScanVeto(scan, result) {
+  if (scan.truncated) return "Vault discovery was truncated at the note limit; hubs may be missing, so reconcile apply is refused.";
+  const unreadable = scan.skippedDetail.filter((item) => item.kind !== "parse-error").map((item) => item.path);
+  if (unreadable.length) return `Vault discovery skipped ${unreadable.length} unreadable or symlinked ${unreadable.length === 1 ? "entry" : "entries"} (${listPaths(unreadable)}); reconcile apply is refused.`;
+  const candidates = new Set(result.notes.filter((note) => note.type === "paper-hub" && note.proposalEligible && note.proposed).map((note) => note.path));
+  const inScope = scan.parseErrors.filter((path) => candidates.has(path) || result.folders.length > 0 && inFolders(path, result.folders));
+  if (inScope.length) return `${inScope.length} ${inScope.length === 1 ? "note" : "notes"} with unparseable frontmatter ${inScope.length === 1 ? "lies" : "lie"} inside the apply scope (${listPaths(inScope)}); repair ${inScope.length === 1 ? "it" : "them"} or narrow --folders. Parse errors outside the scope are listed in scan.parseErrors and do not veto apply.`;
+  return null;
+}
 async function reconcileDryRun(host, request, listedNotes) {
   const view = host.indexView;
   const stale = view ? host.connection.index.complete !== true || host.connection.index.stale !== false : true;
@@ -10307,19 +10766,29 @@ async function reconcileDryRun(host, request, listedNotes) {
     else notes.push(note);
   }
   const pdfPaths2 = await host.vaultPdfPaths();
-  const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths: pdfPaths2 }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders });
+  const scan = reconcileScanOf(host, listed);
+  const parseErrorSources = [];
+  for (const path of scan.parseErrors) {
+    try {
+      parseErrorSources.push({ path, text: await host.reader.readNote(path) });
+    } catch {
+      scan.skippedDetail.push({ path, kind: "unreadable" });
+      if (!scan.skipped.includes(path)) scan.skipped.push(path);
+    }
+  }
+  const result = reconcileNotes(notes, view?.index ?? null, { name: host.vault, pdfPaths: pdfPaths2 }, { now: host.now, stale, allowStale: request.allowStale === true, folders: request.folders, parseErrorSources, ...host.yaml ? { yaml: host.yaml } : {} });
   const sourceByPath = new Map(notes.filter((note) => note.body !== void 0).map((note) => [note.path, note.body]));
   for (const note of result.notes) {
     const source = sourceByPath.get(note.path);
     if (source !== void 0) note.sourceHash = createHash4("sha256").update(source).digest("hex");
   }
-  return { result, view, stale };
+  return { result, view, stale, scan };
 }
 async function reconcileAction(host, request) {
-  const { result, view } = await reconcileDryRun(host, request);
-  const scan = scanOf(host);
+  const { result, view, scan } = await reconcileDryRun(host, request);
   if (!request.apply) return { ...envelope(host, "reconcile", 2), mode: "dry-run", ...result, scan, apply: { mode: "dry-run" }, generatedAt: view?.index.generatedAt ?? null };
-  if (scan.truncated || scan.skipped.length) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: "Vault discovery was incomplete; reconcile apply is refused." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete" }, generatedAt: view?.index.generatedAt ?? null };
+  const veto = applyScanVeto(scan, result);
+  if (veto) return { ...envelope(host, "reconcile", 2, { reason: "scan-incomplete", message: veto }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "scan-incomplete", refusedMessage: veto }, generatedAt: view?.index.generatedAt ?? null };
   if (!host.applyReconcile) return { ...envelope(host, "reconcile", 2, { reason: "requires-obsidian", message: "reconcile --apply requires the live Obsidian host." }), mode: "apply", ...result, scan, apply: { mode: "refused", refusedReason: "requires-obsidian" }, generatedAt: view?.index.generatedAt ?? null };
   const applied = await host.applyReconcile(result, request);
   const applyState = applied && typeof applied === "object" ? applied : {};
@@ -10510,11 +10979,14 @@ function validateActionRequest(action, value) {
     "pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"],
     locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
     recent: ["days"],
-    import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"]
+    import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"],
+    // 0.6
+    annotations: ["citekey", "itemKey", "libraryID", "today", "attachment", "color", "type", "tag", "fresh", "allowStale"],
+    citing: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale"]
   };
   for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
-  for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
-  for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote"]) {
+  for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
+  for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote", "color", "type", "tag"]) {
     const value2 = request[key];
     if (value2 !== void 0 && (typeof value2 !== "string" || !value2.trim() || value2.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`);
   }
@@ -10523,9 +10995,9 @@ function validateActionRequest(action, value) {
   if ("folders" in request && (!Array.isArray(request.folders) || request.folders.some((folder) => typeof folder !== "string" || !folder.trim()))) throw new Error("folders must be an array of non-empty paths.");
   if (request.itemKey !== void 0 && (typeof request.itemKey !== "string" || !/^[A-Z0-9]{8}$/.test(request.itemKey) || request.libraryID === void 0)) throw new Error("itemKey requires eight uppercase letters/digits and libraryID.");
   if ((request.year !== void 0 || request.author !== void 0) && request.title === void 0 && request.query === void 0) throw new Error("year and author narrow title or query only.");
-  if (action === "resolve" || action === "identity") {
+  if (action === "resolve" || action === "identity" || action === "citing") {
     const selectors = ["citekey", "itemKey", "doi", "arxiv", "title", "query"].filter((key) => request[key] !== void 0);
-    if (action === "resolve" && selectors.length !== 1) throw new Error("resolve requires exactly one selector.");
+    if ((action === "resolve" || action === "citing") && selectors.length !== 1) throw new Error(`${action} requires exactly one selector.`);
     if (action === "identity" && (selectors.length < 1 || selectors.filter((key) => key !== "citekey").length > 1)) throw new Error("identity requires one selector and may pair a vault citekey with one lookup selector.");
   }
   if (action === "cites" && request.path === void 0) throw new Error("cites requires path.");
@@ -10535,6 +11007,11 @@ function validateActionRequest(action, value) {
   if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter((key) => request[key] !== void 0).length !== 1) throw new Error("pdf-text requires exactly one target.");
   if (action === "recent" && request.days !== void 0 && (!Number.isSafeInteger(request.days) || request.days < 1 || request.days > 365)) throw new Error("days must be an integer between 1 and 365.");
   if (action === "import" && ["citekey", "itemKey"].filter((key) => request[key] !== void 0).length !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID.");
+  if (action === "annotations") {
+    if (["citekey", "itemKey"].filter((key) => request[key] !== void 0).length + (request.today === true ? 1 : 0) !== 1) throw new Error("annotations requires exactly one selector: citekey, itemKey with libraryID, or today.");
+    const filters = parseAnnotationFilters(request);
+    if ("error" in filters) throw new Error(filters.error);
+  }
   if (action === "locate") {
     const targets = ["citekey", "itemKey", "file"].filter((key) => request[key] !== void 0);
     if (request.path === void 0 && (targets.length !== 1 || request.quote === void 0)) throw new Error("locate requires path, or one target with quote.");
@@ -10646,6 +11123,134 @@ async function importAction(host, request) {
   if (refused) return { ...envelope(host, "import", 2, { reason: "note-conflict", message: outcome?.message ?? preview?.conflicts.join("; ") ?? "The literature note cannot be written." }), ...body };
   return { ...envelope(host, "import", 2), ...body };
 }
+async function annotationsAction(host, request) {
+  const fail = (reason, message, extra = {}) => ({ ...envelope(host, "annotations", 2, { reason, message }), ...extra });
+  const parsed = parseAnnotationFilters(request);
+  if ("error" in parsed) return fail("invalid-request", parsed.error);
+  const filters = parsed.filters;
+  const wantsFresh = request.fresh === true;
+  const wantsToday = request.today === true;
+  if (wantsFresh && !host.freshEntry) return fail("requires-obsidian", "annotations --fresh requires the live Obsidian host and a running Zotero.");
+  if (wantsToday && !host.readOnDay) return fail("requires-obsidian", "annotations --today requires the live Obsidian host and a running Zotero.");
+  const view = host.indexView;
+  let entry = null;
+  let subject = null;
+  let selection;
+  if (wantsToday) {
+    const day = localDay(host.now);
+    let reads;
+    try {
+      reads = (await host.readOnDay?.(day) ?? []).filter((read) => read.readOn === day);
+    } catch (error) {
+      const bbtError = bbtErrorPayload(error);
+      return fail(bbtError ? "bbt-unreachable" : "invalid-request", describeBbtError(error), bbtError ? { bbtError } : {});
+    }
+    if (reads.length !== 1) {
+      const none = reads.length === 0;
+      return { ...envelope(host, "annotations", 2), status: none ? "not-found" : "ambiguous", today: { day, reads: reads.length }, ...none ? {} : { candidates: readCandidates(reads, view?.index.entries ?? []) }, message: none ? "Zotero reports no paper opened today." : `${reads.length} papers were opened today; pass --citekey, or --item-key with --library.` };
+    }
+    const known = view ? indexEntryFor(reads[0], view.index.entries) : null;
+    entry = known;
+    subject = known ? { entry: known } : { read: reads[0] };
+    selection = { today: { day, reads: 1 } };
+    if (!known && !wantsFresh) return fail("stale-index", `The paper opened today (@${reads[0].citekey}) is not in the saved index; pass --fresh to read it from Zotero, or refresh the index.`, { status: "unavailable", today: { day, reads: 1 }, candidates: readCandidates(reads, view?.index.entries ?? []) });
+  } else {
+    const required = requireIndex(host, "annotations", 2);
+    if ("failure" in required) return required.failure;
+    const outcome = resolveIndex(required.view.index, selectorOf(request));
+    const echo = { matchedBy: outcome.matchedBy, query: outcome.query };
+    if (outcome.status === "not-found" && staleGate(host.connection, request.allowStale === true)) {
+      return fail("stale-index", `The index is ${required.view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.`, { status: "unavailable", indexAnswer: "not-found", ...echo, ranked: outcome.ranked });
+    }
+    if (outcome.status !== "resolved" || !outcome.entry) return { ...envelope(host, "annotations", 2), status: outcome.status, ...echo, ...outcome.message ? { message: outcome.message } : {}, ranked: outcome.ranked, generatedAt: required.view.index.generatedAt };
+    entry = outcome.entry;
+    subject = { entry };
+    selection = { ...echo, ...outcome.matchedHistory ? { matchedHistory: true } : {} };
+  }
+  let used = entry;
+  let source = "snapshot";
+  const warnings = [];
+  if (wantsFresh && subject) {
+    const found = await host.freshEntry?.(subject) ?? { entry: null, fresh: false };
+    if (found.fresh && found.entry) {
+      used = found.entry;
+      source = "fresh";
+    } else {
+      const bbtError = bbtErrorPayload(found.error);
+      const detail = found.error === void 0 ? "Zotero did not answer." : describeBbtError(found.error);
+      if (request.allowStale !== true || !entry) return fail(bbtError ? "bbt-unreachable" : "invalid-request", `${detail} The annotations could not be read fresh from Zotero${entry ? "; pass --allow-stale to answer from the saved index (annotations made since it was saved are missing)" : ""}.`, { ...bbtError ? { bbtError } : {}, ...entry ? { item: reducedItem(entry) } : {} });
+      warnings.push(`${detail} Answered from the saved index (${formatIndexAge(host.connection.index.ageMinutes ?? 0)} old); annotations made since then are missing.`);
+    }
+  }
+  if (!used) return fail("invalid-request", "No item could be selected.");
+  if (source === "snapshot" && host.connection.index.stale === true && !warnings.length) warnings.push(`The saved index is ${host.connection.index.ageMinutes ?? 0} minutes old; annotations made since then are missing (use --fresh with Obsidian and Zotero running).`);
+  const selected = selectAnnotations(used, filters);
+  if (selected.unknownAttachment) return fail("invalid-request", `${filters.attachment ?? "That key"} is not an attachment of @${used.citekey}.`, { item: reducedItem(used), attachments: used.attachments.map((attachment) => ({ key: attachment.key, title: attachment.title, annotationCount: attachment.annotations.length })) });
+  if (hasImages(selected)) {
+    try {
+      attachVaultCopies(used, selected, host.settings.imageFolder, await host.pdfCache.list(host.settings.imageFolder));
+    } catch (error) {
+      warnings.push(`The image folder could not be listed (${error instanceof Error ? error.message : "unreadable"}); vaultCopies are empty.`);
+    }
+  }
+  return {
+    ...envelope(host, "annotations", 2),
+    status: "resolved",
+    ...selection,
+    item: reducedItem(used),
+    source,
+    fresh: source === "fresh",
+    annotationsAsOf: source === "fresh" ? host.now.toISOString() : view?.index.generatedAt ?? null,
+    filters: describeFilters(filters),
+    summary: { total: selected.total, matched: selected.matched, attachments: selected.attachments.length, byType: selected.byType, byColor: selected.byColor },
+    attachments: selected.attachments,
+    warnings,
+    generatedAt: view?.index.generatedAt ?? null
+  };
+}
+async function citingAction(host, request) {
+  const index = requireIndex(host, "citing", 2);
+  if ("failure" in index) return index.failure;
+  const view = index.view;
+  const outcome = resolveIndex(view.index, selectorOf(request));
+  const echo = { matchedBy: outcome.matchedBy, query: outcome.query };
+  if (outcome.status === "not-found" && staleGate(host.connection, request.allowStale === true)) {
+    return { ...envelope(host, "citing", 2, { reason: "stale-index", message: `The index is ${view.ageMinutes} minutes old; a not-found verdict was withheld. Refresh the index or pass --allow-stale.` }), status: "unavailable", indexAnswer: "not-found", ...echo, ranked: outcome.ranked, generatedAt: view.index.generatedAt };
+  }
+  if (outcome.status !== "resolved" || !outcome.entry) return { ...envelope(host, "citing", 2), status: outcome.status, ...echo, ...outcome.message ? { message: outcome.message } : {}, ranked: outcome.ranked, generatedAt: view.index.generatedAt };
+  const entry = outcome.entry;
+  const { searched, excluded } = citingKeys(entry, view.index.entries);
+  const keys = new Set(searched.map((item) => item.key));
+  const listed = keys.size ? await host.reader.listNotes() : [];
+  const headings = host.settings.referencesHeadings;
+  const unreadable = [];
+  const found = await mapBounded(listed, CITING_READ_CONCURRENCY, async (note) => {
+    try {
+      return citingNote(host.vault, { ...note, body: await host.reader.readNote(note.path) }, keys, headings);
+    } catch {
+      unreadable.push(note.path);
+      return null;
+    }
+  });
+  const reader = scanOf(host);
+  const skipped = [.../* @__PURE__ */ new Set([...reader.skipped, ...unreadable])].sort();
+  const scan = { skipped, truncated: reader.truncated, complete: !reader.truncated && skipped.length === 0 };
+  const hits = sortCitingNotes(found.filter((item) => item !== null));
+  const shown = hits.slice(0, CITING_MAX_NOTES);
+  const failure = reader.truncated ? { reason: "discovery-incomplete", message: `Vault discovery was truncated at the note limit, so notes beyond it were not scanned and the list of citing notes may be incomplete (${skipped.length} notes skipped).` } : void 0;
+  return {
+    ...envelope(host, "citing", 2, failure),
+    status: "resolved",
+    ...echo,
+    ...outcome.matchedHistory ? { matchedHistory: true } : {},
+    item: reducedItem(entry),
+    keys: { searched, excluded },
+    notes: shown,
+    summary: { notes: hits.length, listed: shown.length, citations: hits.reduce((sum, item) => sum + item.count, 0), frontmatterCitations: hits.reduce((sum, item) => sum + item.frontmatterCount, 0), scanned: listed.length - unreadable.length, truncated: hits.length > shown.length },
+    scan,
+    generatedAt: view.index.generatedAt
+  };
+}
 async function runAction(host, action, request = {}) {
   validateActionRequest(action, request);
   let effectiveHost = host;
@@ -10678,6 +11283,10 @@ async function runAction(host, action, request = {}) {
       return recentAction(host, request);
     case "import":
       return importAction(host, request);
+    case "annotations":
+      return annotationsAction(host, request);
+    case "citing":
+      return citingAction(host, request);
   }
 }
 
@@ -10707,13 +11316,16 @@ function normalizeSettings(raw) {
       return typeof peer.name === "string" && !!peer.name.trim() && typeof peer.path === "string" && !!peer.path.trim();
     }).map((peer) => ({ name: peer.name.trim(), path: peer.path.trim() })) : [],
     citationTrigger: ["bracket", "at", "off"].includes(data.citationTrigger) ? data.citationTrigger : DEFAULT_SETTINGS.citationTrigger,
-    excludedTags: Array.isArray(data.excludedTags) ? [...new Set(data.excludedTags.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase()).filter(Boolean))] : [...DEFAULT_SETTINGS.excludedTags],
+    excludedTags: Array.isArray(data.excludedTags) ? normalizeTagList(data.excludedTags) : [...DEFAULT_SETTINGS.excludedTags],
     headingHighlightColor: typeof data.headingHighlightColor === "string" && (data.headingHighlightColor === "none" || isAnnotationColor(data.headingHighlightColor)) ? data.headingHighlightColor : DEFAULT_SETTINGS.headingHighlightColor,
     referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
     referencesHeadings: referencesHeadings(data.referencesHeadings),
     // 0.5 R10
     recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365)
   };
+}
+function normalizeTagList(value) {
+  return [...new Set(value.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase()).filter(Boolean))];
 }
 function referencesHeadings(value) {
   const list = Array.isArray(value) ? [...new Set(value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean))] : [];
@@ -10865,10 +11477,8 @@ async function scanInOrder(source, concurrency, start, visit) {
 // src/cli/fs-vault.ts
 var MAX_LISTED_NOTES = 2e4;
 var MAX_NOTE_BYTES = 2 * 1024 * 1024;
-var DEFAULT_CONFIG_DIR = ".obsidian";
 function configDirOf(value) {
-  if (value === null || value === void 0) return DEFAULT_CONFIG_DIR;
-  if (!/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
+  if (typeof value !== "string" || !/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
   return value;
 }
 async function locateVault(name, explicitPath, home = homedir()) {
@@ -10904,10 +11514,15 @@ var FsVaultReader = class {
     this.root = root;
     this.name = name;
     this.limit = limit;
-    this.report = { skipped: [], truncated: false };
+    this.report = { skipped: [], truncated: false, skippedDetail: [] };
   }
   scanWarnings() {
-    return { skipped: [...this.report.skipped], truncated: this.report.truncated };
+    return { skipped: [...this.report.skipped], truncated: this.report.truncated, skippedDetail: this.report.skippedDetail.map((item) => ({ ...item })) };
+  }
+  // 0.5 R8: every skipped path carries its kind so reconcile apply can veto on unreadable or symlinked entries only.
+  skip(path, kind) {
+    this.report.skipped.push(path);
+    this.report.skippedDetail.push({ path, kind });
   }
   vaultName() {
     return this.name;
@@ -10931,14 +11546,14 @@ var FsVaultReader = class {
     try {
       entries = await fs3.readdir(dir, { withFileTypes: true });
     } catch {
-      yield { kind: "skip", path: relative(this.root, dir) };
+      yield { kind: "skip", path: relative(this.root, dir).split(sep).join("/"), reason: "unreadable" };
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       const full = join2(dir, entry.name);
       if (entry.isSymbolicLink()) {
-        yield { kind: "skip", path: relative(this.root, full) };
+        yield { kind: "skip", path: relative(this.root, full).split(sep).join("/"), reason: "symlink" };
         continue;
       }
       if (entry.isDirectory()) {
@@ -10955,22 +11570,22 @@ var FsVaultReader = class {
   }
   async listNotes() {
     const notes = [];
-    this.report = { skipped: [], truncated: false };
+    this.report = { skipped: [], truncated: false, skippedDetail: [] };
     await scanInOrder(this.walk(this.root), SCAN_CONCURRENCY, (event) => event.kind === "note" ? this.readNote(event.path).then(parseFrontmatter) : null, (event, outcome) => {
       if (notes.length >= this.limit) {
         this.report.truncated = true;
         return false;
       }
       if (event.kind === "skip") {
-        this.report.skipped.push(event.path);
+        this.skip(event.path, event.reason);
         return true;
       }
       if (event.kind === "pass") return true;
       if (!outcome?.ok) {
-        this.report.skipped.push(event.path);
+        this.skip(event.path, "unreadable");
         return true;
       }
-      if (outcome.value.frontmatterParse === "error") this.report.skipped.push(event.path);
+      if (outcome.value.frontmatterParse === "error") this.skip(event.path, "parse-error");
       notes.push({ path: event.path, basename: event.basename, frontmatter: outcome.value.frontmatter, frontmatterParse: outcome.value.frontmatterParse });
       return true;
     });
@@ -11053,7 +11668,7 @@ var FsVaultReader = class {
     }
   }
 };
-async function readPluginSettings(root, configDir = DEFAULT_CONFIG_DIR) {
+async function readPluginSettings(root, configDir) {
   try {
     const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
     return { settings: normalizeSettings(raw), present: true };
@@ -11061,7 +11676,7 @@ async function readPluginSettings(root, configDir = DEFAULT_CONFIG_DIR) {
     return { settings: normalizeSettings({}), present: false };
   }
 }
-async function readEnabledPlugins(root, configDir = DEFAULT_CONFIG_DIR) {
+async function readEnabledPlugins(root, configDir) {
   try {
     const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "community-plugins.json"), "utf8"));
     return Array.isArray(raw) ? raw.filter((v) => typeof v === "string") : null;
@@ -11069,7 +11684,7 @@ async function readEnabledPlugins(root, configDir = DEFAULT_CONFIG_DIR) {
     return null;
   }
 }
-async function readInstalledPluginVersion(root, configDir = DEFAULT_CONFIG_DIR) {
+async function readInstalledPluginVersion(root, configDir) {
   try {
     const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "manifest.json"), "utf8"));
     const version = raw && typeof raw === "object" ? raw.version : void 0;
@@ -11254,6 +11869,11 @@ async function offlineHost(input, action) {
     vaultPdfPaths: () => pdfPaths(root)
   };
 }
+function offlineFailure(host, action, error) {
+  const message = error instanceof Error ? error.message : "Offline action failed.";
+  const reason = error instanceof LocalFileError ? error.code === "too-large" ? "pdf-too-large" : "pdf-invalid" : /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
+  return { ...buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, host.now, { reason, message }), ...ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {} };
+}
 async function runAction2(input) {
   if (!AGENT_ACTIONS.includes(input.action)) throw new Error(`Unsupported action: ${input.action}`);
   const action = input.action;
@@ -11262,12 +11882,40 @@ async function runAction2(input) {
   try {
     return await runAction(host, action, input.request ?? {});
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Offline action failed.";
-    const reason = error instanceof LocalFileError ? error.code === "too-large" ? "pdf-too-large" : "pdf-invalid" : /outside|escapes|not found/i.test(message) ? "path-outside-vault" : "invalid-request";
-    return { ...buildEnvelope(action, host.vault, ACTION_API_VERSION[action], host.connection, host.now, { reason, message }), ...ACTION_API_VERSION[action] === 1 ? { status: "unavailable" } : {} };
+    return offlineFailure(host, action, error);
   }
+}
+function sharedListing(reader) {
+  let listing = null;
+  const scanWarnings = reader.scanWarnings?.bind(reader);
+  const findNote2 = reader.findNote?.bind(reader);
+  return {
+    vaultName: () => reader.vaultName(),
+    listNotes: () => (listing ??= reader.listNotes()).then((notes) => [...notes]),
+    readNote: (path) => reader.readNote(path),
+    exists: (path) => reader.exists(path),
+    ...scanWarnings ? { scanWarnings } : {},
+    ...findNote2 ? { findNote: findNote2 } : {}
+  };
+}
+async function runActions(input) {
+  if (!AGENT_ACTIONS.includes(input.action)) throw new Error(`Unsupported action: ${input.action}`);
+  const action = input.action;
+  const host = await offlineHost(input, action);
+  if ("failure" in host) return input.requests.map(() => host.failure);
+  const shared = { ...host, reader: sharedListing(host.reader) };
+  const results = [];
+  for (const request of input.requests) {
+    try {
+      results.push(await runAction(shared, action, request ?? {}));
+    } catch (error) {
+      results.push(offlineFailure(shared, action, error));
+    }
+  }
+  return results;
 }
 export {
   pluginApiVersionsFor,
-  runAction2 as runAction
+  runAction2 as runAction,
+  runActions
 };

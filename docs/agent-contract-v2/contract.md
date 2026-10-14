@@ -6,12 +6,12 @@ Implementation status and test evidence belong in the plan, not in claims that e
 
 ## Scope
 
-Twelve CLI actions (`recent` and `import` since 0.5). Zotero remains read-only through documented Better BibTeX RPCs.
+Fourteen CLI actions (`recent` and `import` since 0.5; `annotations` and `citing` since 0.6). Zotero remains read-only through documented Better BibTeX RPCs.
 No database access, companion add-on, HTTP listener, telemetry, or automatic citekey changes.
 The only write to non-plugin-owned notes is explicitly requested `reconcile --apply`; `import --apply` writes only
 plugin-owned literature notes (new files, or managed sections of notes carrying this item's owner marker) and their
 annotation images, through the same preview/apply path as the plugin UI.
-Neither `identity` nor `cites` nor `locate` applies the Markdown it returns.
+Neither `identity` nor `cites` nor `locate` applies the Markdown it returns; `annotations` and `citing` only read.
 Non-note writes are enumerated: (1) the private PDF text cache of `pdf-text`; (2) the bibliography sidecar of
 `cites --bibliography --out` (0.5), by default `.cmds-zotero/bibliography/<slug>.<ext>` inside the plugin-owned
 private folder, elsewhere only under the overwrite rule in "Bibliography formats and sidecars".
@@ -32,6 +32,8 @@ private folder, elsewhere only under the overwrite rule in "Bibliography formats
 | locate | 2 | Yes | None |
 | recent | 2 | No | None (Better BibTeX searches only) |
 | import | 2 | No | Plugin-owned literature note and annotation images, only with `--apply` |
+| annotations | 2 | Yes (`--fresh` and `--today` need the live host) | None (Better BibTeX reads only with `--fresh`/`--today`) |
+| citing | 2 | Yes | None |
 
 Every structured response has `apiVersion`, `contract: 2`, `apiVersions: [1,2]`, `action`, `vault`,
 `ok`, `checkedAt` (UTC ISO timestamp), and `connection`. Failures add `reason` and `message`.
@@ -262,15 +264,41 @@ Existing identity evidence prevents an automatic negative transition. Resolved s
 Malformed identities require human repair followed by a new dry-run; no repair action is added in 0.4.
 S01 corrections are suggestions only; reconcile does not edit the body.
 
+Scan policy (0.6, R8). `reconcile` reports `scan {skipped, truncated, skippedDetail, parseErrors}`: `skippedDetail`
+gives each skipped path its kind (`unreadable`, `parse-error`, `symlink` for the offline reader) and `parseErrors` lists
+every note whose frontmatter did not parse. `--apply` is refused vault-wide (`reason: scan-incomplete`, the message
+names up to ten paths, `apply.refusedMessage` repeats it) for a truncated scan, any unreadable or symlinked entry, or a
+parse-error note inside the `--folders` scope. A parse-error note elsewhere no longer vetoes the apply; the host reads
+it once, and a hub whose citekey it mentions (word-bounded) is withheld individually with the finding
+`blocked-by-parse-error` (`skippedReason: blocked-by-parse-error`, `blockedBy` = the paths, `proposed: null`) until it is
+repaired, because that note may be the hub's own atom or S01 note. A parse-error note that vanished after the listing
+counts as unreadable.
+
 ### Apply protocol
 
 Require live host, valid complete fresh index, current BBT reachability and explicitly disabled legacy plugin.
 Unknown preconditions fail closed. Serialize applies per canonical vault/path.
-Bind each proposal to its source snapshot; re-read and check the source before writing.
-Recheck current frontmatter and transition preconditions within `processFrontMatter` before assignments.
-Existing YAML must pass the byte-identical parse/stringify round-trip guard.
+Bind each proposal to its source snapshot (the SHA-256 of the note text); re-read and check the source before writing.
+
+The write is a line patch (0.6, R8) of the whole note text inside one read-modify-write callback (`vault.process`).
+The callback rechecks the plugin lifecycle, evidence freshness and the source hash, then replaces the single column-0
+line of each changed allowed key (a trailing comment on that line is kept) and appends missing keys before the closing
+fence in `HUB_WRITABLE_KEYS` order. Every other byte stays: comments, quoting style, folded scalars, lists, trailing
+whitespace, CRLF, BOM and the body. A value is written bare only when YAML 1.1 and 1.2 parsers both read it back as
+the same string (letters, digits and `_ . / : @ % + ~ -`, not a boolean, null, number or timestamp); anything else is
+double-quoted with JSON escapes, so a backslash becomes `\\`, and DEL, C1 controls, U+2028/U+2029 and the BOM become
+`\uXXXX`. The patched text must parse back to the intended frontmatter (non-allowed keys and unchanged allowed keys
+equal, changed keys at their proposed values) before it is handed to the writer. Hand-formatted YAML that a
+parse/stringify pass would rewrite is patched like any other hub; dry-run rows may carry the informational
+`yamlNormalisable` (live host only) and it never withholds a proposal.
+A hub whose current allowed value is a block scalar, flow collection, multi-line or unterminated quoted scalar, a key
+that appears twice or in quoted form, or a proposed value that is neither string nor boolean is skipped with
+`skippedReason: frontmatter-not-patchable` and nothing is written (0.5's `yaml-roundtrip-unsafe` no longer occurs).
+A source change before the write or inside the callback is skipped as `changed-since-plan` with `wrote: false`, never an
+integrity failure: a throw from the callback means the writer received no text, whatever another editor did meanwhile.
 Verify body bytes, non-allowed values and intended allowed values afterward, even after a possibly post-write exception.
-No-op runs do not update timestamps. Per-file failures and actual writes are reported distinctly.
+No-op runs do not update timestamps. Per-file failures and actual writes are reported distinctly; `apply.notes[]`
+add `replacedKeys` and `appendedKeys` (which of `changedKeys` replaced a line and which were appended).
 `apply.notes[].wrote` is `null` when a post-invocation read cannot establish the outcome; this is an integrity failure,
 not proof of no write. Top-level note `applied` flags mirror successful writer outcomes. Revalidation may advance
 `zoteroCheckedAt` while preserving the approved material patch. Each queued file rechecks evidence and the callback
@@ -313,9 +341,90 @@ writing maps to `apply-failed`. The user-owned regions of a literature note are 
 `## Synthesis` callout, `## Notes`, any text outside managed markers and detached blocks; an agent records its own synthesis
 there, never inside `<!-- cmds-zotero:<id>:<hash> -->` blocks.
 
-The live host advertises its action list (`service.actions`); the CLI refuses `recent`/`import` against a host that does
-not list them with `plugin-too-old` before submitting anything. Both are live-only; offline they answer `requires-obsidian`.
-`ingest-ro.mjs` allows `recent` and `import` dry runs and still rejects `--apply`.
+The live host advertises its action list (`service.actions`); the CLI refuses `recent`, `import`, `annotations` and `citing`
+against a host that does not list them with `plugin-too-old` before submitting anything (the message names the plugin version
+that added the action, and for an offline-capable action suggests `--offline`). `recent` and `import` are live-only; offline
+they answer `requires-obsidian`. `ingest-ro.mjs` allows `recent` and `import` dry runs and still rejects `--apply`; it allows
+`annotations` and `citing` entirely, because neither writes.
+
+## Annotations and citing for agents (0.6)
+
+Both actions are additive to contract 2: an older host does not list them (see above) and every existing action is unchanged.
+
+### `annotations`
+
+`annotations` returns the annotations of one paper in Zotero's reading order (attachments as listed, each attachment's
+annotations by `annotationSortIndex`). Selector: exactly one of `--citekey` (a former key resolves and reports
+`matchedHistory: true`), `--item-key` with `--library`, or `--today`. Filters (all optional, combinable, all applied to the
+annotations of the selected item): `--color` (a palette name `yellow|red|green|blue|purple|magenta|orange|gray`, matched by
+the nearest palette hue, or a hex value such as `#ffd400`), `--type` (`highlight|underline|note|text|image|ink`), `--tag`
+(case-insensitive, exact) and `--attachment KEY` (one attachment of the item; a key the item does not have is
+`invalid-request` and the response lists the item's attachments). An unknown color or type is `invalid-request`. The selector
+outcomes are those of `resolve`: `status` is `resolved`, `ambiguous` (the same citekey in two libraries; `ranked` lists them and
+no annotations are returned) or `not-found`; a `not-found` verdict from a stale index is withheld as `ok:false, reason:
+stale-index` unless `--allow-stale`.
+
+Freshness. By default the answer is a snapshot of the saved index (`source: snapshot`, `fresh: false`, `annotationsAsOf` the
+index's `generatedAt`; a warning is added when the index is stale, because annotations made since then are missing) and works
+offline. `--fresh` (live host only) reads the item as Zotero has it now (one `item.export` plus `item.attachments`, the same
+read `import` uses; `source: fresh`, `annotationsAsOf` the request time) without touching the saved index. If Zotero cannot
+answer, the request fails (`bbt-unreachable` with `bbtError` for a typed transport fault, else `invalid-request`) and
+returns no annotations; with `--allow-stale` it answers from the saved index instead, with `source: snapshot` and a
+warning. Offline, `--fresh` and `--today` are `requires-obsidian`; the snapshot is never substituted silently. `item.attachments`
+may make Zotero render a missing image-annotation cache file into its own cache folder; the library is not changed.
+
+`--today` selects the paper Zotero opened on the current local calendar day (the `lastRead` search of `recent`, live only). It
+resolves only when exactly one paper qualifies: none is `status: not-found`, several are `status: ambiguous` with `candidates`
+(`citekey`, `itemKey`, `libraryType`, `groupID`, `library`, `title`, `year`, `authors`, `readOn`, `id`, `inIndex`) and no
+annotations; the response carries `today {day, reads}`. A paper the saved index does not know is `ok:false, reason: stale-index`
+unless `--fresh` reads it from Zotero by its reading-history row.
+
+Payload: `status`, `matchedBy`, `query` (or `today`), `item` (`id`, `itemKey`, `libraryID`, `libraryType`, `groupID`,
+`citekey`, `citekeyHistory`, `title`, `authors`, `year`, `doi`, `zoteroSelectURI`), `source`, `fresh`, `annotationsAsOf`,
+`filters` (as given), `summary {total, matched, attachments, byType, byColor}` (`total` counts every annotation of the item,
+the rest the filtered set), `attachments` and `warnings`. Each attachment has `key`, `title`, `openURI`, `contentType`,
+`annotationCount` (before the type, color and tag filters) and `annotations`; attachments without a matching annotation are
+left out. Each annotation has `key`, `attachmentKey`, `type`, `color {name, hex}` (`name` null when the hue is unknown),
+`page` (one-based physical position), `pageLabel` (the printed label), `text`, `comment`, `tags`, `uri` (the
+`zotero://open-pdf/…?page=N&annotation=KEY` link, built on the ATTACHMENT key), `sortIndex` and `dateModified`. An image
+annotation adds `image {cachePath, private: true, vaultCopies}`: `cachePath` is a local path inside Zotero's cache and
+`private: true` marks it as never to be committed, published or pasted into shared notes; `vaultCopies` lists the copies the
+literature import made in the image folder (`<imageFolder>/<libraryType>-<library>-<attachmentKey>-<annotationKey>-<sha256>.<ext>`;
+several when the image changed, empty when it was never imported). The image folder is read only when an image annotation is
+listed. What a live reader would add (the open tab or the selected annotation) is not available: Better BibTeX exposes
+neither.
+
+### `citing`
+
+`citing` lists the vault notes that cite one Zotero item. Selector: exactly one family, as `resolve` takes it (`--citekey`,
+`--item-key` with `--library`, `--doi`, `--arxiv`, `--title` or `--query`, with `--year`/`--author` narrowing a title or
+query). Outcomes are those of `resolve` (`ambiguous` and `not-found` return no notes; a stale `not-found` is withheld as
+`stale-index` unless `--allow-stale`). The keys searched are the item's current citekey and its former keys
+(`keys.searched`, each `{key, kind: current|former}`). A key another item also carries, as its current or a former citekey
+(for example the same key in a group library, or a former key a later item reused), cannot be attributed to this item and is
+left out and reported in `keys.excluded` (`reason: shared`, `sharedWith` up to five `{id, citekey, libraryID}`); when every key
+is excluded the vault is not scanned.
+
+A note is scanned exactly as `cites` scans it, so the two actions agree on what a citation is. Counted in the body: Pandoc
+`[@key]` (with locators, prefixes and `;`-separated groups), narrative `@key`, suppressed-author `-@key` and wikilinks
+`[[@key]]` / `[[@key|alias]]` (the `form` field says `pandoc`, `bare` or `wikilink`). Counted in the frontmatter, and reported
+apart as `frontmatter` rows `{key, field, form}`: bare keys in `cites`, `supports` and `counters`, and `[@key]` tokens inside
+`evidenceFor`, `evidenceAgainst`, `sourceCallout` and `hypotheses`. Not counted: occurrences inside fenced code blocks (``` or
+~~~), the frontmatter text itself when scanning the body, e-mail-like tokens (`name@key.org`), a note's own frontmatter
+`citekey`, wikilinks and bare `@key` inside frontmatter values, a different key that merely starts with the searched one, and
+everything inside the note's References section (the bibliography, not a citation; the section is found with the plugin
+setting `referencesHeadings`, as in `cites`).
+
+Payload: `status`, `matchedBy`, `query`, `item`, `keys {searched, excluded}`, `notes`, `summary {notes, listed, citations,
+frontmatterCitations, scanned, truncated}` and `scan {skipped, truncated, complete}`. Each note has `path`, `basename`, `uri`
+(the canonical `obsidian://open` address), `count` (all citations, frontmatter included), `frontmatterCount`, `citations`
+(body citations in note order: `key`, one-based `line` and `column` over the note text as read, `form`, and `excerpt`, the
+line cut to at most 120 characters around the citation with `…` marking a cut end) and `frontmatter`. Notes are ordered by
+`count` (most first), then by path. Output is bounded: at most 20 body citations per note (`positionsTruncated: true`; `count`
+stays exact) and 500 notes (`summary.truncated: true`; `summary.notes` stays exact). Notes are read with bounded concurrency
+(8). An unreadable note, or one whose frontmatter did not parse, is listed in `scan.skipped` and sets `scan.complete: false`: an
+empty or short `notes` list proves absence only when `scan.complete` is true. A truncated vault listing (more than 20,000 notes)
+is `ok:false, reason: discovery-incomplete` with the notes found so far still reported.
 
 ## PDF evidence and private caches
 

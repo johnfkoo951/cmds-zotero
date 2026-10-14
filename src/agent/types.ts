@@ -92,8 +92,8 @@ export function noteRef(vault: string, path: string): NoteRef {
 /** Read-only vault access shared by live (Obsidian) and offline (fs) hosts. Paths are vault-relative with `/`. */
 export interface VaultReader {
 	vaultName(): string;
-	/** Additive discovery report; hosts must not silently lose malformed or truncated notes. */
-	scanWarnings?(): { skipped: string[]; truncated: boolean };
+	/** Additive discovery report; hosts must not silently lose malformed or truncated notes. `skippedDetail` (0.5 R8) classifies each skipped path. */
+	scanWarnings?(): { skipped: string[]; truncated: boolean; skippedDetail?: ScanSkip[] };
 	/** Every Markdown note with parsed frontmatter (no body). Implementations cap at 20,000 files and skip dot-directories. */
 	listNotes(): Promise<NoteRecord[]>;
 	/** Full text of one note; throws when absent or outside the vault. */
@@ -206,3 +206,15 @@ export type LiteratureIdentityKey = typeof LITERATURE_IDENTITY_KEYS[number];
 export const LEGACY_LITERATURE_KEYS = ["zotero-id", "zotero-library-id", "zoteroItemKey", "zoteroLibraryID", "zoteroLibraryType", "zoteroGroupID"] as const;
 /** Frontmatter `type` values under which citekey equality may identify a Zotero item; any other `type` is a foreign convention. */
 export const ZOTERO_NOTE_TYPES = ["zotero", "paper-hub", "paper-analysis", "raw-source", "literature-zotero"] as const;
+
+// 0.5 R8
+/** Why a vault scan skipped a path: it could not be read, its frontmatter did not parse, or it is a symlink (offline reader). */
+export type ScanSkipKind = "unreadable" | "parse-error" | "symlink";
+export interface ScanSkip { path: string; kind: ScanSkipKind }
+/**
+ * `reconcile` scan report: the shared `{skipped, truncated}` plus the per-path kind and every parse-error path
+ * (parse errors veto `--apply` only inside the `--folders` scope or on a candidate hub; see the contract's apply protocol).
+ */
+export interface ReconcileScanReport extends ScanReport { skippedDetail: ScanSkip[]; parseErrors: string[] }
+/** YAML codec the live host injects (Obsidian `parseYaml`/`stringifyYaml`); the offline host omits it, so its rows carry no `yamlNormalisable`. */
+export interface YamlCodec { parse(text: string): unknown; stringify(value: unknown): string }

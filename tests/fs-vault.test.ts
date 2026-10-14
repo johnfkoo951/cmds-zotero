@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { configDirOf, DEFAULT_CONFIG_DIR, FsVaultReader, parseFrontmatter, MAX_LISTED_NOTES, MAX_NOTE_BYTES, readEnabledPlugins, readInstalledPluginVersion, readPluginSettings } from "../src/cli/fs-vault";
+import { configDirOf, FsVaultReader, parseFrontmatter, MAX_LISTED_NOTES, MAX_NOTE_BYTES, readEnabledPlugins, readInstalledPluginVersion, readPluginSettings } from "../src/cli/fs-vault";
 import { findNote } from "../src/agent/note-lookup";
-import type { NoteRecord } from "../src/agent/types";
+import type { NoteRecord, ScanSkip } from "../src/agent/types";
 import { probeGit } from "../src/git-probe";
 
 const execute = promisify(execFile);
@@ -32,6 +32,8 @@ test("filesystem reader reports omissions and refuses internal as well as extern
 	const notes = await reader.listNotes();
 	assert.equal(notes.find(note => note.path === "broken.md")?.frontmatterParse, "error");
 	assert.deepEqual(reader.scanWarnings().skipped.sort(), ["broken.md", "large.md", "linked.md"]);
+	// 0.5 R8: each skipped path carries its kind so reconcile apply can tolerate parse errors outside its scope.
+	assert.deepEqual([...reader.scanWarnings().skippedDetail].sort((a, b) => a.path.localeCompare(b.path)), [{ path: "broken.md", kind: "parse-error" }, { path: "large.md", kind: "unreadable" }, { path: "linked.md", kind: "symlink" }]);
 	assert.equal(await reader.readNote("empty.md"), "");
 	await assert.rejects(reader.readNote("linked.md"));
 	await assert.rejects(reader.readNote("../escape.md"));
@@ -55,25 +57,27 @@ test("Git probe distinguishes tracked content from ignored content", async t => 
 });
 
 // PERF-07: the 0.5.0 sequential walk, kept verbatim as the reference the parallel scan must reproduce exactly.
-async function sequentialList(reader: FsVaultReader, root: string, limit: number): Promise<{ notes: NoteRecord[]; skipped: string[]; truncated: boolean }> {
+// 0.5 R8: the reference also classifies every skipped path (unreadable, symlink, parse-error).
+async function sequentialList(reader: FsVaultReader, root: string, limit: number): Promise<{ notes: NoteRecord[]; skipped: string[]; truncated: boolean; skippedDetail: ScanSkip[] }> {
 	const notes: NoteRecord[] = [];
-	const report = { skipped: [] as string[], truncated: false };
+	const report = { skipped: [] as string[], truncated: false, skippedDetail: [] as ScanSkip[] };
+	const skip = (path: string, kind: ScanSkip["kind"]): void => { report.skipped.push(path); report.skippedDetail.push({ path, kind }); };
 	const walk = async (dir: string): Promise<void> => {
 		if (notes.length >= limit) { report.truncated = true; return; }
 		let entries: Dirent[];
-		try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { report.skipped.push(relative(root, dir)); return; }
+		try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { skip(relative(root, dir).split(sep).join("/"), "unreadable"); return; }
 		entries.sort((a, b) => a.name.localeCompare(b.name));
 		for (const entry of entries) {
 			if (notes.length >= limit) { report.truncated = true; return; }
-			if (entry.isSymbolicLink()) { report.skipped.push(relative(root, join(dir, entry.name))); continue; }
+			if (entry.isSymbolicLink()) { skip(relative(root, join(dir, entry.name)).split(sep).join("/"), "symlink"); continue; }
 			const full = join(dir, entry.name);
 			if (entry.isDirectory()) { if (!entry.name.startsWith(".")) await walk(full); continue; }
 			if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
 			const relPath = relative(root, full).split(sep).join("/");
 			let text: string;
-			try { text = await reader.readNote(relPath); } catch { report.skipped.push(relPath); continue; }
+			try { text = await reader.readNote(relPath); } catch { skip(relPath, "unreadable"); continue; }
 			const parsed = parseFrontmatter(text);
-			if (parsed.frontmatterParse === "error") report.skipped.push(relPath);
+			if (parsed.frontmatterParse === "error") skip(relPath, "parse-error");
 			notes.push({ path: relPath, basename: entry.name.replace(/\.md$/, ""), frontmatter: parsed.frontmatter, frontmatterParse: parsed.frontmatterParse });
 		}
 	};
@@ -128,7 +132,7 @@ test("PERF-07: the parallel offline scan lists, skips and truncates exactly like
 		const expected = await sequentialList(new FsVaultReader(root, "Fixture"), root, limit);
 		const notes = await reader.listNotes();
 		assert.deepEqual(notes, expected.notes, `notes at limit ${limit}`);
-		assert.deepEqual(reader.scanWarnings(), { skipped: expected.skipped, truncated: expected.truncated }, `report at limit ${limit}`);
+		assert.deepEqual(reader.scanWarnings(), { skipped: expected.skipped, truncated: expected.truncated, skippedDetail: expected.skippedDetail }, `report at limit ${limit}`);
 	}
 });
 
@@ -150,10 +154,10 @@ test("PERF-07: findNote gives the listing's answer for every spelling without re
 	assert.equal((await reader.findNote("b/zeta"))?.frontmatter?.type, "paper-hub");
 	assert.equal(await reader.findNote("b/missing"), null);
 	assert.deepEqual(reads, ["b/zeta.md"]);
-	assert.deepEqual(reader.scanWarnings(), { skipped: [], truncated: false });
+	assert.deepEqual(reader.scanWarnings(), { skipped: [], truncated: false, skippedDetail: [] });
 });
 
-test("HYG-02: the offline readers take the vault's configuration folder; the default stays Obsidian's", async t => {
+test("HYG-02: the offline readers take the vault's configuration folder as a parameter; no plugin source names a default", async t => {
 	const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "zotero-config-")));
 	t.after(() => fs.rm(root, { recursive: true, force: true }));
 	const custom = join(root, ".config-custom");
@@ -166,10 +170,9 @@ test("HYG-02: the offline readers take the vault's configuration folder; the def
 	assert.equal(read.settings.zoteroIndexPath, "Custom/index.json");
 	assert.deepEqual(await readEnabledPlugins(root, ".config-custom"), ["cmds-zotero"]);
 	assert.equal(await readInstalledPluginVersion(root, ".config-custom"), "0.5.0");
-	assert.equal((await readPluginSettings(root)).present, false, "the default folder is not the custom one");
-	assert.equal(await readEnabledPlugins(root), null);
-	assert.equal(configDirOf(null), DEFAULT_CONFIG_DIR);
-	assert.equal(configDirOf(undefined), DEFAULT_CONFIG_DIR);
+	assert.equal((await readPluginSettings(root, ".obsidian")).present, false, "another folder name reads nothing from this vault");
+	assert.equal(await readEnabledPlugins(root, ".obsidian"), null);
 	assert.equal(configDirOf(".config-custom"), ".config-custom");
-	for (const bad of ["", ".", "..", "plain", ".a/b", "../.obsidian", ".a\\b", ".a\0b", "/.obsidian"]) assert.throws(() => configDirOf(bad), /--config-dir/, JSON.stringify(bad));
+	// The folder is never defaulted here: the command line wrapper supplies Obsidian's default (tests/cli-offline.test.ts).
+	for (const bad of ["", ".", "..", "plain", ".a/b", "../.obsidian", ".a\\b", ".a\0b", "/.obsidian", null, undefined]) assert.throws(() => configDirOf(bad as never), /--config-dir/, JSON.stringify(bad));
 });

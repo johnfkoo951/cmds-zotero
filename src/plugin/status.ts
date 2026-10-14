@@ -2,7 +2,7 @@ import { Notice } from "obsidian";
 import { formatStatus } from "../agent/connection";
 import { describeBbtError } from "../api/transport";
 import type CMDSZoteroPlugin from "../main";
-import { ReportModal } from "../modals";
+import { ReportModal } from "../modals/report";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
 

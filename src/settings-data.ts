@@ -25,12 +25,17 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 			return typeof peer.name === "string" && !!peer.name.trim() && typeof peer.path === "string" && !!peer.path.trim();
 		}).map(peer => ({ name: peer.name.trim(), path: peer.path.trim() })) : [],
 		citationTrigger: (["bracket", "at", "off"] as const).includes(data.citationTrigger as CitationTrigger) ? data.citationTrigger as CitationTrigger : DEFAULT_SETTINGS.citationTrigger,
-		excludedTags: Array.isArray(data.excludedTags) ? [...new Set(data.excludedTags.filter((tag): tag is string => typeof tag === "string").map(tag => tag.trim().toLowerCase()).filter(Boolean))] : [...DEFAULT_SETTINGS.excludedTags],
+		excludedTags: Array.isArray(data.excludedTags) ? normalizeTagList(data.excludedTags) : [...DEFAULT_SETTINGS.excludedTags],
 		headingHighlightColor: typeof data.headingHighlightColor === "string" && (data.headingHighlightColor === "none" || isAnnotationColor(data.headingHighlightColor)) ? data.headingHighlightColor : DEFAULT_SETTINGS.headingHighlightColor,
 		referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
 		referencesHeadings: referencesHeadings(data.referencesHeadings), // 0.5 R10
 		recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
 	};
+}
+
+/** Excluded Zotero tags as stored: strings only, trimmed, lower-cased, empty entries dropped, deduplicated (order kept). */
+export function normalizeTagList(value: readonly unknown[]): string[] {
+	return [...new Set(value.filter((tag): tag is string => typeof tag === "string").map(tag => tag.trim().toLowerCase()).filter(Boolean))];
 }
 
 // 0.5 R10: plain strings, trimmed and deduplicated; an empty or malformed list keeps the defaults so detection never goes blind.

@@ -282,7 +282,7 @@ export function sidecarWriteDecision(path: string, format: BibliographyFormat, e
 	return { ok: false, message: `Refusing to overwrite ${path}: ${how}, or write under ${BIBLIOGRAPHY_DIR}/ (the default).` };
 }
 
-type ScannedCitation = Omit<FileCitation, "citeStatus" | "matchedHistory" | "entryId" | "citekeyCurrent" | "hub" | "raw" | "uncheckedReason">;
+export type ScannedCitation = Omit<FileCitation, "citeStatus" | "matchedHistory" | "entryId" | "citekeyCurrent" | "hub" | "raw" | "uncheckedReason">;
 
 /** Verdicts the stale-index gate withholds: each says "not in the index", which a fresh index could overturn. */
 const NEGATIVE_STATUSES: ReadonlySet<CiteStatus> = new Set<CiteStatus>(["raw-only", "dangling"]);
@@ -471,7 +471,7 @@ export function referencesSection(body: string, cited: readonly string[], headin
  * Citation occurrences of one note in file order: frontmatter citations first, then body citations with 1-based
  * line/column. Occurrences inside the `## References` section are the bibliography, not citations, and are skipped.
  */
-function scanNote(note: NoteRecord & { body: string }, headings: readonly string[]): { citations: ScannedCitation[]; span: ReferencesSpan | null } {
+export function scanNote(note: NoteRecord & { body: string }, headings: readonly string[]): { citations: ScannedCitation[]; span: ReferencesSpan | null } {
 	const citations: ScannedCitation[] = [];
 	for (const item of scanFrontmatterCitations(note.frontmatter ?? {})) citations.push({ citekey: item.citekey, where: "frontmatter", field: item.field, form: item.form });
 	const span = findReferencesSection(note.body.split(/\r?\n/), headings);
