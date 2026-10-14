@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, type AnnotationTagStyle, type CitationFormatSetting, type CitationTrigger, type CmdsZoteroSettings } from "./types";
 import { isAnnotationColor } from "./annotations/colors";
 import { annotationsHeading, calloutType, synthesisLines } from "./layout";
+import { canonicalLocale, dataDirectoryProblem, localeProblem } from "./bibliography/rules";
 
 /** 0.6.2: the stored names of the fixed citation formats (the same list as citations/formats.ts, kept here so the offline core stays small). */
 export const CITATION_FORMAT_SETTINGS: readonly CitationFormatSetting[] = ["pandoc", "narrative", "wikilink", "author-date", "zotero-link", "note-link"];
@@ -72,7 +73,19 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		authorDateRendering: flag(data.authorDateRendering, DEFAULT_SETTINGS.authorDateRendering),
 		citationClickAction: (["nothing", "note", "pdf"] as const).find(mode => mode === data.citationClickAction) ?? DEFAULT_SETTINGS.citationClickAction,
 		pasteZoteroLinks: flag(data.pasteZoteroLinks, DEFAULT_SETTINGS.pasteZoteroLinks),
+		// 0.6.2 WP6
+		bibliographyLocale: bibliographyLocale(data.bibliographyLocale),
+		bibliographyOrder: (["style", "citation", "alphabetical"] as const).find(order => order === data.bibliographyOrder) ?? DEFAULT_SETTINGS.bibliographyOrder,
+		zoteroDataDirectory: typeof data.zoteroDataDirectory === "string" && data.zoteroDataDirectory.trim() && !dataDirectoryProblem(data.zoteroDataDirectory) ? data.zoteroDataDirectory.trim() : DEFAULT_SETTINGS.zoteroDataDirectory,
+		exportFolder: text(data.exportFolder, DEFAULT_SETTINGS.exportFolder),
 	};
+}
+
+// 0.6.2: a malformed locale keeps the style's default rather than reaching Better BibTeX.
+function bibliographyLocale(value: unknown): string {
+	if (typeof value !== "string") return DEFAULT_SETTINGS.bibliographyLocale;
+	const locale = canonicalLocale(value);
+	return localeProblem(locale) ? DEFAULT_SETTINGS.bibliographyLocale : locale;
 }
 
 /** Excluded Zotero tags as stored: strings only, trimmed, lower-cased, empty entries dropped, deduplicated (order kept). */

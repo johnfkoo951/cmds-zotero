@@ -19,6 +19,7 @@ import { registerCommands } from "./plugin/commands";
 import { IndexController } from "./plugin/index-controller";
 import { LiteratureController } from "./plugin/literature-controller";
 import { NavigationController } from "./plugin/navigation";
+import { ReferencesController } from "./plugin/references-controller";
 import type { NoteBatch } from "./plugin/note-batch";
 import { StatusController } from "./plugin/status";
 import { cachedGitProbe, type GitProbe } from "./git-probe";
@@ -51,6 +52,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	readonly bibliography = new BibliographyController(this);
 	readonly literature = new LiteratureController(this);
 	readonly navigation = new NavigationController(this);
+	readonly references = new ReferencesController(this); // 0.6.2 WP6
 	readonly status = new StatusController(this);
 	/** 0.6.2 citations editor: marks, hover, author-date rendering, citation actions, paste and drop. */
 	readonly citations = new CitationEditorController(this);
@@ -217,7 +219,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	bibliographyFor(entry: ZoteroIndexEntry): Promise<string> { return this.bibliography.bibliographyForStyle(entry, this.settings.bibliographyStyle); }
 
 	/** `fresh: false` joins the current render generation; `refresh` is the References sidebar's Refresh (0.6 OPT-13). */
-	bibliographyBatch(entries: ZoteroIndexEntry[], style?: string, options?: { fresh?: boolean; refresh?: boolean }): Promise<BibliographyDetail[]> { return this.bibliography.bibliographyBatch(entries, style, options); }
+	bibliographyBatch(entries: ZoteroIndexEntry[], style?: string, options?: { fresh?: boolean; refresh?: boolean; locale?: string }): Promise<BibliographyDetail[]> { return this.bibliography.bibliographyBatch(entries, style, options); }
 
 	copyCslJson(entries: readonly ZoteroIndexEntry[]): Promise<void> { return this.bibliography.copyCslJson(entries); }
 

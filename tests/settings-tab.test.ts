@@ -27,6 +27,8 @@ test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the pic
 		joinContinuations: false, noteRichText: false, annotationTagStyle: "plain",
 		// 0.6.2 WP5: citations editor.
 		citationFormat: "pandoc", citekeyProblemMarks: true, citationHover: false, authorDateRendering: false, citationClickAction: "nothing", pasteZoteroLinks: false,
+		// 0.6.2 WP6: references, bibliography and export kit.
+		bibliographyLocale: "", bibliographyOrder: "style", zoteroDataDirectory: "~/Zotero", exportFolder: "CMDS Zotero exports",
 	});
 });
 

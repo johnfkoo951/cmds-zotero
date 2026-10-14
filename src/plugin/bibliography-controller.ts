@@ -2,7 +2,10 @@ import { Editor, Notice, TFile } from "obsidian";
 import { EXPORT_TRANSLATORS, defaultSidecarPath, groupEntriesByLibrary, mergeExports, type StructuredExport } from "../agent/cites-core"; // 0.5 R10
 import { describeBbtError, mapBounded } from "../api/transport";
 import { BibliographyStore, type BibliographyDetail } from "../bibliography-store"; // 0.5 R12
-import { resolveReferenceRows, resolvedEntries } from "../citations/reference-rows"; // 0.5 R10
+import { resolveReferenceRows, resolvedEntries, countBibliographySources, fallbackCitation, type BibliographySourceCounts } from "../citations/reference-rows"; // 0.5 R10
+import { listInstalledStyles, type InstalledStyle, type StyleListing } from "../bibliography/csl-styles"; // 0.6.2
+import { copyListNotice, entriesHtml, formatKey, noteFormat, orderEntries, probeProblem, splitTextBibliography, type BibliographyFormat, type BibliographyOrder, type NoteFormat } from "../bibliography/format"; // 0.6.2
+import { markdownLink } from "../uris";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
 import { assertVaultBoundary, bibliographySidecarStorage, ensureCmdsIgnore, ensureDirectory } from "../vault-storage";
@@ -59,8 +62,10 @@ export class BibliographyController {
 	 * an earlier render generation is not joined because that generation may be aborted. A fallback answer is remembered
 	 * for the rest of its render generation only (0.6 OPT-13).
 	 */
-	bibliographyDetail(entry: ZoteroIndexEntry, style = this.plugin.settings.bibliographyStyle, options: { offline?: boolean; offlineError?: unknown; signal?: AbortSignal; generation?: number } = {}): Promise<BibliographyDetail> {
-		const key = `${entry.id}|${style}`;
+	bibliographyDetail(entry: ZoteroIndexEntry, style = this.plugin.settings.bibliographyStyle, options: { offline?: boolean; offlineError?: unknown; signal?: AbortSignal; generation?: number; locale?: string } = {}): Promise<BibliographyDetail> {
+		// 0.6.2 per-note-style-locale: the cache key carries style and locale (the style alone without a locale, as before).
+		const locale = options.locale ?? this.defaultLocale();
+		const key = `${entry.id}|${formatKey({ style, locale })}`;
 		const cached = this.bibliographyCache.get(key);
 		if (cached) return Promise.resolve(cached);
 		const generation = options.generation ?? 0;
@@ -70,7 +75,7 @@ export class BibliographyController {
 		const flight = this.bibliographyFlights.get(key);
 		if (flight && (flight.generation === 0 || flight.generation === generation)) return flight.promise;
 		const store = this.bibliographyStore;
-		const promise = this.renderBibliography(entry, style, options, store)
+		const promise = this.renderBibliography(entry, { style, locale }, options, store)
 			.then(detail => {
 				if (detail.source !== "fallback") { if (this.bibliographyStore === store) this.bibliographyCache.set(key, detail); }
 				else if (current()) this.generationFallbacks.set(key, detail);
@@ -81,22 +86,26 @@ export class BibliographyController {
 		return promise;
 	}
 
-	private async renderBibliography(entry: ZoteroIndexEntry, style: string, options: { offline?: boolean; offlineError?: unknown; signal?: AbortSignal }, store: BibliographyStore): Promise<BibliographyDetail> {
+	private async renderBibliography(entry: ZoteroIndexEntry, format: BibliographyFormat, options: { offline?: boolean; offlineError?: unknown; signal?: AbortSignal }, store: BibliographyStore): Promise<BibliographyDetail> {
 		await store.load();
 		const version = this.knownBbtVersion();
-		const hit = store.get(style, entry, version);
+		const stored = formatKey(format);
+		const hit = store.get(stored, entry, version);
 		if (hit) return { text: hit.text, source: "cached", renderedAt: hit.renderedAt };
 		const stale = (error: unknown): BibliographyDetail => {
-			const older = store.get(style, entry);
+			const older = store.get(stored, entry);
 			return older ? { text: older.text, source: "cached", renderedAt: older.renderedAt, error } : { text: "", source: "fallback", error };
 		};
 		if (options.offline) return stale(options.offlineError ?? this.plugin.bbt.lastOutcome?.message ?? "Zotero offline");
 		let text: string;
-		try { text = (await this.plugin.bbt.bibliography(entry, style, options.signal)).trim(); }
+		try { text = (await this.plugin.bbt.bibliography(entry, format.style, options.signal, format.locale ? { locale: format.locale } : undefined)).trim(); }
 		catch (error) { return stale(error); }
-		if (text && this.bibliographyStore === store) store.set(style, entry, text, version);
+		if (text && this.bibliographyStore === store) store.set(stored, entry, text, version);
 		return { text, source: "live" };
 	}
+
+	/** The configured locale ("" when unset or when a partial host has no such setting). */
+	private defaultLocale(): string { return this.plugin.settings.bibliographyLocale ?? ""; }
 
 	/**
 	 * One render generation for a list of entries: the previous generation's live flights are aborted, memory and sidecar
@@ -108,8 +117,10 @@ export class BibliographyController {
 	 * sidebar's Refresh button) starts a generation that always probes and forgets the remembered texts of these entries
 	 * that did not come live from BBT, so they are read again from the sidecar or BBT.
 	 */
-	async bibliographyBatch(entries: ZoteroIndexEntry[], style = this.plugin.settings.bibliographyStyle, options: { fresh?: boolean; refresh?: boolean } = {}): Promise<BibliographyDetail[]> {
+	async bibliographyBatch(entries: ZoteroIndexEntry[], style = this.plugin.settings.bibliographyStyle, options: { fresh?: boolean; refresh?: boolean; locale?: string } = {}): Promise<BibliographyDetail[]> {
 		const refresh = options.refresh === true;
+		const locale = options.locale ?? this.defaultLocale();
+		const stored = formatKey({ style, locale });
 		if (refresh || options.fresh !== false || !this.bibliographyController) {
 			this.bibliographyController?.abort();
 			const generation = ++this.bibliographyGeneration;
@@ -121,15 +132,15 @@ export class BibliographyController {
 		const generation = this.bibliographyGeneration;
 		const controller = this.bibliographyController;
 		if (refresh) for (const entry of entries) {
-			const key = `${entry.id}|${style}`;
+			const key = `${entry.id}|${stored}`;
 			if (this.bibliographyCache.get(key)?.source !== "live") this.bibliographyCache.delete(key);
 		}
 		const store = this.bibliographyStore;
 		await store.load();
 		const version = this.knownBbtVersion();
-		const pending = entries.some(entry => !this.bibliographyCache.has(`${entry.id}|${style}`) && !store.get(style, entry, version));
+		const pending = entries.some(entry => !this.bibliographyCache.has(`${entry.id}|${stored}`) && !store.get(stored, entry, version));
 		const offlineError = pending ? await this.offlineVerdict(generation, controller.signal, refresh) : null;
-		return mapBounded(entries, this.plugin.settings.concurrency, entry => this.bibliographyDetail(entry, style, { generation, signal: controller.signal, ...(offlineError ? { offline: true, offlineError } : {}) })
+		return mapBounded(entries, this.plugin.settings.concurrency, entry => this.bibliographyDetail(entry, style, { generation, locale, signal: controller.signal, ...(offlineError ? { offline: true, offlineError } : {}) })
 			.catch((error: unknown): BibliographyDetail => ({ text: "", source: "fallback", error })));
 	}
 
@@ -152,11 +163,108 @@ export class BibliographyController {
 	}
 
 	/** "Insert bibliography": live or cached text goes into the editor; without any text the BBT fault is the message. */
-	async insertBibliography(editor: Editor, entry: ZoteroIndexEntry): Promise<void> {
-		const detail = await this.bibliographyDetail(entry);
+	async insertBibliography(editor: Editor, entry: ZoteroIndexEntry, file?: TFile | null): Promise<void> {
+		const format = await this.noteFormat(file ?? null); // 0.6.2: the note's csl/lang apply
+		const detail = await this.bibliographyDetail(entry, format.style, { locale: format.locale });
 		if (detail.source === "fallback") throw new Error(`${describeBbtError(detail.error)} No cached bibliography exists for this item.`);
 		editor.replaceSelection(detail.text);
 		if (detail.source === "cached") new Notice(`Inserted the bibliography cached on ${detail.renderedAt?.slice(0, 10) ?? "an earlier date"}; Zotero was not contacted.`);
+	}
+
+	// 0.6.2 WP6 — installed styles, per-note style and locale, the ordered rich-text bibliography and the style probe.
+
+	private styleListing: { directory: string; promise: Promise<StyleListing> } | null = null;
+	/** The last style and locale one probe rendered, so Save after the picker does not ask Better BibTeX twice. */
+	private verified: string | null = null;
+
+	/** The installed styles of the configured data directory, read once per directory setting (Refresh: `reload`). */
+	installedStyles(reload = false): Promise<StyleListing> {
+		const directory = this.plugin.settings.zoteroDataDirectory ?? "";
+		if (reload || !this.styleListing || this.styleListing.directory !== directory) {
+			const promise = listInstalledStyles(directory);
+			promise.catch(() => { if (this.styleListing?.promise === promise) this.styleListing = null; });
+			this.styleListing = { directory, promise };
+		}
+		return this.styleListing.promise;
+	}
+
+	/** Installed styles when the folder can be read, else none (the per-note lookup never fails because of it). */
+	private async stylesOrNone(): Promise<InstalledStyle[]> {
+		try { return (await this.installedStyles()).styles; } catch { return []; }
+	}
+
+	/**
+	 * The style and locale for a note: its `csl`/`lang` frontmatter (pandoc's keys) over the settings. Reads Obsidian's
+	 * metadata cache and, only when `csl` names a file, the installed styles; never Better BibTeX.
+	 */
+	async noteFormat(file: TFile | null): Promise<NoteFormat> {
+		const frontmatter = file ? this.plugin.app.metadataCache.getFileCache(file)?.frontmatter : undefined;
+		const csl: unknown = frontmatter?.csl;
+		const styles = typeof csl === "string" && csl.trim() ? await this.stylesOrNone() : [];
+		return noteFormat(frontmatter, this.plugin.settings, styles);
+	}
+
+	/**
+	 * Bibliography entries for `entries` in `order`. Style order asks Better BibTeX for the whole list of each library once
+	 * (text and HTML), so the style sorts; any failure, a recent "not answering" or another order uses the per-entry texts
+	 * (memory → sidecar → BBT) in citation or alphabetical order. Fallback lines carry a Zotero link.
+	 */
+	async renderList(entries: readonly ZoteroIndexEntry[], format: BibliographyFormat, order: BibliographyOrder = this.plugin.settings.bibliographyOrder ?? "style"): Promise<{ text: string[]; html: string; order: BibliographyOrder; counts: BibliographySourceCounts; libraries: number; error?: unknown }> {
+		const groups = groupEntriesByLibrary(entries);
+		let error: unknown;
+		if (order === "style" && entries.length) {
+			const last = this.plugin.bbt.lastOutcome;
+			if (!(last && unreachableRecently(last, Date.now()))) {
+				try {
+					const options = format.locale ? { locale: format.locale } : {};
+					const parts = await Promise.all(groups.map(group => Promise.all([
+						this.plugin.bbt.bibliographyList(group.citekeys, group.libraryID, format.style, options),
+						this.plugin.bbt.bibliographyList(group.citekeys, group.libraryID, format.style, { ...options, contentType: "html" }),
+					])));
+					const text = parts.flatMap(([plain]) => splitTextBibliography(plain));
+					if (text.length) return { text, html: parts.map(([, html]) => html.trim()).join("\n"), order, counts: { live: entries.length, cached: 0, fallback: 0 }, libraries: groups.length };
+				} catch (caught) { error = caught; }
+			}
+		}
+		const details = await this.bibliographyBatch([...entries], format.style, { fresh: false, locale: format.locale });
+		const rows = entries.map((entry, index) => ({ entry, text: details[index].text || markdownLink(fallbackCitation(entry), entry.zoteroSelectURI) }));
+		const effective: BibliographyOrder = order === "alphabetical" ? "alphabetical" : "citation";
+		const text = orderEntries(rows, effective, row => row.text).map(row => row.text);
+		return { text, html: entriesHtml(text), order: effective, counts: countBibliographySources(details), libraries: groups.length, ...(error !== undefined ? { error } : {}) };
+	}
+
+	/**
+	 * 0.6.2 rich-text-bibliography-copy: the bibliography of `entries` as HTML and plain text on the clipboard, so it pastes
+	 * formatted into Word or Google Docs and as text elsewhere. Falls back to plain text when rich copy is unavailable.
+	 */
+	async copyBibliography(entries: readonly ZoteroIndexEntry[], format: BibliographyFormat): Promise<void> {
+		if (!entries.length) { new Notice("No resolved references to copy."); return; }
+		const list = await this.renderList(entries, format);
+		const plain = list.text.join("\n\n");
+		let rich = true;
+		try {
+			await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([plain], { type: "text/plain" }), "text/html": new Blob([list.html], { type: "text/html" }) })]);
+		} catch {
+			rich = false;
+			await navigator.clipboard.writeText(plain);
+		}
+		new Notice(copyListNotice(list, rich));
+	}
+
+	/**
+	 * One probe rendering of `format` with an item of the saved index (no index read from Better BibTeX); the problem that
+	 * refuses the style, or null. A format already verified in this session is not probed again.
+	 */
+	async probeFormat(format: BibliographyFormat): Promise<string | null> {
+		const key = formatKey(format);
+		if (this.verified === key) return null;
+		const sample = this.plugin.cachedEntries()[0] ?? (await this.plugin.savedIndex())?.entries[0];
+		if (!sample) return "The style can only be checked with an item from the saved index. Refresh the citekey index first; the style was not saved.";
+		let problem: string | null;
+		try { problem = probeProblem(format, { text: await this.plugin.bbt.bibliography(sample, format.style, undefined, format.locale ? { locale: format.locale } : undefined) }); }
+		catch (error) { problem = probeProblem(format, { error }); }
+		if (!problem) this.verified = key;
+		return problem;
 	}
 
 	/** Aborts the current render generation's flights and writes any pending sidecar records. */

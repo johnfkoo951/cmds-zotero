@@ -85,6 +85,15 @@ export interface CmdsZoteroSettings {
 	citationClickAction: "nothing" | "note" | "pdf";
 	/** Pasting or dropping Zotero item links into a note inserts a citation instead (undo restores the link). */
 	pasteZoteroLinks: boolean;
+	// 0.6.2 WP6: references, bibliography and export kit.
+	/** BCP 47 locale passed to Better BibTeX's `item.bibliography` (e.g. `ko-KR`); empty keeps the style's default locale. */
+	bibliographyLocale: string;
+	/** Order of a copied or inserted bibliography: the style's own order, first citation in the note, or alphabetical. */
+	bibliographyOrder: "style" | "citation" | "alphabetical";
+	/** Zotero data directory whose `styles/*.csl` are listed (read-only); absolute or `~/…`. */
+	zoteroDataDirectory: string;
+	/** Vault folder the pandoc export kit writes into, one subfolder per note. */
+	exportFolder: string;
 }
 
 /** 0.6.2: the fixed named citation formats (no templates); see citations/formats.ts. */
@@ -131,6 +140,11 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	authorDateRendering: false,
 	citationClickAction: "nothing",
 	pasteZoteroLinks: false,
+	// 0.6.2 WP6
+	bibliographyLocale: "",
+	bibliographyOrder: "style",
+	zoteroDataDirectory: "~/Zotero",
+	exportFolder: "CMDS Zotero exports",
 };
 
 export interface ItemIdentity {

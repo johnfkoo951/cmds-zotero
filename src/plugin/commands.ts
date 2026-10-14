@@ -8,6 +8,7 @@ import { registerLiteratureCommands } from "./commands-literature";
 import { registerAnnotationCommands } from "./commands-annotations";
 import { registerLibraryCommands } from "./commands-library";
 import { registerCitationCommands } from "./commands-citations";
+import { registerReferenceCommands } from "./commands-references";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
 
@@ -34,8 +35,8 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.addCommand({ id: "import-literature-note", name: "Import literature note", callback: () => { void plugin.navigation.pick(entry => { void plugin.literature.previewImport(entry); }); } });
 	plugin.addCommand({ id: "send-recent-reads", name: "Send recently read papers to notes", callback: () => { plugin.literature.openRecentReads(); } });
 	plugin.addCommand({ id: "update-all-literature-notes", name: "Update all owned literature notes", callback: () => { void plugin.literature.updateAllLiteratureNotes(); } });
-	plugin.addCommand({ id: "insert-bibliography", name: "Insert bibliography", editorCallback: (editor: Editor) => {
-		void plugin.navigation.pick(entry => { void plugin.run(() => plugin.bibliography.insertBibliography(editor, entry)); }); // 0.5 R12
+	plugin.addCommand({ id: "insert-bibliography", name: "Insert bibliography", editorCallback: (editor: Editor, context) => {
+		void plugin.navigation.pick(entry => { void plugin.run(() => plugin.bibliography.insertBibliography(editor, entry, context.file)); }); // 0.5 R12; 0.6.2: the note's csl/lang
 	} });
 	plugin.addCommand({ id: "open-references", name: "Open references sidebar", callback: () => { void plugin.activateView(VIEW_TYPE_REFERENCES); } });
 	plugin.addCommand({ id: "open-annotations", name: "Open annotations sidebar", callback: () => { void plugin.activateView(VIEW_TYPE_ANNOTATIONS); } });
@@ -54,6 +55,7 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 	registerAnnotationCommands(plugin); // 0.6.1 annotations sidebar: follow, pin, live read and card actions
 	registerLibraryCommands(plugin); // 0.6.1 WP10
 	registerCitationCommands(plugin); // 0.6.2 WP5 citations editor
+	registerReferenceCommands(plugin); // 0.6.2 WP6
 	plugin.addRibbonIcon("library", "Search literature", () => { void plugin.navigation.pick(entry => plugin.navigation.showActions(entry)); });
 	plugin.addRibbonIcon("highlighter", "Zotero annotations", () => { void plugin.activateView(VIEW_TYPE_ANNOTATIONS); });
 	plugin.addRibbonIcon("book-open", "Send recently read papers to notes", () => { plugin.literature.openRecentReads(); });

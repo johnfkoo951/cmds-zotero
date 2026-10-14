@@ -8774,7 +8774,12 @@ var DEFAULT_SETTINGS = {
   citationHover: false,
   authorDateRendering: false,
   citationClickAction: "nothing",
-  pasteZoteroLinks: false
+  pasteZoteroLinks: false,
+  // 0.6.2 WP6
+  bibliographyLocale: "",
+  bibliographyOrder: "style",
+  zoteroDataDirectory: "~/Zotero",
+  exportFolder: "CMDS Zotero exports"
 };
 
 // src/citations/scan.ts
@@ -11568,6 +11573,28 @@ async function runAction(host, action, request = {}) {
   }
 }
 
+// src/bibliography/rules.ts
+import { isAbsolute } from "path";
+var LOCALE = /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/;
+function localeProblem(value) {
+  const text5 = value.trim();
+  if (!text5) return null;
+  return LOCALE.test(text5) ? null : "Enter a locale such as en-US, de-DE or ko-KR, or leave it empty for the style's default.";
+}
+function canonicalLocale(value) {
+  const parts = value.trim().replace(/_/g, "-").split("-");
+  if (!parts[0]) return "";
+  return parts.map((part, index) => index === 0 ? part.toLowerCase() : part.length === 4 ? part[0].toUpperCase() + part.slice(1).toLowerCase() : part.toUpperCase()).join("-");
+}
+function dataDirectoryProblem(value) {
+  const text5 = value.trim();
+  if (!text5) return null;
+  if (text5.includes("\0")) return "The path contains a NUL character.";
+  if (!(text5 === "~" || text5.startsWith("~/") || isAbsolute(text5))) return "Enter an absolute folder path or one starting with ~/.";
+  if (text5.split(/[\\/]/).some((part) => part === "..")) return "Path traversal (..) is not allowed.";
+  return null;
+}
+
 // src/settings-data.ts
 var CITATION_FORMAT_SETTINGS = ["pandoc", "narrative", "wikilink", "author-date", "zotero-link", "note-link"];
 function integer(value, fallback, min, max) {
@@ -11639,8 +11666,18 @@ function normalizeSettings(raw) {
     citationHover: flag2(data.citationHover, DEFAULT_SETTINGS.citationHover),
     authorDateRendering: flag2(data.authorDateRendering, DEFAULT_SETTINGS.authorDateRendering),
     citationClickAction: ["nothing", "note", "pdf"].find((mode) => mode === data.citationClickAction) ?? DEFAULT_SETTINGS.citationClickAction,
-    pasteZoteroLinks: flag2(data.pasteZoteroLinks, DEFAULT_SETTINGS.pasteZoteroLinks)
+    pasteZoteroLinks: flag2(data.pasteZoteroLinks, DEFAULT_SETTINGS.pasteZoteroLinks),
+    // 0.6.2 WP6
+    bibliographyLocale: bibliographyLocale(data.bibliographyLocale),
+    bibliographyOrder: ["style", "citation", "alphabetical"].find((order) => order === data.bibliographyOrder) ?? DEFAULT_SETTINGS.bibliographyOrder,
+    zoteroDataDirectory: typeof data.zoteroDataDirectory === "string" && data.zoteroDataDirectory.trim() && !dataDirectoryProblem(data.zoteroDataDirectory) ? data.zoteroDataDirectory.trim() : DEFAULT_SETTINGS.zoteroDataDirectory,
+    exportFolder: text4(data.exportFolder, DEFAULT_SETTINGS.exportFolder)
   };
+}
+function bibliographyLocale(value) {
+  if (typeof value !== "string") return DEFAULT_SETTINGS.bibliographyLocale;
+  const locale = canonicalLocale(value);
+  return localeProblem(locale) ? DEFAULT_SETTINGS.bibliographyLocale : locale;
 }
 function normalizeTagList(value) {
   return [...new Set(value.filter((tag) => typeof tag === "string").map((tag) => tag.trim().toLowerCase()).filter(Boolean))];
@@ -11678,11 +11715,11 @@ async function probeBbt(endpoint, timeoutMs = 5e3) {
 var import_yaml = __toESM(require_dist());
 import { promises as fs3 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute as isAbsolute2, join as join2, relative, resolve as resolve2, sep } from "node:path";
+import { basename, isAbsolute as isAbsolute3, join as join2, relative, resolve as resolve2, sep } from "node:path";
 
 // src/local-file.ts
 import { constants, promises as fs } from "fs";
-import { isAbsolute, resolve } from "path";
+import { isAbsolute as isAbsolute2, resolve } from "path";
 var LocalFileError = class extends Error {
   constructor(code, message) {
     super(message);
@@ -11700,7 +11737,7 @@ function matchesMagic(head, magic) {
 async function readLocalFile(path, opts) {
   const label = opts.label ?? "File";
   const minBytes = opts.minBytes ?? DEFAULT_MIN_BYTES;
-  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) throw new LocalFileError("not-absolute", `${label} must have an absolute local path`);
+  if (typeof path !== "string" || !isAbsolute2(path) || path.includes("\0")) throw new LocalFileError("not-absolute", `${label} must have an absolute local path`);
   const absolute = resolve(path);
   if (await fs.realpath(absolute) !== absolute) throw new LocalFileError("symlink", `Symlinked ${label.toLowerCase()} path refused`);
   const handle = await fs.open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -11801,7 +11838,7 @@ function configDirOf(value) {
 }
 async function locateVault(name, explicitPath, home = homedir()) {
   if (explicitPath) {
-    if (!isAbsolute2(explicitPath)) throw new Error("--vault-path must be absolute");
+    if (!isAbsolute3(explicitPath)) throw new Error("--vault-path must be absolute");
     const real = await fs3.realpath(explicitPath);
     return { location: { name, path: real }, ambiguous: false, candidates: [real] };
   }
@@ -11846,10 +11883,10 @@ var FsVaultReader = class {
     return this.name;
   }
   async resolveInside(path) {
-    if (path.includes("\0") || path.includes("\\") || isAbsolute2(path)) throw new Error("Choose a vault-relative path.");
+    if (path.includes("\0") || path.includes("\\") || isAbsolute3(path)) throw new Error("Choose a vault-relative path.");
     const target = resolve2(this.root, path);
     const rel = relative(this.root, target);
-    if (!rel || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute2(rel)) throw new Error("Path escapes the vault.");
+    if (!rel || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute3(rel)) throw new Error("Path escapes the vault.");
     const real = await fs3.realpath(target);
     if (real !== target) throw new Error("Path resolves outside the vault.");
     return target;

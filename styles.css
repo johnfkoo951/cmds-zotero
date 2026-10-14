@@ -375,3 +375,26 @@ mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius
   color: var(--cmds-zotero-state-accent);
   border-bottom: 1px dotted var(--cmds-zotero-state-accent);
 }
+/* 0.6.2 WP6: the references sidebar's style line, the citation check rows and the references-section preview. */
+.cmds-zotero-sidebar-format {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-2);
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-check-row.is-warning .setting-item-name {
+  color: var(--text-warning);
+}
+.cmds-zotero-check-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-1) var(--size-4-2);
+  margin-top: var(--size-2-1);
+}
+.cmds-zotero-check-candidates {
+  color: var(--text-muted);
+}
+.cmds-zotero-preview-notes {
+  margin: 0 0 var(--size-4-2);
+  padding-inline-start: var(--size-4-4);
+}
