@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import type { Annotation, CmdsZoteroSettings, ZoteroIndexEntry } from "./types";
 import { LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
 import { colorName } from "./annotations/colors";
+import { richTextMarkdown } from "./annotations/rich-text";
 import { DEFAULT_ANNOTATIONS_HEADING, layoutOf } from "./layout";
 import { extraFields, fieldsFor, RECORD_DATES, type FieldSpec } from "./item-fields";
 
@@ -197,6 +198,15 @@ export function readingOrder(entry: ZoteroIndexEntry): { attachment: ZoteroIndex
 
 /** Single-line text for callout titles and inline fields. */
 function inline(value: unknown): string { return plainText(value).replace(/\s*\n\s*/g, " "); }
+/**
+ * 0.6.1 RICH-TEXT: single-line text with Zotero's rich-text whitelist (`<i>`, `<b>`, `<sup>`, `<sub>`, spans, `<br>`) as
+ * Markdown; every other character is escaped exactly as `inline` escapes it. `italic`: the caller wraps the result in `*…*`.
+ * Titles, annotation text and comments use it; DOIs, URLs, citekeys and tags never do.
+ */
+export function richInline(value: unknown, italic = false): string {
+	if (typeof value !== "string") return "";
+	return richTextMarkdown(stripControl(value), escapeMarkdown, { italic }).replace(/\n{3,}/g, "\n\n").trim().replace(/\s*\n\s*/g, " ");
+}
 
 /**
  * Strict DOI: no whitespace and none of the characters that would form Markdown links, emphasis, code or table cells
@@ -428,7 +438,7 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 	const label = inline(/[\p{L}\p{N}]/u.test(a.pageLabel) ? a.pageLabel : String(page));
 	const color = colorName(a.color);
 	const link = `[p. ${label}](${uri})`;
-	const comment = a.comment ? `**Comment**: *${inline(a.comment)}*` : "";
+	const comment = a.comment ? `**Comment**: *${richInline(a.comment, true)}*` : "";
 	const tags = a.tags.length ? `Tags: ${a.tags.map(inline).join(", ")}` : "";
 	const type = (a.type || "highlight").toLowerCase();
 	if (image) {
@@ -437,16 +447,16 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 	}
 	if (type === "ink") {
 		// A freehand drawing has no text and BBT renders no image for it: name it and link to it.
-		return quoted([`[!Note] ink · ${color ? `${color} · ` : ""}p. ${label}`, `${inline(a.comment) || "*Drawing; open it in Zotero.*"} ${link}`, tags].filter(Boolean).join("\n"));
+		return quoted([`[!Note] ink · ${color ? `${color} · ` : ""}p. ${label}`, `${richInline(a.comment) || "*Drawing; open it in Zotero.*"} ${link}`, tags].filter(Boolean).join("\n"));
 	}
 	if (type === "note" || (!a.text && a.comment)) {
-		const body = inline(a.comment) || "*(empty note)*";
+		const body = richInline(a.comment) || "*(empty note)*";
 		return quoted([`[!Note] p. ${label}`, `${body} ${link}`, tags].filter(Boolean).join("\n"));
 	}
 	if (color && settings.headingHighlightColor !== "none" && color === settings.headingHighlightColor && a.text) {
-		return [`##### ${inline(a.text)} ${link}`, comment, tags].filter(Boolean).join("\n\n");
+		return [`##### ${richInline(a.text)} ${link}`, comment, tags].filter(Boolean).join("\n\n");
 	}
-	const text = inline(a.text);
+	const text = richInline(a.text);
 	const marked = color ? `<mark class="cmds-zotero-hl-${color}">${text}</mark>` : text;
 	const title = `[!Highlight] ${color ? `${color} · ` : ""}${type === "underline" ? "underline · " : ""}p. ${label}`;
 	return quoted([title, `${marked} (${link})`, comment, tags].filter(Boolean).join("\n"));
@@ -476,7 +486,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const callout = layout.callouts;
 
 	const abstract = layout.abstract ? textFromHTML(entry.metadata.abstractNote) : "";
-	sections.set("overview", [`# ${inline(entry.title)}`, abstract ? quoted(`[!${callout.abstract}]\nabstract:: ${abstract}`) : ""].filter(Boolean).join("\n\n"));
+	sections.set("overview", [`# ${richInline(entry.title)}`, abstract ? quoted(`[!${callout.abstract}]\nabstract:: ${abstract}`) : ""].filter(Boolean).join("\n\n"));
 	// 0.5 R12: without bibliography text an owned note keeps its `citation` section byte-identical (the section is simply
 	// not re-rendered); a new note is refused rather than written with a placeholder.
 	const citation = layout.citation ? bibliographyText(bibliography) : "";
@@ -487,7 +497,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const fields: [string, string][] = [];
 	for (const creator of creators) fields.push([creator.role.charAt(0).toUpperCase() + creator.role.slice(1), inline(creator.name)]);
 	if (!creators.length) for (const name of entry.authors) fields.push(["Author", inline(name)]);
-	fields.push(["Title", inline(entry.title)], ["Year", inline(entry.year)], ["Citekey", `@${safeCitekey(entry.citekey)}`]);
+	fields.push(["Title", richInline(entry.title)], ["Year", inline(entry.year)], ["Citekey", `@${safeCitekey(entry.citekey)}`]);
 	if (tags.length) fields.push(["Tags", tags.map(inline).join(", ")]);
 	if (itemType) fields.push(["itemType", itemType]);
 	// 0.6.1: with "Fields by item type" the fields follow the item type (item-fields.ts); off, the 0.6.0 fixed list.
