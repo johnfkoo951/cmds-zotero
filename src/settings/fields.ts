@@ -5,6 +5,7 @@
  */
 import type { CmdsZoteroSettings, PeerVault } from "../types";
 import { normalizeTagList, validateEndpoint } from "../settings-data";
+import { canonicalLocale, dataDirectoryProblem, localeProblem } from "../bibliography/rules";
 
 export type SettingsDraft = CmdsZoteroSettings;
 export type SettingKey = keyof CmdsZoteroSettings;
@@ -96,6 +97,18 @@ export function numberChoiceField(key: KeysOf<number>, min: number, max: number)
 	const field = integerField(key, min, max);
 	return { ...field, write: (draft, input) => field.write(draft, input) === null ? null : "Choose one of the listed values." };
 }
+
+/** 0.6.2: a BCP 47 locale for Better BibTeX bibliographies (`ko_kr` is written `ko-KR`); empty means the style's default. */
+export const localeField: Field<string> = {
+	key: "bibliographyLocale", read: draft => draft.bibliographyLocale,
+	write: (draft, input) => { const value = canonicalLocale(input); const problem = localeProblem(value); if (problem) return problem; draft.bibliographyLocale = value; return null; },
+};
+
+/** 0.6.2: Zotero's data directory (absolute or `~/…`); empty means the default. */
+export const dataDirectoryField: Field<string> = {
+	key: "zoteroDataDirectory", read: draft => draft.zoteroDataDirectory,
+	write: (draft, input) => { const value = input.trim(); const problem = dataDirectoryProblem(value); if (problem) return problem; draft.zoteroDataDirectory = value; return null; },
+};
 
 export function toggleField(key: KeysOf<boolean>): Field<boolean> {
 	return { key, read: draft => draft[key], write: (draft, input) => { draft[key] = input; return null; } };

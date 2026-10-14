@@ -3,7 +3,11 @@
  * frontmatter keys), the cache key they form, the order of a copied or inserted bibliography and the clipboard HTML.
  * Pure: no `obsidian` import.
  */
+import { isBbtTransportError, describeBbtError } from "../api/transport";
 import { findStyle, styleKey, type InstalledStyle } from "./csl-styles";
+import { canonicalLocale, localeProblem } from "./rules";
+
+export { canonicalLocale, localeProblem } from "./rules";
 
 /** `style`: the order the CSL style produces (Better BibTeX renders the whole list); `citation`: first citation in the note; `alphabetical`: by entry text. */
 export type BibliographyOrder = "style" | "citation" | "alphabetical";
@@ -21,22 +25,6 @@ export interface NoteFormat extends BibliographyFormat {
 	localeFrom: "note" | "settings";
 	/** The note's `csl` or `lang` values that could not be used, in words. */
 	problems: string[];
-}
-
-const LOCALE = /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/;
-
-/** Why a locale cannot be sent to Better BibTeX, else null; empty means the style's default locale. */
-export function localeProblem(value: string): string | null {
-	const text = value.trim();
-	if (!text) return null;
-	return LOCALE.test(text) ? null : "Enter a locale such as en-US, de-DE or ko-KR, or leave it empty for the style's default.";
-}
-
-/** A locale written loosely (`ko_kr`, `EN-us`) in canonical case, or the input when it is not a locale at all. */
-export function canonicalLocale(value: string): string {
-	const parts = value.trim().replace(/_/g, "-").split("-");
-	if (!parts[0]) return "";
-	return parts.map((part, index) => index === 0 ? part.toLowerCase() : part.length === 4 ? part[0].toUpperCase() + part.slice(1).toLowerCase() : part.toUpperCase()).join("-");
 }
 
 /**
@@ -129,4 +117,17 @@ export function entriesHtml(entries: readonly string[]): string {
  */
 export function markdownEntry(entry: string): string {
 	return entry.replace(/\s*\n\s*/g, " ").replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;").replace(/%%/g, "%​%").trim();
+}
+
+/**
+ * 0.6.2 probe-validated-style-picker: why a style (with its locale) must not be saved, from the one probe rendering, or
+ * null when Better BibTeX rendered text. A Better BibTeX error reply means it cannot render the style; any other fault
+ * means the style could not be checked, which also refuses the change.
+ */
+export function probeProblem(format: BibliographyFormat, outcome: { text: string } | { error: unknown }): string | null {
+	const label = format.locale ? `"${format.style}" (${format.locale})` : `"${format.style}"`;
+	if ("text" in outcome) return outcome.text.trim() ? null : `Better BibTeX rendered nothing with the style ${label}; it was not saved. Check that the style is installed in Zotero.`;
+	const error = outcome.error;
+	if (isBbtTransportError(error) && error.reason === "rpc") return `Better BibTeX cannot render the style ${label}: ${error.rpcMessage ?? error.detail}. Install the style in Zotero or pick another; it was not saved.`;
+	return `The style ${label} could not be checked, so it was not saved. ${describeBbtError(error)}`;
 }

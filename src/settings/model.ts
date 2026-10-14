@@ -10,6 +10,8 @@ import type { Field, SettingsDraft } from "./fields";
 export interface SettingsActions {
 	testConnection(): Promise<string>;
 	refreshIndex(): Promise<string>;
+	/** 0.6.2: opens the installed-style picker; a chosen style that Better BibTeX renders is put into the draft. */
+	chooseStyle(): Promise<string>;
 }
 
 interface RowBase { name: string; desc: string }

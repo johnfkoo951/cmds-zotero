@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, requireApiVersion } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, requireApiVersion } from "obsidian";
 import type { SettingDefinition, SettingDefinitionGroup, SettingDefinitionItem } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import { describeBbtError } from "../api/transport";
@@ -30,6 +30,16 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			},
 			// The index controller reports progress and the outcome in notices.
 			refreshIndex: async () => { await this.plugin.refreshIndex(); return ""; },
+			// 0.6.2 installed-csl-style-picker: a style Better BibTeX renders goes into the draft; Save stores it.
+			chooseStyle: async () => {
+				await this.plugin.bibliography.chooseStyle(style => {
+					this.draft.bibliographyStyle = style.key;
+					// Obsidian 1.13+ renders the rows from definitions; the older tab is re-rendered here to show the new value.
+					if (!requireApiVersion("1.13.0")) this.render();
+					new Notice(`${style.title} (${style.key}) renders in Better BibTeX. Save the configuration to use it.`);
+				}, this.draft.bibliographyLocale);
+				return "";
+			},
 		};
 	}
 
@@ -41,6 +51,12 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 
 	display(): void {
 		this.reset();
+		this.render();
+	}
+
+	/** Renders the rows from the current draft (0.6.2: the style picker re-renders without dropping unsaved edits). */
+	private render(): void {
+		this.problems.clear();
 		const { containerEl } = this;
 		containerEl.empty();
 		for (const section of this.sections.filter(item => !item.advanced)) this.renderSection(containerEl, section);
@@ -149,7 +165,17 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			const blocked = saveBlocker(this.problems);
 			if (blocked) { status.setText(blocked); return; }
 			button.setDisabled(true);
-			try { await this.plugin.saveSettings(this.draft); status.setText("Configuration saved."); }
+			try {
+				// 0.6.2 probe-validated-style-picker: a changed style or locale is rendered once by Better BibTeX before it is stored.
+				const stored = this.plugin.settings;
+				if (this.draft.bibliographyStyle !== stored.bibliographyStyle || this.draft.bibliographyLocale !== stored.bibliographyLocale) {
+					status.setText("Checking the bibliography style with Better BibTeX…");
+					const problem = await this.plugin.bibliography.probeFormat({ style: this.draft.bibliographyStyle || stored.bibliographyStyle, locale: this.draft.bibliographyLocale });
+					if (problem) { status.setText(problem); return; }
+				}
+				await this.plugin.saveSettings(this.draft);
+				status.setText("Configuration saved.");
+			}
 			catch (error) { status.setText(error instanceof Error ? error.message : "Configuration could not be saved."); }
 			finally { button.setDisabled(false); }
 		}));

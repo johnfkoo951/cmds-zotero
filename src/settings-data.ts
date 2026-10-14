@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, type AnnotationTagStyle, type CitationTrigger, type CmdsZoteroSettings } from "./types";
 import { isAnnotationColor } from "./annotations/colors";
 import { annotationsHeading, calloutType, synthesisLines } from "./layout";
+import { canonicalLocale, dataDirectoryProblem, localeProblem } from "./bibliography/rules";
 
 function integer(value: unknown, fallback: number, min: number, max: number): number {
 	return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
@@ -62,7 +63,19 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		annotationTagStyle: (["plain", "hashtag"] as const).includes(data.annotationTagStyle as AnnotationTagStyle) ? data.annotationTagStyle as AnnotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
 		followZoteroSelection: (["off", "focus", "interval"] as const).find(mode => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection, // 0.6.1
 		followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30),
+		// 0.6.2 WP6
+		bibliographyLocale: bibliographyLocale(data.bibliographyLocale),
+		bibliographyOrder: (["style", "citation", "alphabetical"] as const).find(order => order === data.bibliographyOrder) ?? DEFAULT_SETTINGS.bibliographyOrder,
+		zoteroDataDirectory: typeof data.zoteroDataDirectory === "string" && data.zoteroDataDirectory.trim() && !dataDirectoryProblem(data.zoteroDataDirectory) ? data.zoteroDataDirectory.trim() : DEFAULT_SETTINGS.zoteroDataDirectory,
+		exportFolder: text(data.exportFolder, DEFAULT_SETTINGS.exportFolder),
 	};
+}
+
+// 0.6.2: a malformed locale keeps the style's default rather than reaching Better BibTeX.
+function bibliographyLocale(value: unknown): string {
+	if (typeof value !== "string") return DEFAULT_SETTINGS.bibliographyLocale;
+	const locale = canonicalLocale(value);
+	return localeProblem(locale) ? DEFAULT_SETTINGS.bibliographyLocale : locale;
 }
 
 /** Excluded Zotero tags as stored: strings only, trimmed, lower-cased, empty entries dropped, deduplicated (order kept). */

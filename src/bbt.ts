@@ -22,6 +22,14 @@ export interface FreshTarget { citekey: string; itemKey: string; libraryType: "u
 // 0.5 R4: the last real BBT observation (no polling); `aborted` requests are the plugin's own cancellation and are not recorded.
 export interface BbtOutcome { ok: boolean; at: Date; reason?: BbtTransportReason; status?: number; message?: string }
 
+/** 0.6.2: the `locale` (empty: the style's default) and output form of an `item.bibliography` call. */
+export interface BibliographyCallOptions { locale?: string; contentType?: "text" | "html" }
+
+/** The `format` argument of Better BibTeX's `item.bibliography`: style id, content type and, when set, the locale. */
+export function bibliographyFormat(style: string, options: BibliographyCallOptions = {}): { id: string; contentType: "text" | "html"; locale?: string } {
+	return { id: style, contentType: options.contentType ?? "text", ...(options.locale ? { locale: options.locale } : {}) };
+}
+
 /** What Zotero's citation picker answered (0.6 OPT-14): the formatted citation, or nothing when it was closed without a pick. */
 export type PickerAnswer = { kind: "picked"; text: string } | { kind: "empty" };
 
@@ -176,10 +184,22 @@ export class BbtService {
 	}
 
 	/** CSL bibliography text for one entry; `style` defaults to the configured style (0.5 R4: every style is observed and typed). */
-	async bibliography(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle, signal?: AbortSignal): Promise<string> {
+	async bibliography(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle, signal?: AbortSignal, options: BibliographyCallOptions = {}): Promise<string> {
 		if (!verifyEntry(entry)) throw new Error("Bibliography requires a validated item");
 		// 0.5 R12: a caller's signal (per-render abort) joins the service signal; the call stays observed.
-		const output = await this.call("item.bibliography", [[entry.citekey], { id: style, contentType: "text" }, entry.libraryID], this.settings.requestTimeoutMs, signal);
+		const output = await this.call("item.bibliography", [[entry.citekey], bibliographyFormat(style, options), entry.libraryID], this.settings.requestTimeoutMs, signal);
+		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
+		return output;
+	}
+
+	/**
+	 * 0.6.2 bibliography-style-order: one bibliography for several citekeys of one library, rendered as a whole so the
+	 * style orders (and disambiguates) the entries. Empty key lists never reach BBT.
+	 */
+	async bibliographyList(citekeys: readonly string[], libraryID: number, style = this.settings.bibliographyStyle, options: BibliographyCallOptions = {}): Promise<string> {
+		if (!citekeys.length) return "";
+		if (!positiveInteger(libraryID)) throw new Error("Bibliography requires a positive library ID");
+		const output = await this.call("item.bibliography", [[...citekeys], bibliographyFormat(style, options), libraryID]);
 		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
 		return output;
 	}

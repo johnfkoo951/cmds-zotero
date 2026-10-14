@@ -5,8 +5,10 @@
  */
 import { promises as fs } from "fs";
 import { homedir } from "os";
-import { basename, isAbsolute, join, resolve } from "path";
+import { basename, join, resolve } from "path";
 import { readLocalFile } from "../local-file";
+
+export { dataDirectoryProblem } from "./rules";
 
 /** Zotero's styles live under the data directory; the common macOS/Linux/Windows default is `~/Zotero`. */
 export const DEFAULT_ZOTERO_DATA_DIRECTORY = "~/Zotero";
@@ -109,16 +111,6 @@ export function independentStyle(styles: readonly InstalledStyle[], style: Insta
 	if (!style.parent) return style;
 	const parent = findStyle(styles, style.parent);
 	return parent && !parent.parent ? parent : null;
-}
-
-/** Why a data-directory setting cannot be used (absolute path, or `~/…`; no NUL, no `..` segments), else null. */
-export function dataDirectoryProblem(value: string): string | null {
-	const text = value.trim();
-	if (!text) return null;
-	if (text.includes("\0")) return "The path contains a NUL character.";
-	if (!(text === "~" || text.startsWith("~/") || isAbsolute(text))) return "Enter an absolute folder path or one starting with ~/.";
-	if (text.split(/[\\/]/).some(part => part === "..")) return "Path traversal (..) is not allowed.";
-	return null;
 }
 
 /** The absolute data directory for a setting value (`~` expanded); an empty value is the default. */

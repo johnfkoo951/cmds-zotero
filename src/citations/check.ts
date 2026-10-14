@@ -7,7 +7,29 @@ import type { ZoteroIndexEntry } from "../types";
 import { indexDerived } from "../index-derived";
 import { formatIndexAge } from "../index-service";
 import type { CitedKeySet } from "./cited-keys";
-import type { SnapshotState } from "./reference-rows";
+import type { ReferenceRow, SnapshotState } from "./reference-rows";
+
+/**
+ * 0.6.2: the References sidebar rows for a cited-key set (pandoc semantics): one row per distinct key, body keys at their
+ * first occurrence, then nocite keys at their frontmatter line. Same statuses as `resolveReferenceRows`.
+ */
+export function referenceRowsFromSet(set: CitedKeySet, entries: readonly ZoteroIndexEntry[], loaded: boolean): ReferenceRow[] {
+	const derived = indexDerived(entries);
+	return set.keys.map(citekey => {
+		const line = set.occurrences.find(item => item.citekey === citekey)?.line ?? set.nocite.find(item => item.citekey === citekey)?.line ?? 0;
+		const pool = derived.entriesWithCitekey(citekey);
+		if (pool.length === 1) return { citekey, line, status: "resolved" as const, entry: pool[0] };
+		if (pool.length > 1) return { citekey, line, status: "ambiguous" as const, candidates: [...pool] };
+		return { citekey, line, status: loaded ? "not-found" as const : "unchecked" as const };
+	});
+}
+
+/** Former citekey → current citekey for the cited keys that resolve only through an item's citekey history. */
+export function renamedKeys(set: CitedKeySet, entries: readonly ZoteroIndexEntry[]): Map<string, string> {
+	const renamed = new Map<string, string>();
+	for (const row of referenceRowsFromSet(set, entries, true)) if (row.status === "resolved" && row.entry && row.entry.citekey !== row.citekey) renamed.set(row.citekey, row.entry.citekey);
+	return renamed;
+}
 
 /** `ok`: one item carries the key as its current citekey; `renamed`: one item carried it before (former key). */
 export type CheckStatus = "ok" | "renamed" | "ambiguous" | "unknown" | "unchecked";
@@ -38,7 +60,7 @@ export interface CheckReport {
 
 /**
  * One row per distinct cited key. `notesFor` answers how many literature notes carry an entry (null when unknown).
- * Exact current-citekey matches win over former keys, as everywhere else in the plugin.
+ * A key that several items carry, as current or former key, is ambiguous (as in the References sidebar and `cites`).
  */
 export function checkCitations(set: CitedKeySet, entries: readonly ZoteroIndexEntry[], snapshot: SnapshotState, notesFor: (entry: ZoteroIndexEntry) => number | null): CheckReport {
 	const derived = indexDerived(entries);
@@ -47,9 +69,7 @@ export function checkCitations(set: CitedKeySet, entries: readonly ZoteroIndexEn
 		const occurrences = set.occurrences.filter(item => item.citekey === citekey).map(item => ({ line: item.line, column: item.column }));
 		const nociteHit = set.nocite.find(item => item.citekey === citekey);
 		const base = { citekey, occurrences, nocite: !!nociteHit, ...(nociteHit ? { nociteLine: nociteHit.line } : {}) };
-		const matches = derived.entriesWithCitekey(citekey);
-		const exact = matches.filter(entry => entry.citekey === citekey);
-		const pool = exact.length ? exact : matches;
+		const pool = derived.entriesWithCitekey(citekey);
 		if (pool.length > 1) { rows.push({ ...base, status: "ambiguous", candidates: [...pool], noNote: null }); continue; }
 		if (pool.length === 1) {
 			const entry = pool[0];
