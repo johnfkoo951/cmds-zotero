@@ -6,6 +6,7 @@ import { record, sealEntry, verifyEntry, verifyIndex } from "./identity";
 import { positiveInteger } from "./uris";
 import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentItem, recentKey, windowTerms, type RecentRead } from "./recent/recent-reads";
 import { afterTerms, dateByBisection } from "./recent/read-dating";
+import { parseSelection, type SelectedItem } from "./library/selection";
 
 /** Calendar days probed concurrently when an item's reading day must be found by exact-day probes. */
 const RECENT_DAY_BATCH = 7;
@@ -252,6 +253,19 @@ export class BbtService {
 		try { found = (await this.capabilities({ signal })).zotero; } catch { /* the refused condition alone tells */ }
 		const major = zoteroMajor(found);
 		return major !== null && major >= 10 ? error : new ZoteroVersionError("Zotero's reading history", 10, found, error);
+	}
+
+	/**
+	 * The items selected in Zotero's library pane right now (0.6.1), read once through Better BibTeX's export of the
+	 * selection with the request timeout. An empty selection is []. Read-only; there is no listener.
+	 */
+	async selectedItems(signal?: AbortSignal): Promise<SelectedItem[]> {
+		const endpoint = `${this.settings.bbtEndpoint.replace(/\/$/, "")}/export/selected?jzon`;
+		const settings = this.settings;
+		return this.withSignal(signal, joined => this.observed(async () => {
+			const response = await httpRequest(endpoint, settings.requestTimeoutMs, undefined, joined);
+			return parseSelection(response.status, response.text, endpoint);
+		}));
 	}
 
 	/** Parent items whose citekey is exactly `citekey`, in every library (a citekey is unique only within one library). */
