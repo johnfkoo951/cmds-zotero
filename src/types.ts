@@ -55,6 +55,8 @@ export interface CmdsZoteroSettings {
 	synthesisLines: string[];
 	/** Text of the `## …` heading annotation blocks go under in new notes. */
 	annotationsHeading: string;
+	/** 0.6.1: metadata fields chosen per Zotero item type (item-fields.ts) instead of the 0.6.0 fixed list. */
+	noteItemTypeFields: boolean;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -85,6 +87,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	calloutAbstract: "Abstract", calloutCite: "Cite", calloutMetadata: "md", calloutLinks: "LINK", calloutSynthesis: "Synth",
 	synthesisLines: ["**Contribution**::", "**Related**::"],
 	annotationsHeading: "Annotations",
+	noteItemTypeFields: false,
 };
 
 export interface ItemIdentity {

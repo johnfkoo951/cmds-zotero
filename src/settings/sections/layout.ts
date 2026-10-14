@@ -38,6 +38,8 @@ export const layoutSection: SectionDefinition = {
 		section.toggle(toggleField("noteAbstract")).setName("Abstract").setDesc("Show the abstract under the title.");
 		section.toggle(toggleField("noteCitation")).setName("Bibliography entry").setDesc("Show the formatted bibliography entry. Off, a first import no longer needs Zotero for bibliography text.");
 		section.toggle(toggleField("noteMetadata")).setName("Metadata fields").setDesc("Show the authors, title, year, citekey and other fields.");
+		section.toggle(toggleField("noteItemTypeFields")).setName("Fields by item type")
+			.setDesc("Choose the metadata fields per item type (for example university and thesis type for a thesis, institution and report number for a report) and add the date, short title, language, access date, the key: value lines of the extra field and the dates the item was added and modified. Off keeps the fixed list of earlier versions.");
 		section.toggle(toggleField("noteLinks")).setName("Links").setDesc("Show the links to the item in Zotero and to its attachments.");
 		section.toggle(toggleField("noteZoteroNotes")).setName("Zotero notes").setDesc("Show the item's child notes from Zotero.");
 		section.toggle(toggleField("noteSynthesis")).setName("Synthesis scaffold").setDesc("Add the synthesis heading and callout to new notes. It belongs to you and is never updated.");

@@ -56,6 +56,7 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		calloutSynthesis: calloutType(data.calloutSynthesis, DEFAULT_SETTINGS.calloutSynthesis),
 		synthesisLines: synthesisLines(data.synthesisLines),
 		annotationsHeading: annotationsHeading(data.annotationsHeading),
+		noteItemTypeFields: flag(data.noteItemTypeFields, DEFAULT_SETTINGS.noteItemTypeFields),
 	};
 }
 

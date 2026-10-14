@@ -23,7 +23,7 @@ test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the pic
 		// 0.6.1 R17: note layout (the 0.6.0 note).
 		noteAbstract: true, noteCitation: true, noteMetadata: true, noteLinks: true, noteZoteroNotes: true, noteSynthesis: true,
 		calloutAbstract: "Abstract", calloutCite: "Cite", calloutMetadata: "md", calloutLinks: "LINK", calloutSynthesis: "Synth",
-		synthesisLines: ["**Contribution**::", "**Related**::"], annotationsHeading: "Annotations",
+		synthesisLines: ["**Contribution**::", "**Related**::"], annotationsHeading: "Annotations", noteItemTypeFields: false,
 	});
 });
 

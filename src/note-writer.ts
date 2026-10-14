@@ -3,6 +3,7 @@ import type { Annotation, CmdsZoteroSettings, ZoteroIndexEntry } from "./types";
 import { LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
 import { colorName } from "./annotations/colors";
 import { DEFAULT_ANNOTATIONS_HEADING, layoutOf } from "./layout";
+import { extraFields, fieldsFor, RECORD_DATES, type FieldSpec } from "./item-fields";
 
 export const hashText = (text: string): string => createHash("sha256").update(text).digest("hex");
 // 0.5 R14: the marker that proves a literature note was created by this plugin for exactly this item.
@@ -489,14 +490,30 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	fields.push(["Title", inline(entry.title)], ["Year", inline(entry.year)], ["Citekey", `@${safeCitekey(entry.citekey)}`]);
 	if (tags.length) fields.push(["Tags", tags.map(inline).join(", ")]);
 	if (itemType) fields.push(["itemType", itemType]);
-	if (journal) fields.push(["Journal", `*${journal}*`]);
-	for (const [label, field] of [["Volume", "volume"], ["Issue", "issue"], ["Publisher", "publisher"], ["Location", "place"], ["Pages", "pages"], ["DOI", "DOI"], ["ISBN", "ISBN"]] as const) {
-		const value = field === "DOI" ? safeDOI(entry.metadata[field]) : metadataText(entry, field);
-		if (value) fields.push([label, value]);
+	// 0.6.1: with "Fields by item type" the fields follow the item type (item-fields.ts); off, the 0.6.0 fixed list.
+	const fieldValue = (spec: FieldSpec): string => {
+		const value = spec.kind === "doi" ? safeDOI(entry.metadata[spec.field]) : metadataText(entry, spec.field);
+		return value && spec.kind === "italic" ? `*${value}*` : value;
+	};
+	const pushSpecs = (specs: readonly FieldSpec[]): void => { for (const spec of specs) { const value = fieldValue(spec); if (value) fields.push([spec.label, value]); } };
+	if (layout.itemTypeFields) pushSpecs(fieldsFor(itemType));
+	else {
+		if (journal) fields.push(["Journal", `*${journal}*`]);
+		for (const [label, field] of [["Volume", "volume"], ["Issue", "issue"], ["Publisher", "publisher"], ["Location", "place"], ["Pages", "pages"], ["DOI", "DOI"], ["ISBN", "ISBN"]] as const) {
+			const value = field === "DOI" ? safeDOI(entry.metadata[field]) : metadataText(entry, field);
+			if (value) fields.push([label, value]);
+		}
+		if (itemType === "bookSection" && metadataText(entry, "publicationTitle")) fields.push(["Book", metadataText(entry, "publicationTitle")]);
 	}
-	if (itemType === "bookSection" && metadataText(entry, "publicationTitle")) fields.push(["Book", metadataText(entry, "publicationTitle")]);
 	if (entry.url) fields.push(["URL", safeURL(entry.url)]);
 	if (entry.collections.length) fields.push(["Collections", entry.collections.map(inline).join("; ")]);
+	if (layout.itemTypeFields) {
+		for (const [label, value] of extraFields(entry.metadata.extra)) {
+			const name = inline(label);
+			if (name && inline(value) && !fields.some(([other]) => other.toLowerCase() === name.toLowerCase())) fields.push([name, inline(value)]);
+		}
+		pushSpecs(RECORD_DATES);
+	}
 	// Always present so the metadata hash does not flip merely because relations appear; the `[!Synth]` `Related::` line stays user-owned.
 	fields.push(["Zotero related", related.map(citekey => `[[@${citekey}]]`).join(", ")]);
 	const links = [`[Open in Zotero](${entry.zoteroSelectURI})`, ...entry.attachments.filter(a => a.path).map(a => `[${inline(a.title) || "Attachment"}](${fileURI(a.path ?? "")})`)];
