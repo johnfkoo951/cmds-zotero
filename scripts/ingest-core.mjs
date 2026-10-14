@@ -8739,6 +8739,7 @@ var DEFAULT_SETTINGS = {
   annotationsHeading: "Annotations",
   noteItemTypeFields: false,
   joinContinuations: false,
+  noteRichText: false,
   annotationTagStyle: "plain"
 };
 
@@ -9970,11 +9971,14 @@ function synthesisLines(value) {
   const lines2 = Array.isArray(value) ? value.filter((line) => typeof line === "string").map((line) => line.trim()).filter((line) => line && !hasControl(line) && synthesisLineProblem(line) === null).slice(0, MAX_LINES) : [];
   return lines2.length ? lines2 : [...DEFAULT_SYNTHESIS_LINES];
 }
+var RESERVED_HEADINGS = ["Notes", "Zotero notes", "Synthesis"];
 function annotationsHeadingProblem(value) {
   const text5 = value.trim().replace(/^#+\s*/, "");
   if (!value.trim()) return null;
   if (!text5 || hasControl(text5) || !commentFree(text5)) return "Enter one line of heading text without HTML comment delimiters.";
   if (text5.length > MAX_HEADING) return `Keep the heading under ${MAX_HEADING} characters.`;
+  const folded = text5.replace(/\s+/g, " ").toLowerCase();
+  if (RESERVED_HEADINGS.some((reserved) => reserved.toLowerCase() === folded)) return `The note already uses "${text5}" for another section; choose another heading.`;
   return null;
 }
 function annotationsHeading(value) {
@@ -11501,6 +11505,7 @@ function normalizeSettings(raw) {
     annotationsHeading: annotationsHeading(data.annotationsHeading),
     noteItemTypeFields: flag2(data.noteItemTypeFields, DEFAULT_SETTINGS.noteItemTypeFields),
     joinContinuations: flag2(data.joinContinuations, DEFAULT_SETTINGS.joinContinuations),
+    noteRichText: flag2(data.noteRichText, DEFAULT_SETTINGS.noteRichText),
     annotationTagStyle: ["plain", "hashtag"].includes(data.annotationTagStyle) ? data.annotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle
   };
 }
