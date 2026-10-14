@@ -7,7 +7,10 @@ import { formatIndexAge, resolveInIndex } from "../index-service";
 import type CMDSZoteroPlugin from "../main";
 import { ImportPreviewModal } from "../modals/import-preview";
 import { ReportModal } from "../modals/report";
-import { ownershipSummary, partitionOwnedNotes } from "../note-ownership"; // 0.5 R14
+import { ownershipSummary, partitionOwnedNotes, type OwnedPartition } from "../note-ownership"; // 0.5 R14
+import { reviewRow, unchangedReason, type ChangedSince, type ReviewRow } from "../batch/plan";
+import { hasBetterNotesSync } from "../note-adopt";
+import { BatchReviewModal } from "../modals/batch-review";
 import { freshTargetOf, freshTargetOfRead, indexEntryFor, literatureNoteStatus, readNoteTexts, sendOutcome, type ImportNoteResult, type RecentRead, type SendOutcome } from "../recent/recent-reads";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { RecentReadsModal } from "../views/recent-reads-modal";
@@ -209,23 +212,51 @@ export class LiteratureController {
 	 * time; a progress Notice counts the results and offers Cancel, which stops before the next note and reports the rest
 	 * as not run.
 	 */
-	async updateAllLiteratureNotes(): Promise<void> {
+	/**
+	 * 0.6.3 batch-dry-run-review: the owned notes are planned first (update, or skip with a reason: several notes, Better
+	 * Notes sync, unchanged since the chosen date) and listed for review; only the ticked notes run. `since` presets the
+	 * "Changed in Zotero since" filter (update-changed-since).
+	 */
+	async updateAllLiteratureNotes(since: ChangedSince = { kind: "any" }): Promise<void> {
 		await this.plugin.run(async () => {
 			if (this.updateAllActive) throw new Error("Literature notes are already being updated.");
-			this.updateAllActive = true;
-			try { await this.updateAll(); }
-			finally { this.updateAllActive = false; }
+			const index = await this.plugin.indexing.loadIndexForRead();
+			const partition = await partitionOwnedNotes(index, this.plugin.app.vault.getMarkdownFiles().map(file => ({ path: file.path, basename: file.basename, frontmatter: this.plugin.app.metadataCache.getFileCache(file)?.frontmatter })), this.plugin.settings.outputFolder, path => {
+				const file = this.plugin.app.vault.getAbstractFileByPath(path);
+				return file instanceof TFile ? this.plugin.app.vault.cachedRead(file) : Promise.resolve("");
+			});
+			if (!partition.owned.length && !partition.linkedNotOwned.length) throw new Error("No owned literature notes were found. Import a note first.");
+			const plan = (choice: ChangedSince): ReviewRow<ZoteroIndexEntry | null>[] => this.updatePlan(partition, choice);
+			new BatchReviewModal(this.plugin.app, "Update literature notes", plan(since), rows => {
+				void this.plugin.run(async () => {
+					if (this.updateAllActive) throw new Error("Literature notes are already being updated.");
+					this.updateAllActive = true;
+					try { await this.updateAll(index, partition, rows.flatMap(row => row.item ? [row.item] : [])); }
+					finally { this.updateAllActive = false; }
+				});
+			}, { applyLabel: "Update notes", changedSince: { initial: since, replan: plan } }).open();
 		});
 	}
 
-	private async updateAll(): Promise<void> {
-		const index = await this.plugin.indexing.loadIndexForRead();
-		const partition = await partitionOwnedNotes(index, this.plugin.app.vault.getMarkdownFiles().map(file => ({ path: file.path, basename: file.basename, frontmatter: this.plugin.app.metadataCache.getFileCache(file)?.frontmatter })), this.plugin.settings.outputFolder, path => {
-			const file = this.plugin.app.vault.getAbstractFileByPath(path);
-			return file instanceof TFile ? this.plugin.app.vault.cachedRead(file) : Promise.resolve("");
+	/** One review row per owned item (several notes, Better Notes and unchanged items are skips) and per linked-only note. */
+	private updatePlan(partition: OwnedPartition, since: ChangedSince): ReviewRow<ZoteroIndexEntry | null>[] {
+		const moved = new Set(partition.moved);
+		const rows: ReviewRow<ZoteroIndexEntry | null>[] = partition.owned.map(entry => {
+			const paths = partition.ownedPaths.get(entry.id) ?? [];
+			const label = `@${entry.citekey}`;
+			if (paths.length > 1) return reviewRow(entry.id, label, paths.join(", "), "skip", "several notes have this Zotero identity", entry);
+			const file = this.plugin.app.vault.getAbstractFileByPath(paths[0]);
+			const frontmatter = file instanceof TFile ? this.plugin.app.metadataCache.getFileCache(file)?.frontmatter : undefined;
+			if (hasBetterNotesSync(frontmatter)) return reviewRow(entry.id, label, paths[0], "skip", "synced by Better Notes, which would overwrite the update", entry); // 0.6.3 better-notes-guard
+			const unchanged = unchangedReason(entry, since, file instanceof TFile ? file.stat.mtime : null);
+			if (unchanged) return reviewRow(entry.id, label, paths[0], "skip", unchanged, entry);
+			return reviewRow(entry.id, label, paths[0], "update", moved.has(paths[0]) ? "moved out of the literature folder: updated where it is" : "", entry);
 		});
-		const owned = partition.owned;
-		if (!owned.length && !partition.linkedNotOwned.length) throw new Error("No owned literature notes were found. Import a note first.");
+		for (const path of partition.linkedNotOwned) rows.push(reviewRow(path, path.split("/").pop() ?? path, path, "skip", "not created by CMDS Zotero: use Adopt current note as literature note", null));
+		return rows;
+	}
+
+	private async updateAll(index: ZoteroIndex, partition: OwnedPartition, owned: ZoteroIndexEntry[]): Promise<void> {
 		// 0.5 R4: probe BBT once before the loop. 0.5 R12: when it fails, owned notes are still updated from the index and the
 		// sidecar — a note whose bibliography is not cached keeps its `citation` section byte-identical, and no note waits on BBT.
 		const offline = await this.plugin.bbt.capabilities().then(() => null, (error: unknown) => error);

@@ -6,6 +6,7 @@
  */
 import type { ZoteroIndexEntry } from "../types";
 import { localDay } from "../recent/recent-reads";
+import { filterEntries, fold, parseQuery, type QueryContext } from "../search/query";
 
 export type PlannedAction = "create" | "update" | "adopt" | "skip";
 export interface ReviewRow<T = unknown> {
@@ -71,6 +72,21 @@ export function unchangedReason(entry: ZoteroIndexEntry, since: ChangedSince, no
 	const changed = lastZoteroChange(entry);
 	if (changed === null || changed > cutoff) return null;
 	return since.kind === "note" ? "no change in Zotero since the note was last written" : `no change in Zotero since ${localDay(new Date(cutoff))}`;
+}
+
+/**
+ * 0.6.3 batch-import-by-scope: the index entries a scope search names, in index order. Fielded terms (`col:`, `tag:`,
+ * `type:`, `year:`, … from search/query.ts) filter; every remaining plain word must occur in the title, an author or the
+ * citekey. An empty search names nothing (never the whole library by accident).
+ */
+export function scopeEntries<T extends ZoteroIndexEntry>(entries: readonly T[], query: string, context: QueryContext): T[] {
+	const parsed = parseQuery(query);
+	const words = parsed.text.split(/\s+/).map(fold).filter(Boolean);
+	if (!parsed.terms.length && !words.length) return [];
+	return filterEntries(entries, parsed.terms, context).filter(entry => {
+		const haystack = fold([entry.title, ...entry.authors, entry.citekey].join(" "));
+		return words.every(word => haystack.includes(word));
+	});
 }
 
 /** A `YYYY-MM-DD` day (local midnight) in epoch milliseconds, or null. */
