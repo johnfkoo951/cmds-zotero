@@ -23,7 +23,8 @@ const context = await esbuild.context({
   banner: { js: banner },
   entryPoints: ["src/main.ts"],
   bundle: true,
-  external: ["obsidian", "electron", "node:*", ...builtinModules],
+  // 0.6.2: the editor extension uses Obsidian's own CodeMirror instance, never a bundled copy.
+  external: ["obsidian", "electron", "@codemirror/state", "@codemirror/view", "node:*", ...builtinModules],
   platform: "node",
   format: "cjs",
   target: "es2020",

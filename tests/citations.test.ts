@@ -90,7 +90,7 @@ test("frontmatter scan reads bare-key arrays and [@key] tokens, ignoring wikilin
 });
 
 // 0.6 PERF-04 / PERF-13: faster ranking and scanning, pinned against the 0.5.0 algorithms (copied verbatim below).
-import { COMPLETION_LIMIT, completionRows, rankCompletions } from "../src/citations/score";
+import { COMPLETION_LIMIT, completionRows, rankCompletions, searchFold } from "../src/citations/score";
 import { indexDerived } from "../src/index-derived";
 
 /** Seeded PRNG so the generated fixtures are deterministic. */
@@ -170,7 +170,8 @@ test("0.6 PERF-04: completion rows keep citekey collation with index order on ti
 	assert.deepEqual(rows.map(row => row.entry), [...entries].sort((a, b) => a.citekey.localeCompare(b.citekey)), "stable localeCompare order");
 	const twins = rows.filter(row => row.entry.citekey === "kim").map(row => row.entry.id);
 	assert.deepEqual(twins, entries.filter(item => item.citekey === "kim").map(item => item.id), "equal citekeys keep index order");
-	for (const row of rows) assert.equal(row.haystack, `${row.entry.citekey.toLowerCase()} ${row.entry.title} ${row.entry.authors.join(" ")} ${row.entry.year}`.toLowerCase());
+	// 0.6.2 suggester-unicode-query: the haystack is folded (`searchFold`); ASCII text is only lower-cased, as before.
+	for (const row of rows) assert.equal(row.haystack, searchFold(`${row.entry.citekey.toLowerCase()} ${row.entry.title} ${row.entry.authors.join(" ")} ${row.entry.year}`));
 	const derived = indexDerived(entries);
 	assert.equal(derived.completionRows, indexDerived(entries).completionRows, "one row list per entries array");
 	assert.notEqual(indexDerived([...entries]).completionRows, derived.completionRows, "a new index generation (new array) gets its own rows");

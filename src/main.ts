@@ -23,6 +23,8 @@ import type { NoteBatch } from "./plugin/note-batch";
 import { StatusController } from "./plugin/status";
 import { cachedGitProbe, type GitProbe } from "./git-probe";
 import { OutcomeLog } from "./doctor/outcome-log";
+import { ChoiceCancelled } from "./modals/choose-entry";
+import { CitationEditorController } from "./plugin/citation-editor";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
 const LEGACY_PLUGIN_MESSAGE = "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing.";
@@ -50,6 +52,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	readonly literature = new LiteratureController(this);
 	readonly navigation = new NavigationController(this);
 	readonly status = new StatusController(this);
+	/** 0.6.2 citations editor: marks, hover, author-date rendering, citation actions, paste and drop. */
+	readonly citations = new CitationEditorController(this);
 	/** 0.6.1 doctor: the last 50 Better BibTeX outcomes of this session, in memory only (kept across reconfiguration). */
 	readonly outcomes = new OutcomeLog();
 
@@ -167,6 +171,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 	}
 
 	private refreshViews(): void {
+		this.citations.refreshEditors(); // 0.6.2: citekey marks and rendered citations follow the index and the settings
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REFERENCES)) if (leaf.view instanceof ReferencesView) void leaf.view.render();
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS)) if (leaf.view instanceof AnnotationsView) leaf.view.render();
 	}
@@ -182,7 +187,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	async run(action: () => Promise<void>): Promise<void> {
 		try { await action(); }
-		catch (error) { new Notice(error instanceof Error ? error.message : "Operation failed."); }
+		catch (error) {
+			if (error instanceof ChoiceCancelled) return; // 0.6.2: a chooser closed without a choice ends the action quietly
+			new Notice(error instanceof Error ? error.message : "Operation failed.");
+		}
 	}
 
 	// Delegators: the plugin API that views, modals, the settings tab and the suggester call. The behaviour lives in the

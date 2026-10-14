@@ -2,6 +2,7 @@ import { Editor, Notice, TFile } from "obsidian";
 import { findCitingNotes } from "../citations/citing-notes";
 import type CMDSZoteroPlugin from "../main";
 import { ActionsModal } from "../modals/actions";
+import { requireChoice } from "../modals/choose-entry";
 import { PageJumpModal } from "../modals/page-jump";
 import { LiteraturePickerModal } from "../modals/literature-picker";
 import { PickerModal } from "../modals/picker";
@@ -31,10 +32,12 @@ export class NavigationController {
 		});
 	}
 
+	/** 0.6.2 ambiguous-citekey-chooser: several items carrying the citekey are offered to choose from, never the first one. */
 	async requireEntry(citekey: string): Promise<ZoteroIndexEntry> {
 		const result = await this.plugin.service.resolve({ citekey });
 		if (result.status === "resolved") return result.entry;
-		throw new Error(result.status === "ambiguous" ? "More than one entry uses this citekey. Use Search literature to select a library." : `Could not resolve citekey: ${result.status}.`);
+		if (result.status === "ambiguous") return requireChoice(this.plugin.app, result.candidates ?? [], this.plugin.lastIndex, citekey);
+		throw new Error(`Could not resolve citekey: ${result.status}.`);
 	}
 
 	showActions(entry: ZoteroIndexEntry): void {

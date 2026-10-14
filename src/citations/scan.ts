@@ -5,7 +5,8 @@ export interface CitationOccurrence {
 	form: "pandoc" | "bare" | "wikilink";
 }
 
-const KEY = "[A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*[A-Za-z0-9_]|[A-Za-z0-9_]";
+/** Pandoc citekey characters (shared with the cluster parser). */
+export const KEY = "[A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*[A-Za-z0-9_]|[A-Za-z0-9_]";
 /** Pandoc citation keys: `@key`, `-@key`, inside brackets or bare; wikilinks `[[@key]]`/`[[@key|alias]]`. */
 const CITATION = new RegExp(`\\[\\[@(${KEY})(?:[|#][^\\]]*)?\\]\\]|(^|[\\s\\[;(,\\-])-?@(${KEY})`, "g");
 

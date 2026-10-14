@@ -8767,7 +8767,14 @@ var DEFAULT_SETTINGS = {
   annotationTagStyle: "plain",
   followZoteroSelection: "off",
   // 0.6.1 follow-zotero-selection: opt-in
-  followZoteroSelectionSeconds: 10
+  followZoteroSelectionSeconds: 10,
+  // 0.6.2 WP5: 0.6.1 behaviour, apart from the problem marks (on; switch them off under Citations).
+  citationFormat: "pandoc",
+  citekeyProblemMarks: true,
+  citationHover: false,
+  authorDateRendering: false,
+  citationClickAction: "nothing",
+  pasteZoteroLinks: false
 };
 
 // src/citations/scan.ts
@@ -10075,10 +10082,14 @@ function readingOrder(entry) {
 var MAX_READER_POSITION = 16 * 1024;
 
 // src/citations/score.ts
+function searchFold(value) {
+  if (/^[\x00-\x7f]*$/.test(value)) return value.toLowerCase();
+  return value.normalize("NFD").replace(new RegExp("\\p{Mn}", "gu"), "").normalize("NFC").toLowerCase();
+}
 function completionRows(entries) {
   return entries.map((entry) => {
     const citekey = entry.citekey.toLowerCase();
-    return { entry, citekey, haystack: `${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`.toLowerCase() };
+    return { entry, citekey, haystack: searchFold(`${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`) };
   }).sort((a, b) => a.entry.citekey.localeCompare(b.entry.citekey));
 }
 
@@ -11558,6 +11569,7 @@ async function runAction(host, action, request = {}) {
 }
 
 // src/settings-data.ts
+var CITATION_FORMAT_SETTINGS = ["pandoc", "narrative", "wikilink", "author-date", "zotero-link", "note-link"];
 function integer(value, fallback, min, max) {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
@@ -11620,7 +11632,14 @@ function normalizeSettings(raw) {
     annotationTagStyle: ["plain", "hashtag"].includes(data.annotationTagStyle) ? data.annotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
     followZoteroSelection: ["off", "focus", "interval"].find((mode) => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection,
     // 0.6.1
-    followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30)
+    followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30),
+    // 0.6.2 WP5: citations editor.
+    citationFormat: CITATION_FORMAT_SETTINGS.find((format) => format === data.citationFormat) ?? DEFAULT_SETTINGS.citationFormat,
+    citekeyProblemMarks: flag2(data.citekeyProblemMarks, DEFAULT_SETTINGS.citekeyProblemMarks),
+    citationHover: flag2(data.citationHover, DEFAULT_SETTINGS.citationHover),
+    authorDateRendering: flag2(data.authorDateRendering, DEFAULT_SETTINGS.authorDateRendering),
+    citationClickAction: ["nothing", "note", "pdf"].find((mode) => mode === data.citationClickAction) ?? DEFAULT_SETTINGS.citationClickAction,
+    pasteZoteroLinks: flag2(data.pasteZoteroLinks, DEFAULT_SETTINGS.pasteZoteroLinks)
   };
 }
 function normalizeTagList(value) {

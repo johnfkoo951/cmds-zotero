@@ -24,6 +24,8 @@
   "author": "Yohan Koo (CMDSPACE)",
   "license": "MIT",
   "devDependencies": {
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
     "@types/node": "22.19.0",
     "esbuild": "0.25.10",
     "eslint": "9.39.5",

@@ -72,7 +72,23 @@ export interface CmdsZoteroSettings {
 	followZoteroSelection: "off" | "focus" | "interval";
 	/** 0.6.1: seconds between selection reads in the interval mode (3–30). */
 	followZoteroSelectionSeconds: number;
+	// 0.6.2 citations editor (WP5).
+	/** The named output format of "Insert citation from the literature index" and of pasted Zotero links (citations/formats.ts). */
+	citationFormat: CitationFormatSetting;
+	/** Marks unknown, ambiguous and former citekeys in the editor (only against a loaded snapshot). */
+	citekeyProblemMarks: boolean;
+	/** Hovering a citation in the editor shows the item's title, authors, year and bibliography entry. */
+	citationHover: boolean;
+	/** Reading view and live preview show pandoc citations as author-date approximations; the note text is unchanged. */
+	authorDateRendering: boolean;
+	/** What Mod+click on a citation in the editor opens. */
+	citationClickAction: "nothing" | "note" | "pdf";
+	/** Pasting or dropping Zotero item links into a note inserts a citation instead (undo restores the link). */
+	pasteZoteroLinks: boolean;
 }
+
+/** 0.6.2: the fixed named citation formats (no templates); see citations/formats.ts. */
+export type CitationFormatSetting = "pandoc" | "narrative" | "wikilink" | "author-date" | "zotero-link" | "note-link";
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
 export const DEFAULT_REFERENCES_HEADINGS: readonly string[] = ["References", "Bibliography", "Works Cited", "참고 문헌", "참고 자료"];
@@ -108,6 +124,13 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	annotationTagStyle: "plain",
 	followZoteroSelection: "off", // 0.6.1 follow-zotero-selection: opt-in
 	followZoteroSelectionSeconds: 10,
+	// 0.6.2 WP5: 0.6.1 behaviour, apart from the problem marks (on; switch them off under Citations).
+	citationFormat: "pandoc",
+	citekeyProblemMarks: true,
+	citationHover: false,
+	authorDateRendering: false,
+	citationClickAction: "nothing",
+	pasteZoteroLinks: false,
 };
 
 export interface ItemIdentity {

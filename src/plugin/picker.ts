@@ -1,4 +1,5 @@
 import { Editor, MarkdownView, Notice, type EditorPosition, type MarkdownFileInfo, type TFile } from "obsidian";
+import { clusterItems, mergeIntoCluster } from "../citations/cluster";
 import { formatWait, PickerWaitError } from "../bbt";
 import { isBbtTransportError } from "../api/transport";
 import type CMDSZoteroPlugin from "../main";
@@ -25,8 +26,28 @@ export async function insertCitationFromPicker(plugin: CMDSZoteroPlugin, editor:
 		throw error;
 	} finally { waiting.hide(); }
 	if (answer.kind === "empty") { new Notice("No citation was picked."); return; }
-	if (stillOpen(plugin, context, file) && unchanged(editor, from, to, selected)) { editor.replaceRange(answer.text, from, to); return; }
+	if (stillOpen(plugin, context, file) && unchanged(editor, from, to, selected)) { placeCitation(editor, from, to, answer.text); return; } // 0.6.2: joins the cluster at the cursor
 	await copyOrShow(answer.text, "The note changed while the picker was open, so the citation was copied to the clipboard instead.");
+}
+
+/**
+ * Puts a citation where `from`–`to` is (0.6.2 multi-source-citation-cluster): without a selection, a pandoc citation
+ * (`[@b]`, `[@b; @c, p. 3]`) at or right after an existing cluster joins it (`[@a; @b]`) and keys already there are not
+ * repeated; anything else replaces the range as before. The cursor ends after the inserted text.
+ */
+export function placeCitation(editor: Editor, from: EditorPosition, to: EditorPosition, text: string): void {
+	if (from.line === to.line && from.ch === to.ch) {
+		const items = clusterItems(text);
+		const merge = items ? mergeIntoCluster(editor.getLine(from.line), from.ch, items) : null;
+		if (merge) {
+			if (!merge.text) { new Notice("Already cited in this citation."); return; }
+			editor.replaceRange(merge.text, { line: from.line, ch: merge.from }, { line: from.line, ch: merge.to });
+			editor.setCursor({ line: from.line, ch: merge.cursor });
+			return;
+		}
+	}
+	editor.replaceRange(text, from, to);
+	editor.setCursor(editor.offsetToPos(editor.posToOffset(from) + text.length));
 }
 
 /** True when the range still exists and holds the text it held when the command ran. */

@@ -1,6 +1,7 @@
 import { Editor, Notice, htmlToMarkdown, type EditorPosition } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import { childNoteChoices, emptyFragmentMessage, FRAGMENTS, framedForInsertion, lineDiff, renderFragment, type FragmentKind } from "../fragments";
+import { requireChoice } from "../modals/choose-entry";
 import { PickerModal } from "../modals/picker";
 import { ReplacePreviewModal } from "../modals/replace-preview";
 import { citekeyAtCursor } from "../protocol";
@@ -32,7 +33,7 @@ async function insertItemContent(plugin: CMDSZoteroPlugin, editor: Editor): Prom
 	if (citekey) {
 		const result = await plugin.service.resolve({ citekey });
 		if (result.status === "resolved") return chooseFragment(plugin, target, result.entry);
-		if (result.status === "ambiguous") throw new Error("More than one entry uses this citekey. Run the command without it selected to choose the item.");
+		if (result.status === "ambiguous") return chooseFragment(plugin, target, await requireChoice(plugin.app, result.candidates ?? [], plugin.lastIndex, citekey)); // 0.6.2
 	}
 	await plugin.navigation.pick(entry => { void plugin.run(() => chooseFragment(plugin, target, entry)); });
 }

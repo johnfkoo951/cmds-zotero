@@ -4,7 +4,7 @@ import { EMPTY_SELECTION_MESSAGE, planSelection, selectionCitation, unindexedMes
 import type CMDSZoteroPlugin from "../main";
 import { PickerModal } from "../modals/picker";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
-import { copyOrShow, stillOpen, unchanged } from "./picker";
+import { copyOrShow, placeCitation, stillOpen, unchanged } from "./picker";
 
 /**
  * 0.6.1 zotero-selection-commands: open, import or cite the items selected in Zotero's library pane. The selection is
@@ -60,8 +60,7 @@ export async function citeZoteroSelection(plugin: CMDSZoteroPlugin, editor: Edit
 		const citation = selectionCitation(items);
 		if (!citation) { new Notice(EMPTY_SELECTION_MESSAGE); return; }
 		if (stillOpen(plugin, context, file) && unchanged(editor, from, to, selected)) {
-			editor.replaceRange(citation, from, to);
-			editor.setCursor(editor.offsetToPos(editor.posToOffset(from) + citation.length));
+			placeCitation(editor, from, to, citation); // 0.6.2: joins the cluster at the cursor
 		} else {
 			await copyOrShow(citation, "The note changed while Zotero was read, so the citation was copied to the clipboard instead.", "The note changed while Zotero was read. Copy the citation from here:");
 		}
