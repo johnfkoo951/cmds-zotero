@@ -1,4 +1,4 @@
-import { ItemView, Menu, Notice, TFile, WorkspaceLeaf, debounce, setIcon } from "obsidian";
+import { ItemView, Menu, Notice, TFile, WorkspaceLeaf, debounce, setIcon, type ViewStateResult } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../types";
 import { noteIdentity } from "../note-aliases";
@@ -10,6 +10,12 @@ import {
 	type AnnotationFacets, type AnnotationGroup, type AnnotationRow, type AnnotationSection, type AnnotationSort, type CommentFacet,
 } from "../annotations/filter";
 import { markdownLink } from "../uris";
+import { citekeyAtCursor } from "../protocol";
+import { PickerModal } from "../modals/picker";
+import {
+	cursorTarget, emptySourceText, entryForRef, itemRef, parseViewState, selectionTarget, serializeViewState,
+	type AnnotationsViewState, type CursorTarget, type ItemRef, type SidebarMode,
+} from "../annotations/view-state";
 
 export const VIEW_TYPE_ANNOTATIONS = "cmds-zotero-annotations";
 /** Hides a card, section heading or message the filter does not show (0.6 PERF-15). */
@@ -17,14 +23,26 @@ const FILTERED_OUT = "cmds-zotero-filtered-out";
 
 const SORT_LABELS: Record<AnnotationSort, string> = { page: "Page", reading: "Reading order", modified: "Last modified", color: "Color" };
 const GROUP_LABELS: Record<AnnotationGroup, string> = { attachment: "Group by attachment", page: "Group by page", color: "Group by color" };
+const MODE_LABELS: Record<SidebarMode, string> = { note: "Follow active note", selection: "Follow Zotero selection", cursor: "Follow citekey at cursor", pinned: "Pinned item" };
 const COMMENT_LABELS: Record<CommentFacet, string> = { any: "With or without comment", with: "With comment", without: "Without comment" };
 
 /** One section's heading and cards in display order. */
 interface CardGroup { heading: HTMLElement | null; cards: HTMLElement[] }
 
-/** Sidebar listing the indexed annotations of the active literature note, or of a pinned item. */
+/**
+ * Sidebar listing the indexed annotations of the item it follows (0.6.1 annotation-sidebar-modes): the active literature
+ * note, the item last read from the Zotero selection, the citekey under the cursor, or a pinned item. The mode, the pinned
+ * and selected identities, the facets, sort and grouping are view state, so the workspace layout restores them.
+ */
 export class AnnotationsView extends ItemView {
-	private pinned: ZoteroIndexEntry | null = null;
+	private mode: SidebarMode = "note";
+	private pinned: ItemRef | null = null;
+	private selected: ItemRef | null = null;
+	/** The in-place message of the last selection read that showed nothing (not persisted). */
+	private selectionMessage: string | null = null;
+	private reading = false;
+	/** The citekey under the cursor the last render resolved (cursor mode only). */
+	private shownCursorKey = "";
 	private entry: ZoteroIndexEntry | null = null;
 	// 0.6.1 annotation-sidebar-facets: the filter box text is `facets.query`.
 	private facets: AnnotationFacets = noFacets();
@@ -38,7 +56,8 @@ export class AnnotationsView extends ItemView {
 	private groups: CardGroup[] = [];
 	private message: HTMLElement | null = null;
 	private readonly refresh = debounce(() => this.render(), 300, true);
-	private readonly filterSoon = debounce(() => this.applyFilter(), 100, true);
+	private readonly filterSoon = debounce(() => { this.applyFilter(); this.saveState(); }, 100, true);
+	private readonly cursorSoon = debounce(() => { if (this.mode === "cursor" && this.cursorKey() !== this.shownCursorKey) this.render(); }, 250, true);
 
 	constructor(leaf: WorkspaceLeaf, private plugin: CMDSZoteroPlugin) { super(leaf); }
 	getViewType(): string { return VIEW_TYPE_ANNOTATIONS; }
@@ -46,17 +65,119 @@ export class AnnotationsView extends ItemView {
 	getIcon(): string { return "highlighter"; }
 
 	onOpen(): Promise<void> {
-		this.registerEvent(this.app.workspace.on("active-leaf-change", () => { if (!this.pinned) this.refresh(); }));
-		this.registerEvent(this.app.metadataCache.on("changed", file => { if (!this.pinned && file === this.app.workspace.getActiveFile()) this.refresh(); }));
+		this.registerEvent(this.app.workspace.on("active-leaf-change", () => { if (this.mode === "note" || this.mode === "cursor") this.refresh(); }));
+		this.registerEvent(this.app.metadataCache.on("changed", file => { if (this.mode === "note" && file === this.app.workspace.getActiveFile()) this.refresh(); }));
+		// Cursor mode: the editor moves its DOM selection with the cursor; the check is cheap and re-renders only on a new citekey.
+		this.registerDomEvent(document, "selectionchange", () => { if (this.mode === "cursor") this.cursorSoon(); });
 		this.render();
 		return Promise.resolve();
 	}
 
-	pin(entry: ZoteroIndexEntry | null): void { this.pinned = entry; this.render(); }
+	getState(): Record<string, unknown> {
+		return { ...super.getState(), ...serializeViewState(this.viewState()) };
+	}
 
-	private followedEntry(): ZoteroIndexEntry | null {
-		if (this.pinned) return this.pinned;
+	async setState(state: unknown, result: ViewStateResult): Promise<void> {
+		this.applyViewState(parseViewState(state));
+		await super.setState(state, result);
+		this.render();
+	}
+
+	private viewState(): AnnotationsViewState {
+		return { mode: this.mode, pinned: this.pinned, selected: this.selected, facets: this.facets, sort: this.sort, group: this.group };
+	}
+
+	private applyViewState(state: AnnotationsViewState): void {
+		({ mode: this.mode, pinned: this.pinned, selected: this.selected, facets: this.facets, sort: this.sort, group: this.group } = state);
+	}
+
+	private saveState(): void { this.app.workspace.requestSaveLayout(); }
+
+	/** The mode now in effect. */
+	currentMode(): SidebarMode { return this.mode; }
+
+	/** The item the sidebar shows, if any. */
+	shownEntry(): ZoteroIndexEntry | null { return this.entry; }
+
+	/** Pins `entry`; null follows the active note again. */
+	pin(entry: ZoteroIndexEntry | null): void {
+		if (entry) { this.mode = "pinned"; this.pinned = itemRef(entry); } else this.mode = "note";
+		this.saveState();
+		this.render();
+	}
+
+	/** Switches the source. Pinned mode without a pinned item pins the shown item, or asks for one. */
+	follow(mode: SidebarMode): void {
+		if (mode === "pinned" && !this.pinned) {
+			if (this.entry) { this.pin(this.entry); return; }
+			void this.plugin.pick(entry => this.pin(entry));
+			this.render();
+			return;
+		}
+		this.mode = mode;
+		this.selectionMessage = null;
+		this.saveState();
+		this.render();
+	}
+
+	/**
+	 * Reads Zotero's library-pane selection once (an explicit action; never a listener or a render) and follows it. Several
+	 * indexed items are offered as a choice; an empty or unindexed selection is explained in place and the mode stays.
+	 */
+	async readSelection(): Promise<void> {
+		if (this.reading) return;
+		this.mode = "selection";
+		this.reading = true;
+		this.saveState();
+		this.render();
+		try {
+			const items = await this.plugin.bbt.selectedItems();
+			const target = selectionTarget(this.plugin.cachedEntries(), items);
+			if (target.kind === "resolved") { this.selected = itemRef(target.entry); this.selectionMessage = null; }
+			else if (target.kind === "several") {
+				new PickerModal(this.app, target.entries, entry => `${entry.title} — @${entry.citekey} · library ${entry.libraryID}`, entry => {
+					this.selected = itemRef(entry);
+					this.selectionMessage = null;
+					this.saveState();
+					this.render();
+				}, "Several items are selected in Zotero. Choose one…").open();
+			} else {
+				this.selected = null;
+				this.selectionMessage = target.kind === "empty" ? "Nothing is selected in Zotero. Select an item there, then read the selection again."
+					: `The ${target.count === 1 ? "item" : `${target.count} items`} selected in Zotero ${target.count === 1 ? "is" : "are"} not in the index. Refresh the index, or select another item.`;
+			}
+		} catch (error) {
+			new Notice(`Could not read the Zotero selection: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			this.reading = false;
+		}
+		this.saveState();
+		this.render();
+	}
+
+	/** The citekey under the cursor of the last Markdown editor, or "". */
+	private cursorKey(): string {
+		const editor = this.plugin.lastMarkdownView()?.editor;
+		if (!editor) return "";
+		const cursor = editor.getCursor();
+		return citekeyAtCursor(editor.getLine(cursor.line), cursor.ch, editor.getSelection());
+	}
+
+	/** The entry the current mode names, or why there is none (shown in place). */
+	private followedEntry(): { entry: ZoteroIndexEntry | null; empty: string } {
 		const entries = this.plugin.cachedEntries();
+		if (this.mode === "note") return { entry: this.noteEntry(entries), empty: emptySourceText("note") };
+		// UI negatives only with a loaded snapshot.
+		if (!this.plugin.indexLoaded()) return { entry: null, empty: "The index is not loaded yet." };
+		if (this.mode === "pinned") return { entry: entryForRef(entries, this.pinned), empty: emptySourceText("pinned") };
+		if (this.mode === "selection") return { entry: entryForRef(entries, this.selected), empty: this.reading ? "Reading the Zotero selection…" : this.selectionMessage ?? emptySourceText("selection", { selected: this.selected !== null }) };
+		const key = this.cursorKey();
+		this.shownCursorKey = key;
+		const target: CursorTarget = cursorTarget(entries, key);
+		return { entry: target.kind === "resolved" ? target.entry : null, empty: emptySourceText("cursor", { cursor: target }) };
+	}
+
+	private noteEntry(entries: ZoteroIndexEntry[]): ZoteroIndexEntry | null {
 		const file = this.app.workspace.getActiveFile();
 		if (!(file instanceof TFile) || file.extension !== "md" || !entries.length) return null;
 		const fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(file)?.frontmatter;
@@ -76,14 +197,24 @@ export class AnnotationsView extends ItemView {
 		container.empty();
 		container.addClass("cmds-zotero-sidebar");
 		const previous = this.entry;
-		this.entry = this.followedEntry();
+		const followed = this.followedEntry();
+		this.entry = followed.entry;
 		// Attachment keys belong to one item: another item starts without an attachment facet.
 		if (previous?.id !== this.entry?.id) this.facets.attachments = [];
 		const header = container.createDiv({ cls: "cmds-zotero-sidebar-header" });
 		this.status = header.createDiv({ cls: "cmds-zotero-sidebar-status", text: this.plugin.statusLine() }); // 0.5 R4
 		const toolbar = header.createDiv({ cls: "cmds-zotero-sidebar-toolbar" });
-		const choose = toolbar.createEl("button", { text: this.pinned ? "Unpin" : "Choose item…", attr: { "aria-label": this.pinned ? "Follow the active note again" : "Pin the sidebar to a Zotero item" } });
-		choose.addEventListener("click", () => { if (this.pinned) this.pin(null); else void this.plugin.pick(entry => this.pin(entry)); });
+		const mode = toolbar.createEl("select", { cls: "dropdown", attr: { "aria-label": "What the sidebar follows" } });
+		for (const value of ["note", "selection", "cursor", "pinned"] as const) mode.createEl("option", { text: MODE_LABELS[value], value });
+		mode.value = this.mode;
+		mode.addEventListener("change", () => { const next = mode.value as SidebarMode; if (next === "selection") void this.readSelection(); else this.follow(next); });
+		const choose = toolbar.createEl("button", { text: "Choose item…", attr: { "aria-label": "Pin the sidebar to a Zotero item" } });
+		choose.addEventListener("click", () => { void this.plugin.pick(entry => this.pin(entry)); });
+		if (this.mode === "selection") {
+			const read = toolbar.createEl("button", { text: "Read selection", attr: { "aria-label": "Read the item selected in Zotero now" } });
+			read.disabled = this.reading;
+			read.addEventListener("click", () => { void this.readSelection(); });
+		}
 		const search = toolbar.createEl("input", { type: "search", placeholder: "Filter text, comment, tag, page", attr: { "aria-label": "Filter annotations" } });
 		search.value = this.facets.query;
 		search.addEventListener("input", () => { this.facets.query = search.value; this.filterSoon(); });
@@ -91,7 +222,7 @@ export class AnnotationsView extends ItemView {
 		if (!this.plugin.indexLoaded() && !this.plugin.warmBackoffActive()) void this.plugin.warmIndex();
 		const list = container.createDiv({ cls: "cmds-zotero-annotation-list" });
 		this.list = list;
-		if (!this.entry) { list.createEl("p", { cls: "setting-item-description", text: "Open a literature note, or pin a Zotero item, to see its annotations." }); return; }
+		if (!this.entry) { list.createEl("p", { cls: "setting-item-description", text: followed.empty }); return; }
 		header.createDiv({ cls: "cmds-zotero-sidebar-title", text: this.entry.title });
 		header.createDiv({ cls: "setting-item-description", text: `@${this.entry.citekey} · ${this.entry.attachments.reduce((n, a) => n + a.annotations.length, 0)} annotations` });
 		const rows = annotationRows(this.entry);
@@ -129,15 +260,15 @@ export class AnnotationsView extends ItemView {
 			menu.showAtMouseEvent(event);
 		});
 		const clear = bar.createEl("button", { cls: "cmds-zotero-facet-clear", text: "Clear", attr: { "aria-label": "Clear the filters" } });
-		clear.addEventListener("click", () => { this.facets = { ...noFacets() }; search.value = ""; this.facetsChanged(); });
+		clear.addEventListener("click", () => { this.facets = noFacets(); search.value = ""; this.facetsChanged(); });
 		const sort = bar.createEl("select", { cls: "dropdown", attr: { "aria-label": "Sort annotations" } });
 		for (const value of ANNOTATION_SORTS) sort.createEl("option", { text: SORT_LABELS[value], value });
 		sort.value = this.sort;
-		sort.addEventListener("change", () => { this.sort = sort.value as AnnotationSort; this.relist(rows); });
+		sort.addEventListener("change", () => { this.sort = sort.value as AnnotationSort; this.relist(rows); this.saveState(); });
 		const group = bar.createEl("select", { cls: "dropdown", attr: { "aria-label": "Group annotations" } });
 		for (const value of ANNOTATION_GROUPS) group.createEl("option", { text: GROUP_LABELS[value], value });
 		group.value = this.group;
-		group.addEventListener("change", () => { this.group = group.value as AnnotationGroup; this.relist(rows); });
+		group.addEventListener("change", () => { this.group = group.value as AnnotationGroup; this.relist(rows); this.saveState(); });
 		this.renderFacetState();
 	}
 
@@ -234,6 +365,8 @@ export class AnnotationsView extends ItemView {
 
 	onClose(): Promise<void> {
 		this.filterSoon.cancel();
+		this.cursorSoon.cancel();
+		this.refresh.cancel();
 		this.contentEl.empty();
 		this.status = null;
 		this.list = null;

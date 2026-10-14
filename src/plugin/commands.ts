@@ -4,6 +4,7 @@ import type CMDSZoteroPlugin from "../main";
 import { PageJumpModal } from "../modals/page-jump";
 import { citekeyAtCursor, parseProtocolRequest } from "../protocol";
 import { insertCitationFromPicker } from "./picker";
+import { registerAnnotationCommands } from "./commands-annotations";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
 
@@ -46,6 +47,7 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 	// 0.5 R10: pandoc-ready bibliography for the active note (index-local citation rows, one BBT export per library).
 	plugin.addCommand({ id: "copy-csl-json", name: "Copy CSL-JSON for cited sources", callback: () => { void plugin.run(() => plugin.bibliography.copyCslJsonForActiveNote()); } });
 	plugin.addCommand({ id: "write-bibliography-sidecar", name: "Write pandoc bibliography sidecar for current note", callback: () => { void plugin.run(() => plugin.bibliography.writeBibliographySidecar()); } });
+	registerAnnotationCommands(plugin); // 0.6.1 annotations sidebar: follow, pin, live read and card actions
 	plugin.addRibbonIcon("library", "Search literature", () => { void plugin.navigation.pick(entry => plugin.navigation.showActions(entry)); });
 	plugin.addRibbonIcon("highlighter", "Zotero annotations", () => { void plugin.activateView(VIEW_TYPE_ANNOTATIONS); });
 	plugin.addRibbonIcon("book-open", "Send recently read papers to notes", () => { plugin.literature.openRecentReads(); });
