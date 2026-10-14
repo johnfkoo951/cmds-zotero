@@ -25,6 +25,7 @@ import { findNote } from "./note-lookup";
 import { attachVaultCopies, describeFilters, hasImages, parseAnnotationFilters, readCandidates, selectAnnotations, type AnnotationFilterRequest } from "./annotations";
 import { CITING_MAX_NOTES, CITING_READ_CONCURRENCY, citingKeys, citingNote, sortCitingNotes, type CitingNote } from "./citing";
 import { diagnostic } from "../diagnostics";
+import { doctorChecks, type DoctorFacts } from "../doctor/checks";
 import type { AgentDiagnostic } from "../diagnostics";
 import { cachePrefix, parseCacheName, pickNewest, validateCache, verifyCache, PDF_TEXT_CACHE_DIR } from "../pdf/cache";
 import type { PdfTextCache } from "../pdf/cache";
@@ -60,6 +61,11 @@ export interface PdfCacheReader {
 
 export type AgentAction = "connection" | "info" | "refresh" | "resolve" | "identity" | "cites" | "reconcile" | "diagnostics" | "pdf-text" | "locate" | "recent" | "import" | "annotations" | "citing";
 export const AGENT_ACTIONS: readonly AgentAction[] = ["connection", "info", "refresh", "resolve", "identity", "cites", "reconcile", "diagnostics", "pdf-text", "locate", "recent", "import", "annotations", "citing"];
+/**
+ * Request features added to existing actions after they shipped (0.6.1: `diagnostics --env`). A host lists the ones it
+ * accepts (`service.features`); the CLI refuses a feature an older host does not list (plugin-too-old) instead of sending it.
+ */
+export const AGENT_FEATURES: readonly string[] = ["diagnostics-env"];
 export const ACTION_API_VERSION: Readonly<Record<AgentAction, 1 | 2>> = {
 	connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, "pdf-text": 2, locate: 2, recent: 2, import: 2, annotations: 2, citing: 2
 };
@@ -98,6 +104,8 @@ export interface ActionHost {
 	freshEntry?: (subject: FreshSubject) => Promise<FreshEntryResult>;
 	/** 0.6, live host only: the papers whose PDF Zotero opened on this local calendar day (`YYYY-MM-DD`); throws when Zotero cannot answer. */
 	readOnDay?: (day: string) => Promise<RecentRead[]>;
+	/** 0.6.1 `diagnostics --env`, live host only: the doctor facts only Obsidian can check (pdf.js, peer note maps, the output folder). */
+	environmentFacts?: () => Promise<Pick<DoctorFacts, "pdfjs" | "peers" | "outputFolder">>;
 }
 
 /** What `freshEntry` reads: a saved index entry, or a paper from Zotero's reading history that the index may not know. */
@@ -111,6 +119,8 @@ export interface SidecarStore {
 }
 
 export interface CommonRequest { allowStale?: boolean }
+/** 0.6.1: `env` adds the report-only setup checks (`environment.checks`). */
+export interface DiagnosticsRequest extends CommonRequest { env?: boolean }
 export interface ResolveRequest extends Selector, CommonRequest { refresh?: boolean }
 export interface IdentityRequest extends ResolveRequest { rawSource?: string; attachment?: string; style?: string; noBibliography?: boolean }
 export interface CitesRequest extends CommonRequest { path: string; recursive?: boolean; bibliography?: boolean; style?: string; strict?: boolean; /** 0.5 R10 */ format?: BibliographyFormat; out?: string | true; force?: boolean }
@@ -513,10 +523,32 @@ export async function infoAction(host: ActionHost): Promise<Payload> {
 	};
 }
 
+/**
+ * 0.6.1 `diagnostics --env`: the doctor's checks from the connection plus what the live host can check; a host that cannot
+ * check something (the offline core: pdf.js, peer maps, the output folder) reports it as not checked. Report-only.
+ */
+export async function environmentChecks(host: ActionHost): Promise<{ checks: ReturnType<typeof doctorChecks> }> {
+	const connection = host.connection;
+	const extra = host.environmentFacts ? await host.environmentFacts() : { pdfjs: null, peers: null, outputFolder: null };
+	const bbt = connection.bbt;
+	const facts: DoctorFacts = {
+		bbt: { reachable: bbt.reachable, ...(bbt.zotero !== undefined ? { zotero: bbt.zotero } : {}), ...(bbt.betterbibtex !== undefined ? { betterbibtex: bbt.betterbibtex } : {}), ...(bbt.reason !== undefined ? { reason: bbt.reason } : {}) },
+		legacyPluginEnabled: connection.legacyPluginEnabled,
+		index: { path: connection.index.path || host.settings.zoteroIndexPath, count: host.indexView ? connection.index.count : null, ageMinutes: connection.index.ageMinutes, stale: connection.index.stale, maxAgeMinutes: connection.index.maxAgeMinutes, complete: connection.index.complete },
+		git: connection.git,
+		...extra,
+		// The bridge answered when the live host serves the request; an offline answer after a failed bridge says why.
+		...(connection.mode === "live" ? { obsidian: "ok" as const } : connection.obsidianError !== undefined ? { obsidian: "unavailable" as const } : {}),
+	};
+	return { checks: doctorChecks(facts) };
+}
+
 /** v1 diagnostics plus the contract-2 codes from reconcile (dry-run) and cites over research-question/synthesis notes. */
-export async function diagnosticsAction(host: ActionHost, request: CommonRequest): Promise<Payload> {
+export async function diagnosticsAction(host: ActionHost, request: DiagnosticsRequest): Promise<Payload> {
 	const index = requireIndex(host, "diagnostics", 1);
-	if ("failure" in index) return index.failure;
+	// 0.6.1: the environment checks are most useful when the index is missing, so a failure carries them too.
+	const environment = request.env === true ? { environment: await environmentChecks(host) } : {};
+	if ("failure" in index) return { ...index.failure, ...environment };
 	const view = index.view;
 	const diagnostics: (Diagnostic | AgentDiagnostic)[] = [...view.index.diagnostics];
 	const listed = await host.reader.listNotes();
@@ -540,7 +572,7 @@ export async function diagnosticsAction(host: ActionHost, request: CommonRequest
 	if (host.connection.legacyPluginEnabled) diagnostics.push(diagnostic("legacy-plugin-enabled", "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing."));
 	if (host.connection.index.stale) diagnostics.push(diagnostic("index-stale", `The index is ${host.connection.index.ageMinutes} minutes old (limit ${host.connection.index.maxAgeMinutes}).`));
 	if (host.connection.git?.repo && (host.connection.git.indexIgnored === false || host.connection.git.cacheIgnored === false)) diagnostics.push(diagnostic("index-in-git", "The vault is a git repository and the index or the .cmds-zotero cache is not ignored; add both to .gitignore and untrack the index."));
-	return { ...envelope(host, "diagnostics", 1), generatedAt: view.index.generatedAt, complete: view.index.complete, count: view.index.count, diagnostics };
+	return { ...envelope(host, "diagnostics", 1), generatedAt: view.index.generatedAt, complete: view.index.complete, count: view.index.count, diagnostics, ...environment };
 }
 
 export interface LocateTarget {
@@ -649,7 +681,7 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 	const allowed: Record<AgentAction, readonly string[]> = {
 		connection: [], info: [], refresh: ["ifOlderThanMinutes"], resolve: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh"],
 		identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
-		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale"], // 0.5 R10: format/out/force
+		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale", "env"], // 0.5 R10: format/out/force
 		"pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"], locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
 		recent: ["days"], import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"],
 		// 0.6
@@ -657,7 +689,7 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 		citing: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale"],
 	};
 	for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
-	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
+	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh", "env"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
 	for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote", "color", "type", "tag"]) { const value = request[key]; if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`); }
 	if ("libraryID" in request && (!Number.isSafeInteger(request.libraryID) || (request.libraryID as number) < 1)) throw new Error("libraryID must be a positive integer.");
 	if ("ifOlderThanMinutes" in request && (!Number.isSafeInteger(request.ifOlderThanMinutes) || (request.ifOlderThanMinutes as number) < 1 || (request.ifOlderThanMinutes as number) > 10080)) throw new Error("ifOlderThanMinutes must be between 1 and 10080.");
@@ -937,7 +969,7 @@ export async function runAction(host: ActionHost, action: AgentAction, request: 
 		case "identity": return identityAction(effectiveHost, request as IdentityRequest);
 		case "cites": return citesAction(host, request as CitesRequest);
 		case "reconcile": return reconcileAction(host, request as ReconcileRequest);
-		case "diagnostics": return diagnosticsAction(host, request as CommonRequest);
+		case "diagnostics": return diagnosticsAction(host, request as DiagnosticsRequest);
 		case "pdf-text": return pdfTextAction(host, request as PdfTextRequest);
 		case "locate": return locateAction(host, request as LocateRequestArgs);
 		case "recent": return recentAction(host, request as RecentRequest);

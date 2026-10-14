@@ -5,7 +5,7 @@
  */
 import { formatStatus, type StatusView } from "../agent/connection";
 
-export type StatusMenuAction = "test-connection" | "refresh-index" | "diagnose-links" | "open-references" | "open-annotations" | "open-settings" | "copy-status";
+export type StatusMenuAction = "test-connection" | "refresh-index" | "diagnose-setup" | "diagnose-links" | "open-references" | "open-annotations" | "open-settings" | "copy-status";
 
 export interface StatusMenuItem {
 	action: StatusMenuAction;
@@ -28,7 +28,8 @@ export function statusMenuItems(state: StatusMenuState): StatusMenuItem[] {
 	return [
 		{ action: "test-connection", title: "Test Better BibTeX connection", icon: "plug", disabled: false },
 		{ action: "refresh-index", title: state.collecting ? "Refreshing citekey index…" : "Refresh citekey index", icon: "refresh-cw", disabled: refreshBlocked },
-		{ action: "diagnose-links", title: "Diagnose index and links", icon: "list-checks", disabled: false, separator: true },
+		{ action: "diagnose-setup", title: "Diagnose setup…", icon: "stethoscope", disabled: false, separator: true },
+		{ action: "diagnose-links", title: "Diagnose index and links", icon: "list-checks", disabled: false },
 		{ action: "open-references", title: "Open references sidebar", icon: "book-marked", disabled: false, separator: true },
 		{ action: "open-annotations", title: "Open annotations sidebar", icon: "highlighter", disabled: false },
 		{ action: "open-settings", title: "Open settings", icon: "settings", disabled: false, separator: true },

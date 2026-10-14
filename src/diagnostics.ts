@@ -38,6 +38,15 @@ export const DIAGNOSTIC_CODES = {
 	// 0.6 retraction-flags-from-zotero.
 	"retracted-source": "warning",
 	"retraction-check-unavailable": "info",
+	// 0.6.1 doctor-report (report-only setup checks; `diagnostics --env` and the Diagnose setup view).
+	"zotero-unreachable": "warning",
+	"zotero-reading-history-unavailable": "info",
+	"index-missing": "warning",
+	"pdfjs-unavailable": "warning",
+	"peer-map-unreadable": "warning",
+	"better-notes-in-output": "warning",
+	"foreign-notes-in-output": "info",
+	"obsidian-unavailable": "info",
 } as const satisfies Record<string, DiagnosticSeverity>;
 
 export type DiagnosticCode = keyof typeof DIAGNOSTIC_CODES;

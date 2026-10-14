@@ -28,7 +28,7 @@ private folder, elsewhere only under the overwrite rule in "Bibliography formats
 | identity | 2 | Yes | None unless explicit `--refresh` |
 | cites | 2 | Yes (`--format csl-json|bibtex|biblatex` and `--out` need the live host) | None; sidecar write with `--out` |
 | reconcile | 2 | Dry-run only | Five-key hub update only with `--apply` |
-| diagnostics | 1 | Yes | None |
+| diagnostics | 1 | Yes (`--env` checks pdf.js, other vaults and the output folder only on the live host) | None; `--env` adds one BBT readiness probe on the live host |
 | pdf-text | 2 | No | Private PDF text cache |
 | locate | 2 | Yes | None |
 | recent | 2 | No | None (Better BibTeX searches only) |
@@ -69,6 +69,21 @@ Existing implicit refresh in read-only legacy operations is intentionally remove
 The read-only wrapper must not call an old host that might refresh on a read.
 New CLI clients may use the offline core for old-host read-only capabilities; unsupported live writes fail explicitly.
 No new flags may be silently discarded when talking to an old plugin.
+
+### Setup checks: `diagnostics --env` (0.6.1)
+
+`diagnostics --env` (request field `env: true`) adds `environment: {checks}` to the `diagnostics` payload, also to its
+`index-missing`/`index-invalid` failure. Each check is `{id, status, title, detail, code?, paths?}` with `status` one of
+`ok`, `info`, `warning`, `error` or `unknown` (not checked by this host), in this order: `zotero` (versions from a
+readiness probe; the live host probes, the offline core reports `unknown`), `legacy-plugin`, `index`, `git`, `pdfjs`,
+`peer-vaults` (whether each registered vault's note map can be read; names only), `output-folder` (notes in the literature
+folder that no entry claims, and notes with Better Notes sync frontmatter; vault-relative `paths`, at most 20) and, when
+the CLI tried the Obsidian bridge, `obsidian`. A check that needs attention carries a `code` from the diagnostic vocabulary
+(`zotero-unreachable`, `zotero-reading-history-unavailable`, `legacy-plugin-enabled`, `index-missing`, `index-stale`,
+`index-in-git`, `pdfjs-unavailable`, `peer-map-unreadable`, `better-notes-in-output`, `foreign-notes-in-output`,
+`obsidian-unavailable`) and its status is that code's severity. The checks are report-only: nothing changes other plugins,
+Git state or notes, and the `diagnostics` list itself is unchanged by `--env`. A host that does not list `diagnostics-env`
+in `service.features` is refused before submission with `plugin-too-old`.
 
 ### Exit codes and transport
 

@@ -3,6 +3,7 @@ import { formatStatus, type StatusView } from "../agent/connection";
 import { describeBbtError } from "../api/transport";
 import type CMDSZoteroPlugin from "../main";
 import { ReportModal } from "../modals/report";
+import { showDoctor } from "./doctor";
 import { statusJson, statusMenuItems, statusTooltip, type StatusMenuAction } from "./status-menu-model";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
@@ -50,6 +51,7 @@ export class StatusController {
 		switch (action) {
 			case "test-connection": return this.testConnection();
 			case "refresh-index": return this.plugin.indexing.refreshIndex();
+			case "diagnose-setup": return showDoctor(this.plugin);
 			case "diagnose-links": return this.showDiagnostics();
 			case "open-references": return this.plugin.activateView(VIEW_TYPE_REFERENCES);
 			case "open-annotations": return this.plugin.activateView(VIEW_TYPE_ANNOTATIONS);

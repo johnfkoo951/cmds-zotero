@@ -8019,6 +8019,26 @@ function classifyTransportError(error, endpoint, timeoutMs, fallback = "invalid-
   const detail = error instanceof Error ? error.message : String(error);
   return new BbtTransportError(reason, endpoint, detail, { cause: error, code: codeOf(error), ...reason === "timeout" ? { timeoutMs } : {} });
 }
+function bbtReasonLabel(reason, status) {
+  switch (reason) {
+    case "connection-refused":
+      return "connection refused";
+    case "timeout":
+      return "timeout";
+    case "http-404":
+      return "HTTP 404";
+    case "http-other":
+      return status !== void 0 ? `HTTP ${status}` : "HTTP error";
+    case "aborted":
+      return "cancelled";
+    case "rpc":
+      return "RPC error";
+    case "invalid-response":
+      return "invalid response";
+    default:
+      return reason;
+  }
+}
 function bbtObservation(error) {
   const at = error.endpoint;
   switch (error.reason) {
@@ -8055,6 +8075,10 @@ function describeBbtError(error) {
     default:
       return `${observed}.`;
   }
+}
+function zoteroMajor(version) {
+  const match = /^\s*(\d{1,4})(?:[.\s-]|$)/.exec(version ?? "");
+  return match ? Number(match[1]) : null;
 }
 var ZoteroVersionError = class extends Error {
   constructor(feature, required, found, cause) {
@@ -9259,7 +9283,16 @@ var DIAGNOSTIC_CODES2 = {
   // 0.6 collection-membership-index
   // 0.6 retraction-flags-from-zotero.
   "retracted-source": "warning",
-  "retraction-check-unavailable": "info"
+  "retraction-check-unavailable": "info",
+  // 0.6.1 doctor-report (report-only setup checks; `diagnostics --env` and the Diagnose setup view).
+  "zotero-unreachable": "warning",
+  "zotero-reading-history-unavailable": "info",
+  "index-missing": "warning",
+  "pdfjs-unavailable": "warning",
+  "peer-map-unreadable": "warning",
+  "better-notes-in-output": "warning",
+  "foreign-notes-in-output": "info",
+  "obsidian-unavailable": "info"
 };
 function diagnostic(code, message, extra = {}) {
   const result = { code, severity: DIAGNOSTIC_CODES2[code], message };
@@ -9840,8 +9873,8 @@ function legacyDialectDiagnostic(notes) {
   if (!paths.length) return null;
   const sample = paths.slice(0, LEGACY_DIALECT_SAMPLE);
   const rest = paths.length - sample.length;
-  const plural = paths.length === 1 ? "note carries" : "notes carry";
-  return diagnostic("legacy-frontmatter-dialect", `${paths.length} literature ${plural} pre-0.5 frontmatter keys; frontmatter is user-owned and is not rewritten. zoteroID remains the only identity key agents may rely on. Sample: ${sample.join(", ")}${rest ? ` (+${rest} more)` : ""}`, { path: sample[0] });
+  const plural2 = paths.length === 1 ? "note carries" : "notes carry";
+  return diagnostic("legacy-frontmatter-dialect", `${paths.length} literature ${plural2} pre-0.5 frontmatter keys; frontmatter is user-owned and is not rewritten. zoteroID remains the only identity key agents may rely on. Sample: ${sample.join(", ")}${rest ? ` (+${rest} more)` : ""}`, { path: sample[0] });
 }
 function reconcileNotes(notes, index, vault, opts) {
   const folders = normalizeFolders(opts.folders);
@@ -10280,6 +10313,65 @@ function citingNote(vault, note, keys, headings = DEFAULT_REFERENCES_HEADINGS) {
 }
 function sortCitingNotes(notes) {
   return [...notes].sort((a, b) => b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+// src/doctor/checks.ts
+var MAX_PATHS = 20;
+function flagged(id, title, code, detail, paths) {
+  return { id, status: DIAGNOSTIC_CODES2[code], title, detail, code, ...paths?.length ? { paths: paths.slice(0, MAX_PATHS) } : {} };
+}
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+function zoteroCheck(bbt) {
+  const title = "Zotero and Better BibTeX";
+  if (bbt.reachable === null) return { id: "zotero", status: "unknown", title, detail: "Not checked here." };
+  if (!bbt.reachable) return flagged("zotero", title, "zotero-unreachable", `Better BibTeX did not answer${bbt.reason ? ` (${bbtReasonLabel(bbt.reason, bbt.status)})` : ""}. Start Zotero with Better BibTeX; the saved index still serves reads.`);
+  const versions = `Zotero ${bbt.zotero ?? "unknown"}; Better BibTeX ${bbt.betterbibtex ?? "unknown"}.`;
+  const major = bbt.zotero ? zoteroMajor(bbt.zotero) : null;
+  if (major !== null && major < 10) return flagged("zotero", title, "zotero-reading-history-unavailable", `${versions} Send recently read papers and Zotero's reading history need Zotero 10; everything else works.`);
+  return { id: "zotero", status: "ok", title, detail: versions };
+}
+function indexCheck(index) {
+  const title = "Citekey index";
+  if (index.count === null) return flagged("index", title, "index-missing", `No validated index at ${index.path}. Refresh the citekey index.`);
+  const age = index.ageMinutes === null ? "age unknown" : `${index.ageMinutes} min old`;
+  if (index.stale === true) return flagged("index", title, "index-stale", `${plural(index.count, "entry")}, ${age} (limit ${index.maxAgeMinutes} min). Refresh it to pick up changes in Zotero.`);
+  return { id: "index", status: "ok", title, detail: `${plural(index.count, "entry")}, ${age}${index.complete === false ? ", incomplete (see Diagnose index and links)" : ""}.` };
+}
+function gitCheck(git, indexPath) {
+  const title = "Git";
+  if (git === null) return { id: "git", status: "unknown", title, detail: "Not checked here." };
+  if (!git.repo) return { id: "git", status: "ok", title, detail: "The vault is not a Git repository." };
+  const exposed = [];
+  if (git.indexIgnored === false || git.indexTracked === true) exposed.push(`the index file ${indexPath}`);
+  if (git.cacheIgnored === false || git.cacheTracked === true) exposed.push("the .cmds-zotero cache");
+  if (exposed.length) return flagged("git", title, "index-in-git", `Git tracks or does not ignore ${exposed.join(" and ")}. Ignore and untrack them yourself; the doctor changes nothing.`);
+  return { id: "git", status: "ok", title, detail: "The index and the cache are ignored." };
+}
+function peersCheck(peers) {
+  const title = "Other vaults";
+  if (peers === null) return { id: "peer-vaults", status: "unknown", title, detail: "Not checked here." };
+  if (!peers.length) return { id: "peer-vaults", status: "ok", title, detail: "No other vaults are registered." };
+  const failed = peers.filter((peer) => !peer.readable);
+  if (failed.length) return flagged("peer-vaults", title, "peer-map-unreadable", `${failed.length} of ${plural(peers.length, "registered vault")} cannot be read: ${failed.map((peer) => `${peer.name}${peer.detail ? ` (${peer.detail})` : ""}`).join("; ")}.`);
+  return { id: "peer-vaults", status: "ok", title, detail: `${plural(peers.length, "registered vault")}, each note map readable.` };
+}
+function outputCheck(output) {
+  const title = "Literature note folder";
+  if (output === null) return { id: "output-folder", status: "unknown", title, detail: "Not checked here." };
+  if (output.betterNotes.length) return flagged("output-folder", title, "better-notes-in-output", `${plural(output.betterNotes.length, "note")} in ${output.folder} carry Better Notes sync frontmatter; keep Better Notes exports in another folder so the two plugins never write the same note.`, output.betterNotes);
+  if (output.unmatched.length) return flagged("output-folder", title, "foreign-notes-in-output", `${plural(output.unmatched.length, "note")} in ${output.folder} belong to no index entry. They are never changed; move them if they are not literature notes.`, output.unmatched);
+  return { id: "output-folder", status: "ok", title, detail: `${plural(output.notes, "note")} in ${output.folder}, each linked to an index entry.` };
+}
+function doctorChecks(facts) {
+  const checks = [zoteroCheck(facts.bbt)];
+  checks.push(facts.legacyPluginEnabled === null ? { id: "legacy-plugin", status: "unknown", title: "Legacy plugin", detail: "Not checked here." } : facts.legacyPluginEnabled ? flagged("legacy-plugin", "Legacy plugin", "legacy-plugin-enabled", "The legacy cmds-link-zotero plugin is enabled and shares the index path. Disable it yourself before refreshing.") : { id: "legacy-plugin", status: "ok", title: "Legacy plugin", detail: "The legacy cmds-link-zotero plugin is not enabled." });
+  checks.push(indexCheck(facts.index), gitCheck(facts.git, facts.index.path));
+  checks.push(facts.pdfjs === null ? { id: "pdfjs", status: "unknown", title: "PDF text (pdf.js)", detail: "Not checked here; PDF text extraction runs in Obsidian." } : facts.pdfjs ? { id: "pdfjs", status: "ok", title: "PDF text (pdf.js)", detail: "Obsidian's PDF library loads." } : flagged("pdfjs", "PDF text (pdf.js)", "pdfjs-unavailable", "Obsidian's PDF library did not load; PDF text extraction and quote location will fail."));
+  checks.push(peersCheck(facts.peers), outputCheck(facts.outputFolder));
+  if (facts.obsidian !== void 0) checks.push(facts.obsidian === "ok" ? { id: "obsidian", status: "ok", title: "Obsidian bridge", detail: "The Obsidian CLI reached the plugin." } : flagged("obsidian", "Obsidian bridge", "obsidian-unavailable", "The Obsidian CLI did not reach the plugin, so answers come from the saved index file. Live actions need Obsidian running with its CLI enabled."));
+  return checks;
 }
 
 // src/pdf/cache.ts
@@ -10896,9 +10988,25 @@ async function infoAction(host) {
     warnings: infoWarnings(host.connection)
   };
 }
+async function environmentChecks(host) {
+  const connection = host.connection;
+  const extra = host.environmentFacts ? await host.environmentFacts() : { pdfjs: null, peers: null, outputFolder: null };
+  const bbt = connection.bbt;
+  const facts = {
+    bbt: { reachable: bbt.reachable, ...bbt.zotero !== void 0 ? { zotero: bbt.zotero } : {}, ...bbt.betterbibtex !== void 0 ? { betterbibtex: bbt.betterbibtex } : {}, ...bbt.reason !== void 0 ? { reason: bbt.reason } : {} },
+    legacyPluginEnabled: connection.legacyPluginEnabled,
+    index: { path: connection.index.path || host.settings.zoteroIndexPath, count: host.indexView ? connection.index.count : null, ageMinutes: connection.index.ageMinutes, stale: connection.index.stale, maxAgeMinutes: connection.index.maxAgeMinutes, complete: connection.index.complete },
+    git: connection.git,
+    ...extra,
+    // The bridge answered when the live host serves the request; an offline answer after a failed bridge says why.
+    ...connection.mode === "live" ? { obsidian: "ok" } : connection.obsidianError !== void 0 ? { obsidian: "unavailable" } : {}
+  };
+  return { checks: doctorChecks(facts) };
+}
 async function diagnosticsAction(host, request) {
   const index = requireIndex(host, "diagnostics", 1);
-  if ("failure" in index) return index.failure;
+  const environment = request.env === true ? { environment: await environmentChecks(host) } : {};
+  if ("failure" in index) return { ...index.failure, ...environment };
   const view = index.view;
   const diagnostics = [...view.index.diagnostics];
   const listed = await host.reader.listNotes();
@@ -10922,7 +11030,7 @@ async function diagnosticsAction(host, request) {
   if (host.connection.legacyPluginEnabled) diagnostics.push(diagnostic("legacy-plugin-enabled", "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing."));
   if (host.connection.index.stale) diagnostics.push(diagnostic("index-stale", `The index is ${host.connection.index.ageMinutes} minutes old (limit ${host.connection.index.maxAgeMinutes}).`));
   if (host.connection.git?.repo && (host.connection.git.indexIgnored === false || host.connection.git.cacheIgnored === false)) diagnostics.push(diagnostic("index-in-git", "The vault is a git repository and the index or the .cmds-zotero cache is not ignored; add both to .gitignore and untrack the index."));
-  return { ...envelope(host, "diagnostics", 1), generatedAt: view.index.generatedAt, complete: view.index.complete, count: view.index.count, diagnostics };
+  return { ...envelope(host, "diagnostics", 1), generatedAt: view.index.generatedAt, complete: view.index.complete, count: view.index.count, diagnostics, ...environment };
 }
 async function locateTarget(host, request, citekeyFromNote) {
   if (request.file) {
@@ -11032,7 +11140,7 @@ function validateActionRequest(action, value) {
     identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
     cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"],
     reconcile: ["folders", "apply", "strict", "allowStale"],
-    diagnostics: ["allowStale"],
+    diagnostics: ["allowStale", "env"],
     // 0.5 R10: format/out/force
     "pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"],
     locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
@@ -11043,7 +11151,7 @@ function validateActionRequest(action, value) {
     citing: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale"]
   };
   for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
-  for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
+  for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh", "env"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
   for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote", "color", "type", "tag"]) {
     const value2 = request[key];
     if (value2 !== void 0 && (typeof value2 !== "string" || !value2.trim() || value2.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`);

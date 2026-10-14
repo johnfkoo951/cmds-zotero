@@ -22,6 +22,7 @@ import { NavigationController } from "./plugin/navigation";
 import type { NoteBatch } from "./plugin/note-batch";
 import { StatusController } from "./plugin/status";
 import { cachedGitProbe, type GitProbe } from "./git-probe";
+import { OutcomeLog } from "./doctor/outcome-log";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
 const LEGACY_PLUGIN_MESSAGE = "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing.";
@@ -49,6 +50,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	readonly literature = new LiteratureController(this);
 	readonly navigation = new NavigationController(this);
 	readonly status = new StatusController(this);
+	/** 0.6.1 doctor: the last 50 Better BibTeX outcomes of this session, in memory only (kept across reconfiguration). */
+	readonly outcomes = new OutcomeLog();
 
 	async onload(): Promise<void> {
 		const stored: unknown = await this.loadData();
@@ -105,7 +108,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			this.status.renderStatus(); // 0.5 R4
 		};
 		const bbt = this.bbt; // 0.5 R4: every real BBT outcome re-renders the status line
-		bbt.onOutcome(() => { if (this.active && this.bbt === bbt) this.status.renderStatus(); });
+		bbt.onOutcome(outcome => { if (this.active && this.bbt === bbt) { this.outcomes.push(outcome); this.status.renderStatus(); } });
 		this.publish = onIndex;
 		this.service = new IngestAPI(this.app, this.bbt, this.index, this.links, onIndex, (action, request, now) => agentHost(this, action, request, now, onIndex, indexService, pdfText));
 	}

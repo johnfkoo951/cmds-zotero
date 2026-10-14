@@ -9,7 +9,7 @@ const FRESH: StatusView = { count: 450, ageMinutes: 5, stale: false, legacyPlugi
 
 test("menu items: fixed order, only existing actions, refresh disabled while collecting or with the legacy plugin", () => {
 	const idle = statusMenuItems({ collecting: false, legacyPluginEnabled: false });
-	assert.deepEqual(idle.map(item => item.action), ["test-connection", "refresh-index", "diagnose-links", "open-references", "open-annotations", "open-settings", "copy-status"]);
+	assert.deepEqual(idle.map(item => item.action), ["test-connection", "refresh-index", "diagnose-setup", "diagnose-links", "open-references", "open-annotations", "open-settings", "copy-status"]);
 	assert.ok(idle.every(item => !item.disabled));
 	const collecting = statusMenuItems({ collecting: true, legacyPluginEnabled: false });
 	assert.deepEqual(collecting.filter(item => item.disabled).map(item => item.action), ["refresh-index"]);

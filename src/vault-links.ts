@@ -1,7 +1,7 @@
 import { App, TFile } from "obsidian";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
+import type { CmdsZoteroSettings, PeerVault, ZoteroIndex, ZoteroIndexEntry } from "./types";
 import { compareNoteRows, listsAdvancedUri, obsidianOpenURI, peerNoteURI } from "./uris";
 import { noteIdentity, type AliasIndex } from "./note-aliases";
 import { indexDerived } from "./index-derived";
@@ -187,17 +187,7 @@ export class VaultLinks {
 		for (const peer of this.settings().peerVaults) {
 			const rows: VaultNoteLink[] = [];
 			try {
-				if (!path.isAbsolute(peer.path)) throw new Error("The registered vault path must be absolute.");
-				const root = await fs.realpath(peer.path);
-				const candidate = path.join(root, MAP_PATH);
-				const resolved = await fs.realpath(candidate);
-				if (!resolved.startsWith(root + path.sep)) throw new Error("Note map points outside the registered vault.");
-				const info = await fs.stat(resolved);
-				if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error("Note map is missing or too large.");
-				const raw: unknown = JSON.parse(await fs.readFile(resolved, "utf8"));
-				if (!raw || typeof raw !== "object") throw new Error("Invalid note map.");
-				const map = raw as Partial<NoteMap>;
-				if (map.version !== 1 || map.vault !== peer.name || !map.notes || typeof map.notes !== "object") throw new Error("Refresh the index in the registered vault to publish its note map.");
+				const { root, map } = await this.loadPeerMap(peer);
 				const paths: unknown = map.notes[entry.id];
 				if (!Array.isArray(paths)) continue;
 				const advancedUri = await this.peerListsAdvancedUri(root);
@@ -216,6 +206,32 @@ export class VaultLinks {
 			}
 		}
 		return { links, warnings };
+	}
+
+	/** A registered vault's published note map, validated; throws with a human reason when it cannot be used. */
+	private async loadPeerMap(peer: PeerVault): Promise<{ root: string; map: NoteMap }> {
+		if (!path.isAbsolute(peer.path)) throw new Error("The registered vault path must be absolute.");
+		const root = await fs.realpath(peer.path);
+		const candidate = path.join(root, MAP_PATH);
+		const resolved = await fs.realpath(candidate);
+		if (!resolved.startsWith(root + path.sep)) throw new Error("Note map points outside the registered vault.");
+		const info = await fs.stat(resolved);
+		if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error("Note map is missing or too large.");
+		const raw: unknown = JSON.parse(await fs.readFile(resolved, "utf8"));
+		if (!raw || typeof raw !== "object") throw new Error("Invalid note map.");
+		const map = raw as Partial<NoteMap>;
+		if (map.version !== 1 || map.vault !== peer.name || !map.notes || typeof map.notes !== "object") throw new Error("Refresh the index in the registered vault to publish its note map.");
+		return { root, map: map as NoteMap };
+	}
+
+	/** 0.6.1 doctor: whether each registered vault's note map can be read (read-only; names, never paths, in the result). */
+	async peerMapStatus(): Promise<{ name: string; readable: boolean; detail?: string }[]> {
+		const rows: { name: string; readable: boolean; detail?: string }[] = [];
+		for (const peer of this.settings().peerVaults) {
+			try { await this.loadPeerMap(peer); rows.push({ name: peer.name, readable: true }); }
+			catch (error) { rows.push({ name: peer.name, readable: false, detail: error instanceof Error && !/^E[A-Z]+:/.test(error.message) ? error.message : "the vault folder or its note map cannot be read" }); }
+		}
+		return rows;
 	}
 
 	/**
