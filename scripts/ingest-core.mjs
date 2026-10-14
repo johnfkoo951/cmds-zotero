@@ -1004,14 +1004,14 @@ var require_foldFlowLines = __commonJS({
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
     var FOLD_QUOTED = "quoted";
-    function foldFlowLines(text4, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
+    function foldFlowLines(text5, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
       if (!lineWidth || lineWidth < 0)
-        return text4;
+        return text5;
       if (lineWidth < minContentWidth)
         minContentWidth = 0;
       const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
-      if (text4.length <= endStep)
-        return text4;
+      if (text5.length <= endStep)
+        return text5;
       const folds = [];
       const escapedFolds = {};
       let end = lineWidth - indent.length;
@@ -1028,14 +1028,14 @@ var require_foldFlowLines = __commonJS({
       let escStart = -1;
       let escEnd = -1;
       if (mode === FOLD_BLOCK) {
-        i = consumeMoreIndentedLines(text4, i, indent.length);
+        i = consumeMoreIndentedLines(text5, i, indent.length);
         if (i !== -1)
           end = i + endStep;
       }
-      for (let ch; ch = text4[i += 1]; ) {
+      for (let ch; ch = text5[i += 1]; ) {
         if (mode === FOLD_QUOTED && ch === "\\") {
           escStart = i;
-          switch (text4[i + 1]) {
+          switch (text5[i + 1]) {
             case "x":
               i += 3;
               break;
@@ -1052,12 +1052,12 @@ var require_foldFlowLines = __commonJS({
         }
         if (ch === "\n") {
           if (mode === FOLD_BLOCK)
-            i = consumeMoreIndentedLines(text4, i, indent.length);
+            i = consumeMoreIndentedLines(text5, i, indent.length);
           end = i + indent.length + endStep;
           split = void 0;
         } else {
           if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
-            const next = text4[i + 1];
+            const next = text5[i + 1];
             if (next && next !== " " && next !== "\n" && next !== "	")
               split = i;
           }
@@ -1069,12 +1069,12 @@ var require_foldFlowLines = __commonJS({
             } else if (mode === FOLD_QUOTED) {
               while (prev === " " || prev === "	") {
                 prev = ch;
-                ch = text4[i += 1];
+                ch = text5[i += 1];
                 overflow = true;
               }
               const j = i > escEnd + 1 ? i - 2 : escStart - 1;
               if (escapedFolds[j])
-                return text4;
+                return text5;
               folds.push(j);
               escapedFolds[j] = true;
               end = j + endStep;
@@ -1089,39 +1089,39 @@ var require_foldFlowLines = __commonJS({
       if (overflow && onOverflow)
         onOverflow();
       if (folds.length === 0)
-        return text4;
+        return text5;
       if (onFold)
         onFold();
-      let res = text4.slice(0, folds[0]);
+      let res = text5.slice(0, folds[0]);
       for (let i2 = 0; i2 < folds.length; ++i2) {
         const fold = folds[i2];
-        const end2 = folds[i2 + 1] || text4.length;
+        const end2 = folds[i2 + 1] || text5.length;
         if (fold === 0)
           res = `
-${indent}${text4.slice(0, end2)}`;
+${indent}${text5.slice(0, end2)}`;
         else {
           if (mode === FOLD_QUOTED && escapedFolds[fold])
-            res += `${text4[fold]}\\`;
+            res += `${text5[fold]}\\`;
           res += `
-${indent}${text4.slice(fold + 1, end2)}`;
+${indent}${text5.slice(fold + 1, end2)}`;
         }
       }
       return res;
     }
-    function consumeMoreIndentedLines(text4, i, indent) {
+    function consumeMoreIndentedLines(text5, i, indent) {
       let end = i;
       let start = i + 1;
-      let ch = text4[start];
+      let ch = text5[start];
       while (ch === " " || ch === "	") {
         if (i < start + indent) {
-          ch = text4[++i];
+          ch = text5[++i];
         } else {
           do {
-            ch = text4[++i];
+            ch = text5[++i];
           } while (ch && ch !== "\n");
           end = i;
           start = i + 1;
-          ch = text4[start];
+          ch = text5[start];
         }
       }
       return end;
@@ -7468,7 +7468,7 @@ function validReaderAnnotations(value, attachmentKey, item) {
   if (!Array.isArray(value)) return false;
   for (const annotation of value) {
     if (!record(annotation) || typeof annotation.key !== "string" || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachmentKey || typeof annotation.version !== "number" || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags) || !record(annotation.position)) return false;
-    if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text4) => typeof text4 !== "string")) return false;
+    if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text5) => typeof text5 !== "string")) return false;
     if (annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string" || annotation.sortIndex !== void 0 && typeof annotation.sortIndex !== "string") return false;
     const location = parseZoteroURI(annotation.uri);
     if (location.action !== "select" || location.itemKey !== attachmentKey || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
@@ -7479,7 +7479,7 @@ function validateEntryStructure(value) {
   if (!record(value) || !validateIdentity(value)) return false;
   const item = value;
   if (item.id !== identityKey(item) || item.zoteroSelectURI !== selectURI(item)) return false;
-  if (!item.citekey || [item.citekey, item.title, item.year, item.doi, item.url, item.attachmentPath, item.contentHash].some((text4) => typeof text4 !== "string")) return false;
+  if (!item.citekey || [item.citekey, item.title, item.year, item.doi, item.url, item.attachmentPath, item.contentHash].some((text5) => typeof text5 !== "string")) return false;
   if (![item.authors, item.collections, item.tags, item.citekeyHistory].every(strings) || !record(item.metadata)) return false;
   if (!["complete", "unavailable"].includes(item.attachmentStatus) || !Array.isArray(item.attachments)) return false;
   try {
@@ -7491,7 +7491,7 @@ function validateEntryStructure(value) {
       keys.add(attachment.key);
       for (const annotation of attachment.annotations) {
         if (!record(annotation) || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachment.key || !positiveInteger(annotation.page) || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags)) return false;
-        if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text4) => typeof text4 !== "string") || annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string") return false;
+        if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text5) => typeof text5 !== "string") || annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string") return false;
         const location = parseZoteroURI(annotation.uri);
         if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
       }
@@ -7516,7 +7516,7 @@ function indexHeaderValid(value) {
 function indexTailValid(value) {
   if (new Set(value.entries.map((entry) => entry.id)).size !== value.entries.length || !record(value.capabilities) || !Array.isArray(value.diagnostics)) return false;
   const caps = value.capabilities;
-  if (typeof caps.zotero !== "string" || typeof caps.betterbibtex !== "string" || [caps.metadata, caps.attachments, caps.annotations, caps.bibliography].some((flag2) => typeof flag2 !== "boolean")) return false;
+  if (typeof caps.zotero !== "string" || typeof caps.betterbibtex !== "string" || [caps.metadata, caps.attachments, caps.annotations, caps.bibliography].some((flag3) => typeof flag3 !== "boolean")) return false;
   return value.diagnostics.every((diagnostic2) => record(diagnostic2) && typeof diagnostic2.code === "string" && typeof diagnostic2.message === "string" && ["info", "warning", "error"].includes(String(diagnostic2.severity)) && (diagnostic2.itemID === void 0 || typeof diagnostic2.itemID === "string") && (diagnostic2.citekey === void 0 || typeof diagnostic2.citekey === "string"));
 }
 function validateIndexWith(value, validEntry) {
@@ -7529,8 +7529,8 @@ function validateIndex(value) {
 
 // src/agent/git-ignore.ts
 var CACHE_DIR = ".cmds-zotero";
-function escapeRegex(text4) {
-  return text4.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+function escapeRegex(text5) {
+  return text5.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 function stripTrailingSpaces(line) {
   let end = line.length;
@@ -7601,9 +7601,9 @@ function patternToRegex(pattern, anchored) {
   });
   return new RegExp(`^${anchored ? "" : "(?:.*/)?"}${body}$`);
 }
-function parseGitignore(text4) {
+function parseGitignore(text5) {
   const rules = [];
-  for (const rawLine of text4.split(/\r?\n/)) {
+  for (const rawLine of text5.split(/\r?\n/)) {
     const line = stripTrailingSpaces(rawLine);
     if (line === "" || line.startsWith("#")) continue;
     const negated = line.startsWith("!");
@@ -7657,8 +7657,8 @@ function gitCoverage(gitignoreText, indexPath, cacheDir, privateIgnore = null) {
     cacheIgnored: isDirectoryCovered(gitignoreText, cacheDir) || privateIgnoreCoversAll(privateIgnore)
   };
 }
-function privateIgnoreCoversAll(text4) {
-  const last = parseGitignore(text4 ?? "").at(-1);
+function privateIgnoreCoversAll(text5) {
+  const last = parseGitignore(text5 ?? "").at(-1);
   return last !== void 0 && !last.negated && !last.dirOnly && !last.anchored && last.pattern === "*";
 }
 
@@ -7693,11 +7693,11 @@ function emitDoi(value) {
   return DOI_PATTERN.test(doi.toLowerCase()) ? doi : "";
 }
 function normalizeArxiv(value) {
-  const text4 = value.trim();
+  const text5 = value.trim();
   const id = "((?:\\d{4}\\.\\d{4,5})|(?:[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}))";
-  const bare = new RegExp(`^${id}(?:v\\d+)?$`, "i").exec(text4);
-  const labeled = new RegExp(`^arxiv\\s*:\\s*${id}(?:v\\d+)?$`, "i").exec(text4);
-  const url = new RegExp(`^https?://(?:www\\.)?arxiv\\.org/(?:abs|pdf)/${id}(?:v\\d+)?(?:\\.pdf)?(?:[?#].*)?$`, "i").exec(text4);
+  const bare = new RegExp(`^${id}(?:v\\d+)?$`, "i").exec(text5);
+  const labeled = new RegExp(`^arxiv\\s*:\\s*${id}(?:v\\d+)?$`, "i").exec(text5);
+  const url = new RegExp(`^https?://(?:www\\.)?arxiv\\.org/(?:abs|pdf)/${id}(?:v\\d+)?(?:\\.pdf)?(?:[?#].*)?$`, "i").exec(text5);
   const match = bare ?? labeled ?? url;
   return match ? match[1].toLowerCase() : "";
 }
@@ -8537,8 +8537,8 @@ function pickPdf(entry, attachmentKey) {
   if (unknown.length) return { ...none, pdfStatus: "unknown-type", candidates: unknown.map(candidate) };
   return none;
 }
-function singleLine(text4) {
-  return text4.replace(/\s*[\r\n]+\s*/g, " ").trim();
+function singleLine(text5) {
+  return text5.replace(/\s*[\r\n]+\s*/g, " ").trim();
 }
 function wikilink(target) {
   return `[[${target.trim().replace(/^\[\[/, "").replace(/\]\]$/, "").trim()}]]`;
@@ -8721,15 +8721,30 @@ var DEFAULT_SETTINGS = {
   recentReadsDays: 30,
   collectConcurrency: 4,
   // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
-  pickerWaitSeconds: 600
+  pickerWaitSeconds: 600,
   // 0.6 OPT-14: ten minutes
+  // 0.6.1 R17: the 0.6.0 note layout.
+  noteAbstract: true,
+  noteCitation: true,
+  noteMetadata: true,
+  noteLinks: true,
+  noteZoteroNotes: true,
+  noteSynthesis: true,
+  calloutAbstract: "Abstract",
+  calloutCite: "Cite",
+  calloutMetadata: "md",
+  calloutLinks: "LINK",
+  calloutSynthesis: "Synth",
+  synthesisLines: ["**Contribution**::", "**Related**::"],
+  annotationsHeading: "Annotations",
+  noteItemTypeFields: false
 };
 
 // src/citations/scan.ts
 var KEY = "[A-Za-z0-9_][A-Za-z0-9_:.#$%&+?<>~/-]*[A-Za-z0-9_]|[A-Za-z0-9_]";
 var CITATION = new RegExp(`\\[\\[@(${KEY})(?:[|#][^\\]]*)?\\]\\]|(^|[\\s\\[;(,\\-])-?@(${KEY})`, "g");
-function scanCitations(text4) {
-  const lines2 = text4.split(/\r?\n/);
+function scanCitations(text5) {
+  const lines2 = text5.split(/\r?\n/);
   const occurrences = [];
   let fenced = false;
   let frontmatter = lines2[0]?.trim() === "---";
@@ -8822,12 +8837,12 @@ function groupResolvedByLibrary(keys, classified, byId) {
   return { groups: groupEntriesByLibrary(entries), renamed };
 }
 var BIBTEX_ENTRY = /^\s*@[A-Za-z]+\s*\{\s*([^,\s}]+)\s*,/gm;
-function bibtexKeys(text4) {
-  return uniqueInOrder([...text4.matchAll(BIBTEX_ENTRY)].map((match) => match[1]));
+function bibtexKeys(text5) {
+  return uniqueInOrder([...text5.matchAll(BIBTEX_ENTRY)].map((match) => match[1]));
 }
 function mergeExports(format, outputs) {
   if (format !== "csl-json") {
-    const content = outputs.map((text4) => text4.trim()).filter(Boolean).join("\n\n");
+    const content = outputs.map((text5) => text5.trim()).filter(Boolean).join("\n\n");
     return { content: content ? `${content}
 ` : "", exported: bibtexKeys(content), stripped: [] };
   }
@@ -8923,8 +8938,8 @@ function hintFor(status, reason) {
 function uncheckedCause(reason) {
   return UNCHECKED_CAUSES[reason ?? "stale-index"];
 }
-function escapeRegex2(text4) {
-  return text4.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+function escapeRegex2(text5) {
+  return text5.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 function referencesHeadingPattern(headings = DEFAULT_REFERENCES_HEADINGS) {
   const titles = uniqueInOrder(headings.map((title) => title.trim()).filter(Boolean)).map((title) => escapeRegex2(title).replace(/\s+/g, "\\s*"));
@@ -9161,23 +9176,23 @@ function summarize(files, truncated = false) {
   }
   return summary;
 }
-function hubFullCitationLine(text4) {
-  const value = FULL_CITATION_LINE.exec(text4)?.[1]?.trim() ?? "";
+function hubFullCitationLine(text5) {
+  const value = FULL_CITATION_LINE.exec(text5)?.[1]?.trim() ?? "";
   return value && !PLACEHOLDER.test(value) ? value : null;
 }
-function oneLine(text4) {
-  return text4.replace(/\s*\r?\n\s*/g, " ").trim();
+function oneLine(text5) {
+  return text5.replace(/\s*\r?\n\s*/g, " ").trim();
 }
 function referencesLine(citekey, verdict2, bibliography, hubFullCitation) {
   const prefix = `- [@${citekey}]`;
   switch (verdict2?.citeStatus) {
     case "resolved": {
-      const text4 = oneLine(bibliography.get(citekey) ?? "");
-      return text4 ? `${prefix} ${text4}` : `${prefix} (bibliography unavailable)`;
+      const text5 = oneLine(bibliography.get(citekey) ?? "");
+      return text5 ? `${prefix} ${text5}` : `${prefix} (bibliography unavailable)`;
     }
     case "hub-only": {
-      const text4 = oneLine(hubFullCitation.get(citekey) ?? "");
-      if (text4) return `${prefix} ${text4} (provisional)`;
+      const text5 = oneLine(hubFullCitation.get(citekey) ?? "");
+      if (text5) return `${prefix} ${text5} (provisional)`;
       return verdict2.hub ? `${prefix} [[${verdict2.hub.basename}]] (provisional)` : `${prefix} (provisional)`;
     }
     case "raw-only":
@@ -9271,9 +9286,9 @@ function diagnostic(code, message, extra = {}) {
 
 // src/agent/frontmatter-patch.ts
 var KEY_SET = new Set(HUB_WRITABLE_KEYS);
-function readFrontmatterBlock(text4) {
-  const bom = text4.charCodeAt(0) === 65279 ? "\uFEFF" : "";
-  const source = text4.slice(bom.length);
+function readFrontmatterBlock(text5) {
+  const bom = text5.charCodeAt(0) === 65279 ? "\uFEFF" : "";
+  const source = text5.slice(bom.length);
   if (!/^---\r?\n/.test(source)) return source === "---" || source === "---\r" ? "unterminated" : null;
   const eol = source.startsWith("---\r\n") ? "\r\n" : "\n";
   const lines2 = source.slice(3 + eol.length).split("\n");
@@ -9330,8 +9345,8 @@ var S01_DOI = /^- \*\*DOI\*\*:\s*(.+)$/im;
 var CALLOUT_CONFIRMED = /\[!check\][+-]?\s*zotero citekey confirmed/i;
 var CALLOUT_PROVISIONAL = /\[!warning\][+-]?\s*provisional citekey/i;
 var CALLOUT_PINNED = /\[!info\][+-]?\s*citekey pinned/i;
-function classifyMarkerText(text4) {
-  const lower = text4.toLowerCase();
+function classifyMarkerText(text5) {
+  const lower = text5.toLowerCase();
   if (!lower) return null;
   if (/not\s+registered|unregistered/.test(lower)) return "not-registered";
   if (lower.includes("provisional")) return "provisional";
@@ -9773,13 +9788,13 @@ function reconcileNote(note, type, index, vault, opts) {
   if (hub) annotateHub(result, note, opts);
   return result;
 }
-function mentions(text4, citekey) {
+function mentions(text5, citekey) {
   let from = 0;
   for (; ; ) {
-    const at = text4.indexOf(citekey, from);
+    const at = text5.indexOf(citekey, from);
     if (at < 0) return false;
-    const before = at === 0 ? "" : text4.charAt(at - 1);
-    const after = text4.charAt(at + citekey.length);
+    const before = at === 0 ? "" : text5.charAt(at - 1);
+    const after = text5.charAt(at + citekey.length);
     if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) return true;
     from = at + 1;
   }
@@ -9930,6 +9945,81 @@ function isAnnotationColor(value) {
 
 // src/note-writer.ts
 import { createHash as createHash2 } from "crypto";
+
+// src/layout.ts
+var DEFAULT_SYNTHESIS_LINES = ["**Contribution**::", "**Related**::"];
+var DEFAULT_ANNOTATIONS_HEADING = "Annotations";
+var CALLOUT_TYPE = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+var MAX_LINE = 200;
+var MAX_LINES = 20;
+var MAX_HEADING = 100;
+function calloutType(value, fallback) {
+  const text5 = typeof value === "string" ? value.trim() : "";
+  return CALLOUT_TYPE.test(text5) ? text5 : fallback;
+}
+var hasControl = (text5) => [...text5].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127);
+var commentFree = (text5) => !text5.includes("<!--") && !text5.includes("-->");
+function synthesisLineProblem(line) {
+  if (!commentFree(line)) return "Lines cannot contain HTML comment delimiters (<!-- or -->).";
+  if (line.length > MAX_LINE) return `Keep each line under ${MAX_LINE} characters.`;
+  return null;
+}
+function synthesisLines(value) {
+  const lines2 = Array.isArray(value) ? value.filter((line) => typeof line === "string").map((line) => line.trim()).filter((line) => line && !hasControl(line) && synthesisLineProblem(line) === null).slice(0, MAX_LINES) : [];
+  return lines2.length ? lines2 : [...DEFAULT_SYNTHESIS_LINES];
+}
+function annotationsHeadingProblem(value) {
+  const text5 = value.trim().replace(/^#+\s*/, "");
+  if (!value.trim()) return null;
+  if (!text5 || hasControl(text5) || !commentFree(text5)) return "Enter one line of heading text without HTML comment delimiters.";
+  if (text5.length > MAX_HEADING) return `Keep the heading under ${MAX_HEADING} characters.`;
+  return null;
+}
+function annotationsHeading(value) {
+  if (typeof value !== "string" || annotationsHeadingProblem(value) !== null) return DEFAULT_ANNOTATIONS_HEADING;
+  return value.trim().replace(/^#+\s*/, "").replace(/\s+/g, " ") || DEFAULT_ANNOTATIONS_HEADING;
+}
+var THEME_VARIABLES = [
+  ...["yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray"].map((color) => `--cmds-zotero-hl-${color}`),
+  "--cmds-zotero-hl-strength",
+  "--cmds-zotero-state-ok",
+  "--cmds-zotero-state-warning",
+  "--cmds-zotero-state-error",
+  "--cmds-zotero-state-muted",
+  "--cmds-zotero-state-accent",
+  "--cmds-zotero-card-padding",
+  "--cmds-zotero-card-gap",
+  "--cmds-zotero-card-border"
+];
+
+// src/item-fields.ts
+var text2 = (label, field) => ({ label, field, kind: "text" });
+var italic = (label, field) => ({ label, field, kind: "italic" });
+var DOI = { label: "DOI", field: "DOI", kind: "doi" };
+var ISBN = text2("ISBN", "ISBN");
+var PUBLISHER = text2("Publisher", "publisher");
+var PLACE = text2("Location", "place");
+var VOLUME = text2("Volume", "volume");
+var ISSUE = text2("Issue", "issue");
+var PAGES = text2("Pages", "pages");
+var ITEM_TYPE_FIELDS = {
+  journalArticle: [italic("Journal", "publicationTitle"), VOLUME, ISSUE, PAGES, DOI, text2("ISSN", "ISSN")],
+  magazineArticle: [italic("Magazine", "publicationTitle"), VOLUME, ISSUE, PAGES, text2("ISSN", "ISSN")],
+  newspaperArticle: [italic("Newspaper", "publicationTitle"), text2("Section", "section"), PLACE, PAGES],
+  thesis: [text2("University", "university"), text2("Thesis type", "thesisType"), PLACE, text2("Number of pages", "numPages")],
+  report: [text2("Institution", "institution"), text2("Report number", "reportNumber"), text2("Report type", "reportType"), text2("Series", "seriesTitle"), PLACE, PAGES],
+  conferencePaper: [italic("Proceedings", "proceedingsTitle"), text2("Conference", "conferenceName"), PUBLISHER, PLACE, VOLUME, PAGES, DOI, ISBN],
+  book: [PUBLISHER, PLACE, text2("Edition", "edition"), text2("Series", "series"), VOLUME, text2("Number of pages", "numPages"), ISBN],
+  bookSection: [italic("Book", "publicationTitle"), PUBLISHER, PLACE, text2("Edition", "edition"), text2("Series", "series"), VOLUME, PAGES, ISBN],
+  webpage: [text2("Website", "websiteTitle"), text2("Website type", "websiteType")],
+  blogPost: [text2("Blog", "blogTitle"), text2("Website type", "websiteType")],
+  preprint: [text2("Repository", "repository"), text2("Archive ID", "archiveID"), DOI]
+};
+var GENERIC_FIELDS = [italic("Publication", "publicationTitle"), VOLUME, ISSUE, PUBLISHER, PLACE, PAGES];
+var OPTIONAL_FIELDS = [text2("Date", "date"), text2("Short title", "shortTitle"), text2("Language", "language"), text2("Accessed", "accessDate")];
+var RECORD_DATES = [text2("Date added", "dateAdded"), text2("Date modified", "dateModified")];
+
+// src/note-writer.ts
 function readingOrder(entry) {
   return entry.attachments.flatMap((attachment) => {
     const sortable = attachment.annotations.every((annotation) => annotation.sortIndex);
@@ -10080,10 +10170,10 @@ function normalizeHex(value) {
   return rgb ? `#${rgb.map((part) => part.toString(16).padStart(2, "0")).join("")}` : null;
 }
 function parseColorFilter(value) {
-  const text4 = value.trim().toLowerCase();
-  if (isAnnotationColor(text4)) return { kind: "name", name: text4 };
-  if (text4.startsWith("#") || /^[0-9a-f]{6}$/.test(text4)) {
-    const hex = normalizeHex(text4);
+  const text5 = value.trim().toLowerCase();
+  if (isAnnotationColor(text5)) return { kind: "name", name: text5 };
+  if (text5.startsWith("#") || /^[0-9a-f]{6}$/.test(text5)) {
+    const hex = normalizeHex(text5);
     return hex ? { kind: "hex", hex } : null;
   }
   return null;
@@ -10236,14 +10326,14 @@ function citingKeys(entry, entries) {
   return { searched, excluded };
 }
 function excerptAround(line, column, max = EXCERPT_CHARS) {
-  const text4 = line.replace(/\s+$/, "");
-  if (text4.length <= max) return text4.trim();
-  let start = Math.max(0, Math.min(column, text4.length) - Math.floor(max / 3));
-  let end = Math.min(text4.length, start + max);
+  const text5 = line.replace(/\s+$/, "");
+  if (text5.length <= max) return text5.trim();
+  let start = Math.max(0, Math.min(column, text5.length) - Math.floor(max / 3));
+  let end = Math.min(text5.length, start + max);
   start = Math.max(0, end - max);
-  if (start > 0 && /[\udc00-\udfff]/.test(text4.charAt(start))) start++;
-  if (end < text4.length && /[\ud800-\udbff]/.test(text4.charAt(end - 1))) end--;
-  return `${start > 0 ? "\u2026" : ""}${text4.slice(start, end).trim()}${end < text4.length ? "\u2026" : ""}`;
+  if (start > 0 && /[\udc00-\udfff]/.test(text5.charAt(start))) start++;
+  if (end < text5.length && /[\ud800-\udbff]/.test(text5.charAt(end - 1))) end--;
+  return `${start > 0 ? "\u2026" : ""}${text5.slice(start, end).trim()}${end < text5.length ? "\u2026" : ""}`;
 }
 function citingNote(vault, note, keys, headings = DEFAULT_REFERENCES_HEADINGS) {
   let mentioned = false;
@@ -10369,19 +10459,19 @@ function normalizeForMatch(value) {
 function tokenize(value) {
   return normalizeForMatch(value).split(" ").filter(Boolean);
 }
-function snippetAround(text4, index, length) {
+function snippetAround(text5, index, length) {
   const start = Math.max(0, index - 60);
-  const end = Math.min(text4.length, index + length + 60);
-  return `${start > 0 ? "\u2026" : ""}${text4.slice(start, end)}${end < text4.length ? "\u2026" : ""}`;
+  const end = Math.min(text5.length, index + length + 60);
+  return `${start > 0 ? "\u2026" : ""}${text5.slice(start, end)}${end < text5.length ? "\u2026" : ""}`;
 }
 function locateQuote(pages, quote, minScore = 0.6) {
   const needle = normalizeForMatch(quote);
   if (needle.length < 8) throw new Error("Quote must be at least 8 characters after normalization");
   const exact = [];
   const normalized = pages.map((page) => ({ page, text: normalizeForMatch(page.text) }));
-  for (const { page, text: text4 } of normalized) {
-    const index = text4.indexOf(needle);
-    if (index >= 0) exact.push({ page: page.page, pageLabel: page.pageLabel, score: 1, snippet: snippetAround(text4, index, needle.length), method: "exact" });
+  for (const { page, text: text5 } of normalized) {
+    const index = text5.indexOf(needle);
+    if (index >= 0) exact.push({ page: page.page, pageLabel: page.pageLabel, score: 1, snippet: snippetAround(text5, index, needle.length), method: "exact" });
   }
   if (exact.length) return exact;
   for (let i = 0; i + 1 < normalized.length; i++) {
@@ -10392,8 +10482,8 @@ function locateQuote(pages, quote, minScore = 0.6) {
   if (exact.length) return exact;
   const want = tokenize(quote);
   const results = [];
-  for (const { page, text: text4 } of normalized) {
-    const have = text4.split(" ");
+  for (const { page, text: text5 } of normalized) {
+    const have = text5.split(" ");
     if (!have.length) continue;
     const window = Math.min(have.length, Math.max(want.length * 2, 12));
     let best = 0;
@@ -10424,7 +10514,7 @@ function locateQuote(pages, quote, minScore = 0.6) {
     const score = want.length ? best / new Set(want).size : 0;
     if (score >= minScore) {
       const charIndex = have.slice(0, bestAt).join(" ").length;
-      results.push({ page: page.page, pageLabel: page.pageLabel, score: Math.round(score * 100) / 100, snippet: snippetAround(text4, charIndex, Math.min(text4.length - charIndex, needle.length)), method: "tokens" });
+      results.push({ page: page.page, pageLabel: page.pageLabel, score: Math.round(score * 100) / 100, snippet: snippetAround(text5, charIndex, Math.min(text5.length - charIndex, needle.length)), method: "tokens" });
     }
   }
   return results.sort((a, b) => b.score - a.score || a.page - b.page).slice(0, 5);
@@ -10443,14 +10533,14 @@ var CALLOUT_HEAD = /^ {0,3}>[ \t]*\[![A-Za-z][A-Za-z0-9_-]*\]/;
 var QUOTE_LINE = /^ {0,3}>[ \t]?(.*)$/;
 var WRAPPING_QUOTES = [['"', '"'], ["\u201C", "\u201D"], ["'", "'"], ["\u2018", "\u2019"], ["\u300C", "\u300D"], ["\u300E", "\u300F"], ["\xAB", "\xBB"]];
 function stripWrappingQuotes(value) {
-  let text4 = value.trim();
+  let text5 = value.trim();
   for (const [open, close] of WRAPPING_QUOTES) {
-    if (text4.length >= 2 && text4.startsWith(open) && text4.endsWith(close)) {
-      text4 = text4.slice(open.length, text4.length - close.length).trim();
+    if (text5.length >= 2 && text5.startsWith(open) && text5.endsWith(close)) {
+      text5 = text5.slice(open.length, text5.length - close.length).trim();
       break;
     }
   }
-  return text4;
+  return text5;
 }
 function extractQuoteCallouts(markdown) {
   const lines2 = markdown.split(/\r?\n/);
@@ -10507,8 +10597,8 @@ import { createHash as createHash4 } from "node:crypto";
 
 // src/pdf/text-layer.ts
 var MIN_PAGE_BODY_CHARS = 20;
-function lines(text4) {
-  return text4.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+function lines(text5) {
+  return text5.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
 }
 function repeatKey(line) {
   return line.replace(/\d+/g, "#").replace(/[^\p{L}#]+/gu, " ").trim().toLowerCase();
@@ -10645,8 +10735,8 @@ async function identityAction(host, request) {
   let bbtError = null;
   if (!request.noBibliography && entry && host.bibliography) {
     try {
-      const text4 = await host.bibliography(entry, style);
-      if (text4) bibliography = { style, text: text4 };
+      const text5 = await host.bibliography(entry, style);
+      if (text5) bibliography = { style, text: text5 };
       else bibliographyReason = "style-error";
     } catch (error) {
       bibliographyReason = "bbt-unreachable";
@@ -10759,8 +10849,8 @@ async function citesAction(host, request) {
         const entry = byId.get(verdict2.entryId);
         if (entry) {
           try {
-            const text4 = await host.bibliography(entry, style);
-            if (text4) bibliography.set(key, text4);
+            const text5 = await host.bibliography(entry, style);
+            if (text5) bibliography.set(key, text5);
           } catch (error) {
             referencesReason = "bbt-unreachable";
             bbtError = bbtErrorPayload(error) ?? bbtError;
@@ -11354,7 +11444,10 @@ async function runAction(host, action, request = {}) {
 function integer(value, fallback, min, max) {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
-function text3(value, fallback) {
+function flag2(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+function text4(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 function defaultCollectConcurrency(concurrency) {
@@ -11364,16 +11457,16 @@ function normalizeSettings(raw) {
   const data = raw && typeof raw === "object" ? raw : {};
   const concurrency = integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8);
   return {
-    bbtEndpoint: text3(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
-    zoteroIndexPath: text3(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
-    caywFormat: text3(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
+    bbtEndpoint: text4(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
+    zoteroIndexPath: text4(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
+    caywFormat: text4(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
     requestTimeoutMs: integer(data.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs, 1e3, 18e4),
     attachmentTimeoutMs: integer(data.attachmentTimeoutMs, DEFAULT_SETTINGS.attachmentTimeoutMs, 1e3, 18e4),
     concurrency,
     indexMaxAgeMinutes: integer(data.indexMaxAgeMinutes, DEFAULT_SETTINGS.indexMaxAgeMinutes, 1, 10080),
-    outputFolder: text3(data.outputFolder, DEFAULT_SETTINGS.outputFolder),
-    imageFolder: text3(data.imageFolder, DEFAULT_SETTINGS.imageFolder),
-    bibliographyStyle: text3(data.bibliographyStyle, DEFAULT_SETTINGS.bibliographyStyle),
+    outputFolder: text4(data.outputFolder, DEFAULT_SETTINGS.outputFolder),
+    imageFolder: text4(data.imageFolder, DEFAULT_SETTINGS.imageFolder),
+    bibliographyStyle: text4(data.bibliographyStyle, DEFAULT_SETTINGS.bibliographyStyle),
     peerVaults: Array.isArray(data.peerVaults) ? data.peerVaults.filter((v) => {
       if (!v || typeof v !== "object") return false;
       const peer = v;
@@ -11388,8 +11481,23 @@ function normalizeSettings(raw) {
     recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
     collectConcurrency: integer(data.collectConcurrency, data.concurrency === void 0 ? DEFAULT_SETTINGS.collectConcurrency : defaultCollectConcurrency(concurrency), 1, 8),
     // 0.6 OPT-10
-    pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800)
+    pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800),
     // 0.6 OPT-14
+    // 0.6.1 R17: note layout.
+    noteAbstract: flag2(data.noteAbstract, DEFAULT_SETTINGS.noteAbstract),
+    noteCitation: flag2(data.noteCitation, DEFAULT_SETTINGS.noteCitation),
+    noteMetadata: flag2(data.noteMetadata, DEFAULT_SETTINGS.noteMetadata),
+    noteLinks: flag2(data.noteLinks, DEFAULT_SETTINGS.noteLinks),
+    noteZoteroNotes: flag2(data.noteZoteroNotes, DEFAULT_SETTINGS.noteZoteroNotes),
+    noteSynthesis: flag2(data.noteSynthesis, DEFAULT_SETTINGS.noteSynthesis),
+    calloutAbstract: calloutType(data.calloutAbstract, DEFAULT_SETTINGS.calloutAbstract),
+    calloutCite: calloutType(data.calloutCite, DEFAULT_SETTINGS.calloutCite),
+    calloutMetadata: calloutType(data.calloutMetadata, DEFAULT_SETTINGS.calloutMetadata),
+    calloutLinks: calloutType(data.calloutLinks, DEFAULT_SETTINGS.calloutLinks),
+    calloutSynthesis: calloutType(data.calloutSynthesis, DEFAULT_SETTINGS.calloutSynthesis),
+    synthesisLines: synthesisLines(data.synthesisLines),
+    annotationsHeading: annotationsHeading(data.annotationsHeading),
+    noteItemTypeFields: flag2(data.noteItemTypeFields, DEFAULT_SETTINGS.noteItemTypeFields)
   };
 }
 function normalizeTagList(value) {
@@ -11478,8 +11586,8 @@ async function readLocalFile(path, opts) {
 }
 
 // src/frontmatter-read.ts
-function parseNoteText(text4, parse) {
-  const source = text4.charCodeAt(0) === 65279 ? text4.slice(1) : text4;
+function parseNoteText(text5, parse) {
+  const source = text5.charCodeAt(0) === 65279 ? text5.slice(1) : text5;
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source);
   if (!match) return { frontmatter: null, frontmatterParse: /^---(?:\r?\n|$)/.test(source) ? "error" : "ok", body: source };
   const body = source.slice(match[0].length);
@@ -11573,8 +11681,8 @@ async function locateVault(name, explicitPath, home = homedir()) {
   if (candidates.length !== 1) return { location: null, ambiguous: candidates.length > 1, candidates };
   return { location: { name, path: await fs3.realpath(candidates[0]) }, ambiguous: false, candidates };
 }
-function parseFrontmatter(text4) {
-  return parseNoteText(text4, import_yaml.parse);
+function parseFrontmatter(text5) {
+  return parseNoteText(text5, import_yaml.parse);
 }
 var FsVaultReader = class {
   /** `limit` is the note cap of one scan (MAX_LISTED_NOTES); tests lower it. */
@@ -11833,15 +11941,15 @@ async function readIndex(root, path) {
     const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
     return { index: null, present: false, failure: { reason: missing ? "index-missing" : "path-outside-vault", message: missing ? `Index file is absent: ${path}` : error instanceof Error ? error.message : "Invalid index path." } };
   }
-  let text4;
+  let text5;
   try {
-    text4 = Buffer.from((await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 1, magic: () => true })).bytes).toString("utf8");
+    text5 = Buffer.from((await readLocalFile(full, { maxBytes: 64 * 1024 * 1024, minBytes: 1, magic: () => true })).bytes).toString("utf8");
   } catch (error) {
     const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
     return { index: null, present: code !== "ENOENT", failure: { reason: code === "ENOENT" ? "index-missing" : "index-invalid", message: code === "ENOENT" ? `Index file is absent: ${path}` : error instanceof Error ? error.message : "Index cannot be read." } };
   }
   try {
-    const value = JSON.parse(text4);
+    const value = JSON.parse(text5);
     if (!validateIndex(value)) return { index: null, present: true, failure: { reason: "index-invalid", message: `Index file is present but invalid: ${path}` } };
     return { index: value, present: true, failure: null };
   } catch {
