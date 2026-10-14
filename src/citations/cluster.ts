@@ -60,7 +60,8 @@ const TERM = LOCATOR_TERMS.map(escape).join("|");
 /** One locator value: a number or roman numeral (optionally with a letter), a range, and comma-separated further numbers. */
 const VALUE = "[0-9]+[a-z]?|[ivxlcdmIVXLCDM]+";
 const LOCATOR_VALUE = `(?:${VALUE})(?:\\s*[-–—]\\s*(?:${VALUE}))?(?:\\s*,\\s*[0-9]+[a-z]?(?:\\s*[-–—]\\s*[0-9]+[a-z]?)?)*`;
-const LABELLED = new RegExp(`^\\s*,?\\s*(${TERM})\\s*(${LOCATOR_VALUE})(?![\\p{L}\\p{N}])`, "u");
+// A spelled-out term needs a space before its value (`page 3`, not `page3`); an abbreviation or symbol may touch it (`p.3`, `§2`).
+const LABELLED = new RegExp(`^\\s*,?\\s*(${TERM})(?:(?<=[.§¶])\\s*|\\s+)(${LOCATOR_VALUE})(?![\\p{L}\\p{N}])`, "u");
 const UNLABELLED = new RegExp(`^\\s*,\\s*([0-9]+(?:\\s*[-–—]\\s*[0-9]+)?(?:\\s*,\\s*[0-9]+(?:\\s*[-–—]\\s*[0-9]+)?)*)(?![\\p{L}\\p{N}])`, "u");
 
 /** Splits the text after a key into a locator and the rest; `rest` keeps its leading comma or space as written. */

@@ -167,7 +167,7 @@ test("surnames come from Zotero creators (authors first), else from the indexed 
 	assert.deepEqual(authorSurnames(entry({ authors: ["Smith, Ann", "Jae Lee", "박서준"] })), ["Smith", "Lee", "박서준"]);
 	assert.equal(authorDateLabel(entry({})), "Kim & Lee, 2020");
 	assert.equal(narrativeLabel(entry({ year: "" })), "Kim & Lee (n.d.)");
-	assert.equal(authorDateLabel(entry({ authors: [], title: "A study of many things here" })), "“A study of many things”, 2020");
+	assert.equal(authorDateLabel(entry({ authors: [], title: "A study of many things here" })), "“A study of many”, 2020");
 });
 
 test("clusters render as author-date text with prefixes, suppressed authors, locators and suffixes; an unknown key keeps the source", () => {

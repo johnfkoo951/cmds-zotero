@@ -25,7 +25,8 @@ export class TFile extends TAbstractFile {}
 export class TFolder extends TAbstractFile {}
 export class FileSystemAdapter {}
 export class Notice { hide() {} }
-export class EditorSuggest extends Base {}
+export class EditorSuggest extends Base { scope = { register() {} }; setInstructions() {} }
+export class Keymap { static isModifier(event, modifier) { return modifier === "Mod" && !!(event.metaKey || event.ctrlKey); } }
 export class FuzzySuggestModal extends Base {
 	setPlaceholder() {} setInstructions() {}
 	// Stands in for Obsidian's fuzzy search: every word of the query must occur in the item text.
