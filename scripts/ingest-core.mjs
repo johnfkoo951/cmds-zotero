@@ -8721,8 +8721,11 @@ var DEFAULT_SETTINGS = {
   recentReadsDays: 30,
   collectConcurrency: 4,
   // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
-  pickerWaitSeconds: 600
+  pickerWaitSeconds: 600,
   // 0.6 OPT-14: ten minutes
+  followZoteroSelection: "off",
+  // 0.6.1 follow-zotero-selection: opt-in
+  followZoteroSelectionSeconds: 10
 };
 
 // src/citations/scan.ts
@@ -11388,8 +11391,11 @@ function normalizeSettings(raw) {
     recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
     collectConcurrency: integer(data.collectConcurrency, data.concurrency === void 0 ? DEFAULT_SETTINGS.collectConcurrency : defaultCollectConcurrency(concurrency), 1, 8),
     // 0.6 OPT-10
-    pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800)
+    pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800),
     // 0.6 OPT-14
+    followZoteroSelection: ["off", "focus", "interval"].find((mode) => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection,
+    // 0.6.1
+    followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30)
   };
 }
 function normalizeTagList(value) {
