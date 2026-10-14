@@ -83,17 +83,41 @@ function termOf(field: QueryField, value: string, negate: boolean): QueryTerm | 
  * text, so the list does not empty mid-word; a known field whose value cannot be read (`year:soon`, `has:video`) stays text.
  */
 export function parseQuery(input: string): ParsedQuery {
+	const { text, terms } = parse(input);
+	return { text, terms };
+}
+
+function parse(input: string): ParsedQuery & { dropped: number } {
 	const terms: QueryTerm[] = [];
 	const text: string[] = [];
+	let dropped = 0;
 	for (const token of tokenize(input)) {
 		const match = /^(-?)([A-Za-z]+):([\s\S]*)$/.exec(token.raw);
 		const field = match ? FIELDS[match[2].toLowerCase()] : undefined;
 		if (!match || !field) { if (token.raw) text.push(token.raw); continue; }
-		if (!match[3].trim()) continue;
+		if (!match[3].trim()) { dropped++; continue; }
 		const term = termOf(field, match[3], match[1] === "-");
 		if (term) terms.push(term); else text.push(token.raw);
 	}
-	return { text: text.join(" "), terms };
+	return { text: text.join(" "), terms, dropped };
+}
+
+/** What a picker ranks: `fielded` is false only when the parser consumed nothing, and then `text` is the raw query (the unchanged path). */
+export interface RankingQuery {
+	terms: QueryTerm[];
+	text: string;
+	fielded: boolean;
+}
+
+/**
+ * The picker and the `[@` suggester's plan for one query. A query with a fielded term, or with an empty known field still
+ * being typed (`tag:`, `smith col:`), is fielded: its terms filter and only the remaining free text is ranked, so `tag:`
+ * ranks like an empty query and `smith tag:` like `smith`. Any other query keeps the raw text for the unchanged ranking.
+ */
+export function rankingQuery(input: string): RankingQuery {
+	const parsed = parse(input);
+	const fielded = parsed.terms.length > 0 || parsed.dropped > 0;
+	return { terms: parsed.terms, text: fielded ? parsed.text : input, fielded };
 }
 
 /** What the predicates need beyond the entry: library names and (only for `has:note`) whether a literature note exists. */

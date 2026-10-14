@@ -1,7 +1,7 @@
 // 0.6.1 R18: the fielded picker query (pure parser and predicates over synthetic index entries).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterEntries, matchesQuery, needsNotes, parseQuery, queryContext } from "../src/search/query";
+import { filterEntries, matchesQuery, needsNotes, parseQuery, queryContext, rankingQuery } from "../src/search/query";
 import { completionRows, rankCompletions } from "../src/citations/score";
 import { entry } from "./agent-fixtures";
 import type { ZoteroIndex } from "../src/types";
@@ -70,4 +70,20 @@ test("plain-text completion ranking is unchanged; a field prefix narrows rows be
 	const parsed = parseQuery("col:Teaching");
 	assert.deepEqual(rankCompletions(rows.filter(row => matchesQuery(row.entry, parsed.terms, CONTEXT)), parsed.text).map(candidate => candidate.citekey), ["doe2021"]);
 	assert.deepEqual(filterEntries(ALL, [], CONTEXT), ALL);
+});
+
+test("rankingQuery: an empty field still being typed ranks like the query without it; plain queries keep the raw text", () => {
+	assert.deepEqual(rankingQuery("tag:"), { terms: [], text: "", fielded: true });
+	assert.deepEqual(rankingQuery("smith tag:"), { terms: [], text: "smith", fielded: true });
+	assert.deepEqual(rankingQuery("-col: smith"), { terms: [], text: "smith", fielded: true });
+	assert.deepEqual(rankingQuery("smith  jones"), { terms: [], text: "smith  jones", fielded: false }, "no field syntax: the raw query, unchanged");
+	assert.deepEqual(rankingQuery("foo:bar"), { terms: [], text: "foo:bar", fielded: false }, "an unknown field is plain text");
+	assert.deepEqual(rankingQuery("year:soon"), { terms: [], text: "year:soon", fielded: false }, "an unreadable value stays text");
+	assert.equal(rankingQuery("tag:draft deep").fielded, true);
+	assert.equal(rankingQuery("tag:draft deep").text, "deep");
+	const rows = completionRows(ALL);
+	const ranked = (query: string): string[] => { const plan = rankingQuery(query); const filtered = plan.terms.length ? rows.filter(row => matchesQuery(row.entry, plan.terms, CONTEXT)) : rows; return rankCompletions(filtered, plan.fielded ? plan.text : query).map(candidate => candidate.citekey); };
+	assert.deepEqual(ranked("tag:"), ranked(""));
+	assert.deepEqual(ranked("doe tag:"), ranked("doe"));
+	assert.deepEqual(ranked("doe tag:"), ["doe2021"]);
 });

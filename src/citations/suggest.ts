@@ -3,7 +3,7 @@ import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
 import { indexDerived } from "../index-derived";
 import { rankCompletions } from "./score";
-import { matchesQuery, parseQuery, queryContext } from "../search/query";
+import { matchesQuery, queryContext, rankingQuery } from "../search/query";
 
 const KEY_CHARS = /^[A-Za-z0-9_:.+/-]*$/;
 
@@ -35,10 +35,11 @@ export class CitekeySuggest extends EditorSuggest<ZoteroIndexEntry> {
 		// 0.6 PERF-04: the lower-cased rows are prepared once per index generation; a keystroke is one pass over them.
 		const rows = indexDerived(entries).completionRows;
 		// 0.6.1 R18: a known field prefix (`[@tag:method`, `[@col:Thesis/Methods`) narrows the rows first; `has:note` is not offered here.
-		const parsed = parseQuery(context.query);
-		if (!parsed.terms.length) return rankCompletions(rows, context.query);
+		const plan = rankingQuery(context.query);
+		if (!plan.fielded) return rankCompletions(rows, context.query);
+		if (!plan.terms.length) return rankCompletions(rows, plan.text); // `[@tag:` while typing: the empty field is ignored
 		const query = queryContext(this.plugin.lastIndex);
-		return rankCompletions(rows.filter(row => matchesQuery(row.entry, parsed.terms, query)), parsed.text);
+		return rankCompletions(rows.filter(row => matchesQuery(row.entry, plan.terms, query)), plan.text);
 	}
 
 	renderSuggestion(entry: ZoteroIndexEntry, el: HTMLElement): void {

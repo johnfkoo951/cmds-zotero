@@ -141,6 +141,6 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		yaml: { parse: parseYaml, stringify: stringifyYaml },
 	}, result);
 	host.yaml = { parse: parseYaml, stringify: stringifyYaml }; // 0.5 R8: informational yamlNormalisable on reconcile rows
-	host.environmentFacts = () => environmentFacts(plugin); // 0.6.1 diagnostics --env (read-only)
+	host.environmentFacts = () => environmentFacts(plugin, index); // 0.6.1 diagnostics --env: the peeked snapshot, never a publication
 	return host;
 }

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { transportReasonOf } from "../api/transport";
 import { doctorChecks, doctorReport, type DoctorFacts } from "../doctor/checks";
 import type CMDSZoteroPlugin from "../main";
+import type { ZoteroIndex } from "../types";
 import { DoctorModal } from "../modals/doctor";
 
 /** Frontmatter keys Better Notes writes into the Markdown files it syncs; a note carrying them belongs to Better Notes. */
@@ -11,13 +12,14 @@ const BETTER_NOTES_KEYS: readonly string[] = ["$libraryID", "$itemKey"];
 
 /**
  * 0.6.1 doctor: the facts only Obsidian can check. Read-only: pdf.js is loaded (as PDF text extraction does), peer note
- * maps are read, and the output folder is listed from the metadata cache; nothing is written or changed.
+ * maps are read, and the output folder is listed from the metadata cache; nothing is written or changed. `index` is the
+ * snapshot the caller already holds (the agent host's peek, or the Diagnose setup view's): this function never loads or
+ * publishes one, so `diagnostics --env` cannot publish the note map and reads the same generation as the rest of its payload.
  */
-export async function environmentFacts(plugin: CMDSZoteroPlugin): Promise<Pick<DoctorFacts, "pdfjs" | "peers" | "outputFolder">> {
+export async function environmentFacts(plugin: CMDSZoteroPlugin, index: ZoteroIndex | null): Promise<Pick<DoctorFacts, "pdfjs" | "peers" | "outputFolder">> {
 	let pdfjs: boolean;
 	try { pdfjs = Boolean(await loadPdfJs()); } catch { pdfjs = false; }
 	const folder = plugin.settings.outputFolder.trim().replace(/^\/+|\/+$/g, "");
-	const index = plugin.lastIndex ?? await plugin.savedIndex();
 	const claimed = new Set<string>();
 	if (index) for (const files of plugin.links.localFilesByEntry(index).values()) for (const file of files) claimed.add(file.path);
 	const inFolder = folder ? plugin.app.vault.getMarkdownFiles().filter(file => file.path.startsWith(`${folder}/`)).sort((a, b) => a.path.localeCompare(b.path)) : [];
@@ -48,7 +50,7 @@ export async function gatherFacts(plugin: CMDSZoteroPlugin): Promise<DoctorFacts
 		legacyPluginEnabled: plugin.legacyPluginEnabled(),
 		index: { path: plugin.settings.zoteroIndexPath, count: index?.count ?? null, ageMinutes: plugin.index.ageMinutes(index, now), stale: plugin.index.isStale(index, now), maxAgeMinutes: plugin.settings.indexMaxAgeMinutes, complete: index?.complete ?? null },
 		git: root ? await plugin.gitProbe(root, plugin.settings.zoteroIndexPath).catch(() => null) : null,
-		...await environmentFacts(plugin),
+		...await environmentFacts(plugin, index),
 	};
 }
 
