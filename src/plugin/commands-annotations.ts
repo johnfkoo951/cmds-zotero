@@ -34,7 +34,7 @@ export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 	// 0.6.1 annotation-search-insert: the saved snapshot's annotations, prepared once per index generation; never calls BBT.
 	plugin.addCommand({ id: "search-annotations", name: "Search annotations", callback: () => {
 		const entries = plugin.cachedEntries();
-		const rows = preparedSearchRows(entries);
+		const rows = preparedSearchRows(entries, plugin.settings.excludedTags);
 		new AnnotationSearchModal(plugin.app, rows, searchEmptyText(plugin.indexLoaded(), rows.length), sourceLabel(null, plugin.cachedIndexAgeMinutes()), (row, action) => {
 			void plugin.run(() => chooseSearchRow(plugin, row, action));
 		}).open();

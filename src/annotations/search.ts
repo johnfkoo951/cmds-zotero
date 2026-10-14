@@ -5,7 +5,9 @@
  * decomposed form matches. Pure: no `obsidian` import.
  */
 import type { Annotation, Attachment, CmdsZoteroSettings, ZoteroIndexEntry } from "../types";
-import { annotationBody, annotationURI, readingOrder } from "../note-writer";
+import { annotationBody, annotationURI, noteInline, readingOrder, renderedAnnotation } from "../note-writer";
+import { userOwned } from "../fragments";
+import { richTextPlain } from "./rich-text";
 import { markdownLink } from "../uris";
 import { colorName } from "./colors";
 import { citationFor, citationPage } from "./card-actions";
@@ -26,30 +28,34 @@ export interface AnnotationSearchRow {
 const normalized = (value: string): string => value.normalize("NFC").toLowerCase();
 
 /** The row for one annotation. */
-export function annotationSearchRow(entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation): AnnotationSearchRow {
+export function annotationSearchRow(entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation, excludedTags: readonly string[] = []): AnnotationSearchRow {
+	const excluded = new Set(excludedTags.map(tag => tag.toLowerCase()));
 	const color = colorName(annotation.color);
 	const type = (annotation.type || "highlight").toLowerCase();
-	const snippet = (annotation.text || annotation.comment || (annotation.imagePath || type === "image" ? "Image annotation" : type === "ink" ? "Ink annotation" : "Empty annotation")).replace(/\s+/g, " ").trim();
+	const text = richTextPlain(annotation.text);
+	const comment = richTextPlain(annotation.comment);
+	const snippet = (text || comment || (annotation.imagePath || type === "image" ? "Image annotation" : type === "ink" ? "Ink annotation" : "Empty annotation")).replace(/\s+/g, " ").trim();
 	const label = [`p. ${citationPage(annotation)}`, `@${entry.citekey}`, ...(color ? [color] : [])].join(" · ");
 	return {
 		entry, attachment, annotation, snippet, label,
-		primary: normalized(`${annotation.text} ${annotation.comment} ${annotation.tags.join(" ")}`),
+		primary: normalized(`${text} ${comment} ${annotation.tags.filter(tag => !excluded.has(tag.trim().toLowerCase())).join(" ")}`),
 		secondary: normalized(`${annotation.pageLabel} ${color ?? ""} ${type} @${entry.citekey} ${entry.citekey} ${entry.title}`),
 	};
 }
 
 /** Every annotation of every entry, entry by entry in reading order. */
-export function annotationSearchRows(entries: readonly ZoteroIndexEntry[]): AnnotationSearchRow[] {
-	return entries.flatMap(entry => readingOrder(entry).map(({ attachment, annotation }) => annotationSearchRow(entry, attachment, annotation)));
+export function annotationSearchRows(entries: readonly ZoteroIndexEntry[], excludedTags: readonly string[] = []): AnnotationSearchRow[] {
+	return entries.flatMap(entry => readingOrder(entry).map(({ attachment, annotation }) => annotationSearchRow(entry, attachment, annotation, excludedTags)));
 }
 
-const prepared = new WeakMap<readonly ZoteroIndexEntry[], AnnotationSearchRow[]>();
+const prepared = new WeakMap<readonly ZoteroIndexEntry[], { excluded: string; rows: AnnotationSearchRow[] }>();
 
 /** The rows of one index generation (its entries array), built on first use and reused after that. */
-export function preparedSearchRows(entries: readonly ZoteroIndexEntry[]): AnnotationSearchRow[] {
-	let rows = prepared.get(entries);
-	if (!rows) { rows = annotationSearchRows(entries); prepared.set(entries, rows); }
-	return rows;
+export function preparedSearchRows(entries: readonly ZoteroIndexEntry[], excludedTags: readonly string[] = []): AnnotationSearchRow[] {
+	const excluded = excludedTags.join("\n");
+	let cached = prepared.get(entries);
+	if (!cached || cached.excluded !== excluded) { cached = { excluded, rows: annotationSearchRows(entries, excludedTags) }; prepared.set(entries, cached); }
+	return cached.rows;
 }
 
 /**
@@ -92,6 +98,11 @@ export function linkOnly(annotation: Annotation): boolean {
 
 /** The text inserting `annotation` writes in `mode`. `image` is the vault path of its copied image, when there is one. */
 export function annotationInsertText(mode: InsertMode, annotation: Annotation, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings, image?: string): string {
+	// The text is the user's once inserted: what the note renders for this annotation, with marker-like comments defused.
+	return userOwned(insertText(mode, renderedAnnotation(entry, annotation, settings), entry, settings, image));
+}
+
+function insertText(mode: InsertMode, annotation: Annotation, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings, image?: string): string {
 	const link = markdownLink(`${entry.title} — p. ${citationPage(annotation)}`, annotationURI(annotation, entry));
 	if (mode === "link") return link;
 	if (mode === "callout") {
@@ -99,6 +110,7 @@ export function annotationInsertText(mode: InsertMode, annotation: Annotation, e
 		return annotationBody(annotation, annotation.imagePath ? image : undefined, entry, settings);
 	}
 	if (linkOnly(annotation)) return link;
-	const lines = annotation.text.replace(/\r\n?/g, "\n").split("\n").map(line => line.trim()).filter(Boolean);
+	// Escaped like the note's own annotation text (Zotero rich text only when the layout reads it).
+	const lines = annotation.text.replace(/\r\n?/g, "\n").split("\n").map(line => noteInline(line, settings.noteRichText === true)).filter(Boolean);
 	return [...lines.map(line => `> ${line}`), `> — ${citationFor(annotation, entry, { link: true })}`].join("\n");
 }

@@ -207,6 +207,19 @@ export function annotationsInOrder(entry: ZoteroIndexEntry, settings: Partial<La
 }
 
 /**
+ * The annotation as the note renders it (0.6.1): with "Join continued highlights", a chain head or any of its `+`
+ * continuations is the joined chain the head's block shows; otherwise the annotation itself. Every insert, copy and drag
+ * of a single annotation goes through this, so it never differs from the note.
+ */
+export function renderedAnnotation(entry: ZoteroIndexEntry, annotation: Annotation, settings: Partial<LayoutSettings>): Annotation {
+	if (!layoutOf(settings).joinContinuations) return annotation;
+	for (const joined of joinContinuations(readingOrder(entry))) {
+		if (joined.annotation.key === annotation.key || joined.continuations.includes(annotation.key)) return joined.annotation;
+	}
+	return annotation;
+}
+
+/**
  * Section ID of a joined continuation's chain head, per continuation ID: with "Join continued highlights" (0.6.1) a `+`
  * continuation renders inside its head's block and never gets a block of its own.
  */
@@ -232,7 +245,7 @@ export function richInline(value: unknown, italic = false): string {
 }
 
 /** Note text: `richInline` when the layout reads Zotero rich text (0.6.1, off by default), else the 0.6.0 `inline` text. */
-function noteInline(value: unknown, rich: boolean, italic = false): string { return rich ? richInline(value, italic) : inline(value); }
+export function noteInline(value: unknown, rich: boolean, italic = false): string { return rich ? richInline(value, italic) : inline(value); }
 
 /**
  * Strict DOI: no whitespace and none of the characters that would form Markdown links, emphasis, code or table cells

@@ -7,6 +7,7 @@
  */
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../types";
 import { ANNOTATION_COLORS, colorName } from "./colors";
+import { richTextPlain } from "./rich-text";
 
 /** An attachment's annotations in page order; annotations on one page keep their indexed order (the sort is stable). */
 export function annotationsByPage(attachment: Pick<Attachment, "annotations">): Annotation[] {
@@ -16,7 +17,7 @@ export function annotationsByPage(attachment: Pick<Attachment, "annotations">): 
 /** The text the filter matches: text, comment, tags, page label and page number, lower-cased. */
 export function annotationHaystack(annotation: Pick<Annotation, "text" | "comment" | "tags" | "pageLabel" | "page">): string {
 	// NFC: Korean (and other composed) text matches whether Zotero or the keyboard produced composed or decomposed forms.
-	return `${annotation.text} ${annotation.comment} ${annotation.tags.join(" ")} ${annotation.pageLabel} ${annotation.page}`.normalize("NFC").toLowerCase();
+	return `${richTextPlain(annotation.text)} ${richTextPlain(annotation.comment)} ${annotation.tags.join(" ")} ${annotation.pageLabel} ${annotation.page}`.normalize("NFC").toLowerCase();
 }
 
 /** The filter box value as matched: trimmed and lower-cased; an empty query shows every annotation. */
@@ -110,12 +111,16 @@ function readingRanks(attachment: Attachment): number[] {
 }
 
 /** Every annotation of the entry as a row, attachments as listed and annotations as indexed. */
-export function annotationRows(entry: Pick<ZoteroIndexEntry, "attachments">): AnnotationRow[] {
+export function annotationRows(entry: Pick<ZoteroIndexEntry, "attachments">, excludedTags: readonly string[] = []): AnnotationRow[] {
+	// Excluded tags (settings) are left out of rows as they are left out of the note and the card: no facet, no match.
+	const excluded = new Set(excludedTags.map(tag => tag.toLowerCase()));
+	const shown = (annotation: Annotation): Annotation => excluded.size && annotation.tags.some(tag => excluded.has(tag.trim().toLowerCase())) ? { ...annotation, tags: annotation.tags.filter(tag => !excluded.has(tag.trim().toLowerCase())) } : annotation;
 	const rows: AnnotationRow[] = [];
 	let offset = 0;
 	entry.attachments.forEach((attachment, attachmentIndex) => {
 		const ranks = readingRanks(attachment);
-		attachment.annotations.forEach((annotation, position) => {
+		attachment.annotations.forEach((original, position) => {
+			const annotation = shown(original);
 			rows.push({ attachment, annotation, attachmentIndex, position, readingRank: offset + ranks[position], color: colorName(annotation.color) ?? NO_COLOR, type: (annotation.type || "highlight").toLowerCase(), haystack: annotationHaystack(annotation) });
 		});
 		offset += attachment.annotations.length;

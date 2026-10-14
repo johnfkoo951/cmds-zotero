@@ -3,7 +3,8 @@ import type CMDSZoteroPlugin from "../main";
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../types";
 import { noteIdentity } from "../note-aliases";
 import { indexDerived } from "../index-derived";
-import { annotationBody, annotationURI, filteredTags, IMAGE_NOT_CACHED, readingOrder } from "../note-writer";
+import { annotationBody, annotationURI, filteredTags, IMAGE_NOT_CACHED, readingOrder, renderedAnnotation } from "../note-writer";
+import { userOwned } from "../fragments";
 import { joinContinuations } from "../annotations/join";
 import { richTextPlain } from "../annotations/rich-text";
 import { colorName } from "../annotations/colors";
@@ -358,7 +359,7 @@ export class AnnotationsView extends ItemView {
 		header.createDiv({ cls: "cmds-zotero-sidebar-title", text: this.entry.title });
 		header.createDiv({ cls: "setting-item-description", text: `@${this.entry.citekey} · ${this.entry.attachments.reduce((n, a) => n + a.annotations.length, 0)} annotations` });
 		header.createDiv({ cls: "setting-item-description cmds-zotero-annotation-source", text: sourceLabel(live?.at ?? null, this.plugin.cachedIndexAgeMinutes()) });
-		const rows = annotationRows(this.entry);
+		const rows = annotationRows(this.entry, this.plugin.settings.excludedTags);
 		if (rows.length) this.renderFacetBar(header, rows, search);
 		this.renderList(list, rows);
 	}
@@ -505,7 +506,7 @@ export class AnnotationsView extends ItemView {
 		this.action(actions, "external-link", "Open in Zotero PDF reader", () => { window.open(uri); });
 		this.action(actions, "text-cursor-input", "Insert at cursor", () => this.insert(entry, attachment, annotation));
 		this.action(actions, "link", "Copy annotation link", () => this.plugin.copyLink(`${entry.title} — p. ${annotation.pageLabel || annotation.page}`, uri));
-		this.action(actions, "clipboard-copy", "Copy annotation text", async () => { await navigator.clipboard.writeText(annotation.text || annotation.comment); new Notice("Annotation text copied."); });
+		this.action(actions, "clipboard-copy", "Copy annotation text", async () => { await navigator.clipboard.writeText(richTextPlain(annotation.text) || richTextPlain(annotation.comment)); new Notice("Annotation text copied."); });
 		const more = actions.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "More actions" } });
 		setIcon(more, "more-horizontal");
 		more.addEventListener("click", (event: MouseEvent) => { focus(); this.cardMenu(entry, attachment, annotation).showAtMouseEvent(event); });
@@ -539,8 +540,8 @@ export class AnnotationsView extends ItemView {
 	private async runCardAction(id: CardActionId, entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation): Promise<void> {
 		const copy = async (text: string, what: string): Promise<void> => { await navigator.clipboard.writeText(text); new Notice(`${what} copied.`); };
 		switch (id) {
-			case "copy-citation": return copy(citationFor(annotation, entry), "Citation");
-			case "copy-citation-link": return copy(citationFor(annotation, entry, { link: true }), "Citation");
+			case "copy-citation": return copy(citationFor(renderedAnnotation(entry, annotation, this.plugin.settings), entry), "Citation");
+			case "copy-citation-link": return copy(citationFor(renderedAnnotation(entry, annotation, this.plugin.settings), entry, { link: true }), "Citation");
 			case "copy-callout": return copy(this.callout(entry, annotation), "Callout");
 			case "copy-bibliography": {
 				const text = await this.plugin.bibliographyFor(entry);
@@ -556,7 +557,9 @@ export class AnnotationsView extends ItemView {
 
 	/** The callout a copy or a plain drop carries; image annotations are linked here (Insert at cursor and the plugin's drop copy the image). */
 	private callout(entry: ZoteroIndexEntry, annotation: Annotation): string {
-		return annotation.imagePath ? markdownLink(`Image annotation, p. ${annotation.pageLabel || annotation.page}`, annotationURI(annotation, entry)) : annotationBody(annotation, undefined, entry, this.plugin.settings);
+		if (annotation.imagePath) return markdownLink(`Image annotation, p. ${annotation.pageLabel || annotation.page}`, annotationURI(annotation, entry));
+		// What the note renders for this card (a joined chain with "Join continued highlights"), marker-safe once pasted.
+		return userOwned(annotationBody(renderedAnnotation(entry, annotation, this.plugin.settings), undefined, entry, this.plugin.settings));
 	}
 
 	private action(parent: HTMLElement, icon: string, label: string, run: () => Promise<void> | void): void {
