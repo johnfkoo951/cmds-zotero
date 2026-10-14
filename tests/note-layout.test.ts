@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DEFAULT_SETTINGS, type CmdsZoteroSettings, type ZoteroIndexEntry } from "../src/types";
 import { normalizeSettings } from "../src/settings-data";
 import { hashText, renderLiterature } from "../src/note-writer";
-import { annotationsHeading, calloutType, DEFAULT_CALLOUTS, DEFAULT_SYNTHESIS_LINES, layoutOf, synthesisLines, THEME_VARIABLES } from "../src/layout";
+import { annotationsHeading, annotationsHeadingProblem, calloutType, DEFAULT_CALLOUTS, DEFAULT_SYNTHESIS_LINES, layoutOf, synthesisLines, THEME_VARIABLES } from "../src/layout";
 import { annotationsHeadingField, calloutField, synthesisLinesField } from "../src/settings/sections/layout";
 import { draftOf } from "../src/settings/fields";
 import { GOLDEN_BIBLIOGRAPHY, GOLDEN_ENTRIES, GOLDEN_IMAGE_HASHES, GOLDEN_RELATED } from "./fixtures/note-golden";
@@ -130,6 +130,43 @@ test("synthesis lines and the annotations heading shape new notes; new blocks fi
 	const moved = render(name, settings, old).content;
 	assert.ok(moved.indexOf("## Annotations") < moved.indexOf("cmds-zotero:annotation-ATTACH01-ANNOT001"));
 	assert.ok(moved.indexOf("cmds-zotero:annotation-ATTACH01-ANNOT007") < moved.indexOf("My closing thoughts."));
+});
+
+test("new annotation blocks never land inside a managed block or a section above the annotations", () => {
+	const name = "journal-article";
+	const golden = GOLDEN_ENTRIES[name];
+	const bare: ZoteroIndexEntry = { ...golden, attachments: [{ ...golden.attachments[0], annotations: [] }] };
+	for (const heading of ["Annotations", "Highlights"]) {
+		const settings = { ...DEFAULT_SETTINGS, annotationsHeading: heading };
+		// The same heading in the user's Synthesis section and inside the (edited) managed `notes` block.
+		const first = render(name, settings, null, bare).content
+			.replace("> **Related**::", `> **Related**::\n\n## ${heading}\n\nMy own list.`)
+			.replace("\n<!-- /cmds-zotero:notes -->", `\n\n## ${heading}\n\nTyped into the generated block.\n<!-- /cmds-zotero:notes -->`);
+		assert.equal((first.match(new RegExp(`^## ${heading}$`, "gm")) ?? []).length, 3);
+		const updated = render(name, settings, first);
+		assert.deepEqual([updated.conflicts, updated.softConflicts], [[], ["Edited generated section preserved: notes"]], heading);
+		const notesEnd = updated.content.indexOf("<!-- /cmds-zotero:notes -->");
+		assert.ok(notesEnd > 0 && notesEnd < updated.content.indexOf("cmds-zotero:annotation-ATTACH01-ANNOT001"), heading);
+		assert.ok(updated.content.includes(`## ${heading}\n\nMy own list.\n\n<!-- cmds-zotero:metadata`), "the user's section is untouched");
+		const again = render(name, settings, updated.content);
+		assert.deepEqual([again.conflicts, again.content], [[], updated.content], `${heading}: stable`);
+	}
+});
+
+test("headings the note already uses cannot be the annotations heading", () => {
+	for (const reserved of ["Notes", "## zotero notes", "Synthesis", "Zotero  notes"]) {
+		assert.match(annotationsHeadingProblem(reserved) ?? "", /already uses/, reserved);
+		assert.equal(annotationsHeading(reserved), "Annotations", reserved);
+		assert.equal(normalizeSettings({ annotationsHeading: reserved }).annotationsHeading, "Annotations", reserved);
+	}
+	const draft = draftOf(DEFAULT_SETTINGS);
+	assert.match(annotationsHeadingField.write(draft, "Zotero notes") ?? "", /already uses/);
+	assert.equal(draft.annotationsHeading, "Annotations");
+	assert.equal(annotationsHeadingProblem("Notes and highlights"), null);
+	// A hand-built settings object is normalised too: a reserved heading renders as "## Annotations", never a second "## Notes".
+	const fresh = render("journal-article", { ...DEFAULT_SETTINGS, annotationsHeading: "Notes" }, null).content;
+	assert.equal((fresh.match(/^## Notes$/gm) ?? []).length, 1);
+	assert.match(fresh, /## Notes\n\n## Annotations\n\n<!-- cmds-zotero:annotation-/);
 });
 
 test("layout fields: callout types, synthesis lines and the heading are checked as typed", () => {

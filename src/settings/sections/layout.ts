@@ -52,7 +52,7 @@ export const layoutSection: SectionDefinition = {
 		section.toggle(toggleField("noteSynthesis")).setName("Synthesis scaffold").setDesc("Add the synthesis heading and callout to new notes. It belongs to you and is never updated.");
 		section.textArea(synthesisLinesField).setName("Synthesis lines").setDesc("Lines of the synthesis callout in new notes, one per line. An empty list keeps the default.")
 			.setPlaceholder(DEFAULT_SYNTHESIS_LINES.join("\n"));
-		section.text(annotationsHeadingField).setName("Annotations heading").setDesc("Heading that new notes place annotations under. Existing notes keep their heading.").setPlaceholder("Annotations");
+		section.text(annotationsHeadingField).setName("Annotations heading").setDesc("Heading that new notes place annotations under. Existing notes keep their heading. Notes, Zotero notes and Synthesis are already used by the note.").setPlaceholder("Annotations");
 		section.text(calloutField("calloutAbstract")).setName("Abstract callout type").setDesc("Obsidian callout type of the abstract.").setPlaceholder(DEFAULT_CALLOUTS.abstract);
 		section.text(calloutField("calloutCite")).setName("Bibliography callout type").setDesc("Obsidian callout type of the bibliography entry.").setPlaceholder(DEFAULT_CALLOUTS.cite);
 		section.text(calloutField("calloutMetadata")).setName("Metadata callout type").setDesc("Obsidian callout type of the metadata fields.").setPlaceholder(DEFAULT_CALLOUTS.metadata);

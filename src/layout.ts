@@ -78,12 +78,20 @@ export function synthesisLines(value: unknown): string[] {
 	return lines.length ? lines : [...DEFAULT_SYNTHESIS_LINES];
 }
 
+/**
+ * Headings the built-in note already uses (the user's `## Notes` and `## Synthesis`, the managed `## Zotero notes`):
+ * annotation blocks placed under one of them would land inside another section.
+ */
+export const RESERVED_HEADINGS: readonly string[] = ["Notes", "Zotero notes", "Synthesis"];
+
 /** The message for an annotations heading the note cannot use, or null. Empty means the default. */
 export function annotationsHeadingProblem(value: string): string | null {
 	const text = value.trim().replace(/^#+\s*/, "");
 	if (!value.trim()) return null;
 	if (!text || hasControl(text) || !commentFree(text)) return "Enter one line of heading text without HTML comment delimiters.";
 	if (text.length > MAX_HEADING) return `Keep the heading under ${MAX_HEADING} characters.`;
+	const folded = text.replace(/\s+/g, " ").toLowerCase();
+	if (RESERVED_HEADINGS.some(reserved => reserved.toLowerCase() === folded)) return `The note already uses "${text}" for another section; choose another heading.`;
 	return null;
 }
 /** Heading text without leading `#`s; anything unusable keeps "Annotations". */

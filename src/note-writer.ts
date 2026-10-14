@@ -403,10 +403,31 @@ function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: s
 	}
 	return result;
 }
-/** The `## <heading>` line new annotation blocks go under: the configured heading (0.6.1 R17), else `## Annotations`. */
+/**
+ * The `## <heading>` line new annotation blocks go under: the configured heading (0.6.1 R17), else `## Annotations`.
+ * Only a line after the last generated non-annotation block (`overview`, `citation`, `metadata`, `notes`) and outside
+ * every managed block counts, so blocks never land inside a managed block or in a section above the annotations.
+ */
 function annotationsHeadingLine(content: string, heading: string): RegExpExecArray | null {
-	const line = (text: string): RegExp => new RegExp(`^## ${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*$`, "m");
-	return line(heading).exec(content) ?? (heading === DEFAULT_ANNOTATIONS_HEADING ? null : line(DEFAULT_ANNOTATIONS_HEADING).exec(content));
+	const managed: [number, number][] = [];
+	let from = 0;
+	for (const opening of content.matchAll(/<!-- cmds-zotero:([a-zA-Z0-9-]+):(?:[a-f0-9]{64}|detached) -->/g)) {
+		const closing = `<!-- /cmds-zotero:${opening[1]} -->`;
+		const at = content.indexOf(closing, opening.index);
+		const end = at < 0 ? content.length : at + closing.length;
+		managed.push([opening.index, end]);
+		if (!opening[1].startsWith("annotation-")) from = Math.max(from, end);
+	}
+	const find = (text: string): RegExpExecArray | null => {
+		const line = new RegExp(`^## ${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*$`, "gm");
+		line.lastIndex = from;
+		for (let match = line.exec(content); match; match = line.exec(content)) {
+			const at = match.index;
+			if (!managed.some(([start, end]) => at >= start && at < end)) return match;
+		}
+		return null;
+	};
+	return find(heading) ?? (heading === DEFAULT_ANNOTATIONS_HEADING ? null : find(DEFAULT_ANNOTATIONS_HEADING));
 }
 function spliceAnnotations(content: string, blocks: string[], heading: string): string {
 	const joined = blocks.join("\n\n");
