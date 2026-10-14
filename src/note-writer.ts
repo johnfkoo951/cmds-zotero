@@ -49,6 +49,20 @@ export interface RenderContext {
 	 * are flattened to escaped plain text. Either way the result is made safe for a managed block (see `noteBody`).
 	 */
 	noteMarkdown?: (html: string) => string;
+	/**
+	 * 0.6.3 selective-update-scope: the section groups an update of an existing note refreshes. Blocks of other groups are
+	 * left byte for byte (a missing one is not reported), and new annotation blocks are added only with `annotations`.
+	 * Absent: every group (the 0.6.1 update).
+	 */
+	scope?: readonly SectionGroup[];
+}
+
+/** 0.6.3: the groups of managed sections an update can be limited to; every `annotation-*` block belongs to `annotations`. */
+export const SECTION_GROUPS = ["overview", "citation", "metadata", "notes", "annotations"] as const;
+export type SectionGroup = typeof SECTION_GROUPS[number];
+/** The group of a managed section ID. */
+export function sectionGroup(id: string): SectionGroup {
+	return id.startsWith("annotation-") ? "annotations" : (SECTION_GROUPS as readonly string[]).includes(id) ? id as SectionGroup : "annotations";
 }
 
 export function safeVaultPath(path: string): string {
@@ -356,12 +370,16 @@ function quoted(body: string): string { return body.split("\n").map(line => `> $
 function block(id: string, body: string): string {
 	return `<!-- cmds-zotero:${id}:${hashText(body)} -->\n${body}\n<!-- /cmds-zotero:${id} -->`;
 }
+/** 0.6.3: a managed block with its content hash, as every render writes it (adopt and rebuild reuse it). */
+export const managedBlock = block;
 // 0.5 R5: marker grammar. Opening `<!-- cmds-zotero:<id>:<sha256|detached> -->` may carry a same-line tail (text pasted
 // after the marker) which is moved below the block on repair; trailing spaces/tabs before the closing marker and an
 // indented closing marker are tolerated. A `detached` mark freezes the block as user-owned.
 export const DETACHED_MARK = "detached";
 const MANAGED_BLOCK = /<!-- cmds-zotero:([a-zA-Z0-9-]+):([a-f0-9]{64}|detached) -->([^\n]*)\n([\s\S]*?)[ \t]*\n[ \t]*<!-- \/cmds-zotero:\1 -->/g;
 const MARKER = /<!-- (\/?)cmds-zotero:([a-zA-Z0-9-]+)/g;
+/** 0.6.3: a fresh copy of the well-formed managed-block pattern (groups: id, mark, tail, body), for the rebuild repair. */
+export function managedBlockPattern(): RegExp { return new RegExp(MANAGED_BLOCK.source, "g"); }
 function detachedBlock(id: string, body: string): string {
 	return `<!-- cmds-zotero:${id}:${DETACHED_MARK} -->\n${body}\n<!-- /cmds-zotero:${id} -->`;
 }
@@ -658,6 +676,23 @@ export function annotationImagePath(imageFolder: string, entry: Pick<ZoteroIndex
 	return safeVaultPath(`${imageFolder}/${entry.libraryType}-${library}-${key(attachmentKey)}-${key(a.key)}-${digest}.${extension}`);
 }
 
+/**
+ * The frontmatter values of a new literature note (0.5 R14 key set). `tags` mirrors Obsidian-valid slugs; `zotero_tags`
+ * and the `**Tags**::` field keep the raw Zotero tags. 0.6.3: the opt-in frontmatter refresh compares against the same values.
+ */
+export function literatureFrontmatterValues(entry: ZoteroIndexEntry, settings: Pick<CmdsZoteroSettings, "excludedTags">): Record<LiteratureIdentityKey, string | string[]> {
+	const creators = creatorNames(entry);
+	const authors = creators.filter(c => c.role === "author").map(c => c.name);
+	const authorList = authors.length ? authors : creators.length ? creators.map(c => c.name) : entry.authors;
+	const tags = filteredTags(entry.tags, settings);
+	const journal = journalOf(entry);
+	return {
+		zoteroID: entry.id, zoteroSelectURI: entry.zoteroSelectURI, "zotero-key": entry.itemKey,
+		citekey: entry.citekey, doi: entry.doi, title: entry.title, authors: authorList, year: entry.year, tags: normalizedTags(["zotero", ...tags]),
+		zotero_title: entry.title, zotero_author: authorList, zotero_year: entry.year, zotero_journal: journal, zotero_doi: entry.doi, zotero_url: entry.url, zotero_tags: tags,
+	};
+}
+
 /** Frontmatter is initialized once; existing YAML remains entirely user-owned. */
 export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, settings: CmdsZoteroSettings, previous: string | null, imageHashes: ReadonlyMap<string, string> = new Map(), context: RenderContext = {}): RenderedNote {
 	const owner = ownerMarker(entry.id);
@@ -668,11 +703,41 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const report: SectionInfo[] = [];
 	const images: ImagePlan[] = [];
 	if (previous !== null && !previous.includes(owner)) return { content: previous, conflicts: ["Existing note is not owned by this Zotero item"], softConflicts, detached, reset, sections: report, images };
-	const creators = creatorNames(entry);
-	const authors = creators.filter(c => c.role === "author").map(c => c.name);
-	const authorList = authors.length ? authors : creators.length ? creators.map(c => c.name) : entry.authors;
-	const tags = filteredTags(entry.tags, settings);
-	const journal = journalOf(entry);
+	const layout = layoutOf(settings);
+	const callout = layout.callouts;
+	const { sections } = literatureSections(entry, bibliography, settings, previous === null, imageHashes, context, images);
+	return previous === null
+		? newNote()
+		: updateNote(previous);
+
+	function newNote(): RenderedNote {
+		// 0.5 R14: exactly `type` plus LITERATURE_IDENTITY_KEYS, in that order; library scope lives in `zoteroSelectURI`.
+		const values = literatureFrontmatterValues(entry, settings);
+		const yaml: [string, unknown][] = [["type", "zotero"], ...LITERATURE_IDENTITY_KEYS.map((k): [string, unknown] => [k, values[k]])];
+		// JSON scalars and flow sequences are valid YAML and keep quoting unambiguous.
+		const frontmatter = yaml.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n");
+		const intro = ["overview", "citation"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
+		// The Synthesis scaffold is user-owned from the start: written once, never managed.
+		const synthesis = layout.synthesis ? `## Synthesis\n\n${quoted([`[!${callout.synthesis}]`, ...layout.synthesisLines].join("\n"))}` : "";
+		const details = ["metadata", "notes"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
+		const annotations = [...sections].filter(([id]) => id.startsWith("annotation-")).map(([id, body]) => block(id, body)).join("\n\n");
+		for (const [id, body] of sections) report.push({ id, state: "fresh", reason: "new note", body });
+		const body = [owner, intro, synthesis, details, "## Notes", `## ${layout.annotationsHeading}`].filter(Boolean).join("\n\n");
+		return { content: `---\n${frontmatter}\n---\n\n${body}\n\n${annotations}\n`, conflicts, softConflicts, detached, reset, sections: report, images };
+	}
+
+	function updateNote(previous: string): RenderedNote {
+		return updateManagedSections(entry, previous, sections, layout, context, { conflicts, softConflicts, detached, reset, report, images });
+	}
+}
+
+/**
+ * The managed section bodies of one item, in note order (`overview`, `citation`, `metadata`, `notes`, then annotations in
+ * reading order), and the annotation images they reference (pushed onto `images`). `firstWrite`: the note (or, for an
+ * adopted note, its citation block) is written for the first time, so missing bibliography text refuses the render
+ * (0.5 R12) instead of leaving the block out. Shared by the render, the adopt append and the rebuild (0.6.3).
+ */
+export function literatureSections(entry: ZoteroIndexEntry, bibliography: string, settings: CmdsZoteroSettings, firstWrite: boolean, imageHashes: ReadonlyMap<string, string> = new Map(), context: RenderContext = {}, images: ImagePlan[] = []): { sections: Map<string, string>; images: ImagePlan[] } {
 	const related = context.related ?? [];
 	const sections = new Map<string, string>();
 	// 0.6.1 R17: a switched-off part renders as an empty body; the block, its ID and its markers stay.
@@ -686,7 +751,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const citation = layout.citation ? citationCallout(bibliography, callout.cite) : "";
 	if (!layout.citation) sections.set("citation", "");
 	else if (citation) sections.set("citation", citation);
-	else if (previous === null) throw new Error(BIBLIOGRAPHY_REQUIRED_MESSAGE);
+	else if (firstWrite) throw new Error(BIBLIOGRAPHY_REQUIRED_MESSAGE);
 
 	sections.set("metadata", [
 		layout.metadata ? metadataCallout(entry, settings, related) : "",
@@ -709,27 +774,17 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		}
 		sections.set(id, annotationBody(a, image, entry, settings));
 	}
+	return { sections, images };
+}
 
-	if (previous === null) {
-		// 0.5 R14: exactly `type` plus LITERATURE_IDENTITY_KEYS, in that order; library scope lives in `zoteroSelectURI`.
-		// `tags` mirrors Obsidian-valid slugs; `zotero_tags` and the `**Tags**::` field keep the raw Zotero tags.
-		const values: Record<LiteratureIdentityKey, unknown> = {
-			zoteroID: entry.id, zoteroSelectURI: entry.zoteroSelectURI, "zotero-key": entry.itemKey,
-			citekey: entry.citekey, doi: entry.doi, title: entry.title, authors: authorList, year: entry.year, tags: normalizedTags(["zotero", ...tags]),
-			zotero_title: entry.title, zotero_author: authorList, zotero_year: entry.year, zotero_journal: journal, zotero_doi: entry.doi, zotero_url: entry.url, zotero_tags: tags,
-		};
-		const yaml: [string, unknown][] = [["type", "zotero"], ...LITERATURE_IDENTITY_KEYS.map((k): [string, unknown] => [k, values[k]])];
-		// JSON scalars and flow sequences are valid YAML and keep quoting unambiguous.
-		const frontmatter = yaml.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n");
-		const intro = ["overview", "citation"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
-		// The Synthesis scaffold is user-owned from the start: written once, never managed.
-		const synthesis = layout.synthesis ? `## Synthesis\n\n${quoted([`[!${callout.synthesis}]`, ...layout.synthesisLines].join("\n"))}` : "";
-		const details = ["metadata", "notes"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
-		const annotations = [...sections].filter(([id]) => id.startsWith("annotation-")).map(([id, body]) => block(id, body)).join("\n\n");
-		for (const [id, body] of sections) report.push({ id, state: "fresh", reason: "new note", body });
-		const body = [owner, intro, synthesis, details, "## Notes", `## ${layout.annotationsHeading}`].filter(Boolean).join("\n\n");
-		return { content: `---\n${frontmatter}\n---\n\n${body}\n\n${annotations}\n`, conflicts, softConflicts, detached, reset, sections: report, images };
-	}
+interface UpdateReport { conflicts: string[]; softConflicts: string[]; detached: string[]; reset: string[]; report: SectionInfo[]; images: ImagePlan[] }
+
+/** The update of an owned note's managed blocks (0.5 R5 states; 0.6.3 scope). */
+function updateManagedSections(entry: ZoteroIndexEntry, previous: string, sections: ReadonlyMap<string, string>, layout: ReturnType<typeof layoutOf>, context: RenderContext, out: UpdateReport): RenderedNote {
+	const { conflicts, softConflicts, detached, reset, report, images } = out;
+	// 0.6.3 selective-update-scope: blocks outside the scope are left byte for byte.
+	const scope = context.scope ? new Set<SectionGroup>(context.scope) : null;
+	const inScope = (id: string): boolean => !scope || scope.has(sectionGroup(id));
 	// 0.5 R5: per-block states; edited blocks are soft conflicts (kept verbatim, note still written), detached blocks are
 	// user-owned and never re-rendered, malformed/duplicate/missing markers stay hard.
 	const matched = new Set<string>();
@@ -752,6 +807,11 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		}
 		matched.add(id);
 		const fresh = sections.get(id);
+		if (!inScope(id)) {
+			if (mark === DETACHED_MARK) detached.push(id);
+			report.push({ id, state: mark === DETACHED_MARK ? "detached" : "unchanged", reason: "not in this update: left as it is", line, body });
+			return whole;
+		}
 		if (detachWanted.has(id) || (mark === DETACHED_MARK && !resetWanted.has(id))) {
 			detached.push(id);
 			report.push({ id, state: "detached", reason: `${mark === DETACHED_MARK ? "detached" : "detaching"}: user-owned, never updated${repaired}`, line, body });
@@ -797,7 +857,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const rawCount = (previous.match(/<!-- \/?cmds-zotero:/g) ?? []).length;
 	if (rawCount !== strayCount) conflicts.push("Malformed managed markers without a section ID");
 	const additions: { id: string; text: string }[] = [];
-	for (const [id, body] of sections) if (!matched.has(id) && !malformed.has(id)) {
+	for (const [id, body] of sections) if (!matched.has(id) && !malformed.has(id) && inScope(id)) {
 		if (id.startsWith("annotation-") && !previous.includes(`cmds-zotero:${id}:`)) {
 			additions.push({ id, text: block(id, body) });
 			report.push({ id, state: "fresh", reason: "new annotation", body });

@@ -16,8 +16,10 @@ export interface OwnedPartition {
 	owned: ZoteroIndexEntry[];
 	/** Entry id → owned note paths (sorted). */
 	ownedPaths: Map<string, string[]>;
-	/** Resolved notes without an owner marker or outside the output folder (sorted). */
+	/** Resolved notes without an owner marker, or outside the output folder without their own `zoteroID` (sorted). */
 	linkedNotOwned: string[];
+	/** 0.6.3 find-moved-notes: owned notes outside the output folder (sorted); they are in `ownedPaths` too. */
+	moved: string[];
 }
 
 function normalizeFolder(folder: string): string {
@@ -38,16 +40,21 @@ export async function partitionOwnedNotes(index: ZoteroIndex, notes: OwnershipNo
 		return id ? [{ note, id }] : [];
 	});
 	const inFolder = (path: string): boolean => !!folder && path.startsWith(`${folder}/`);
-	await scanInOrder(resolved, concurrency, ({ note }) => inFolder(note.path) ? read(note.path) : null, ({ note, id }, outcome) => {
+	// 0.6.3 find-moved-notes: a note outside the folder is read only when its own frontmatter names the item (`zoteroID`);
+	// it is owned (moved) when it also carries the owner marker. Citekey-resolved notes outside the folder are never read.
+	const candidate = (note: OwnershipNote, id: string): boolean => !!folder && (inFolder(note.path) || note.frontmatter?.zoteroID === id);
+	const moved: string[] = [];
+	await scanInOrder(resolved, concurrency, ({ note, id }) => candidate(note, id) ? read(note.path) : null, ({ note, id }, outcome) => {
 		if (!outcome?.ok || !outcome.value.includes(ownerMarker(id))) { linkedNotOwned.push(note.path); return true; }
+		if (!inFolder(note.path)) moved.push(note.path);
 		const paths = ownedPaths.get(id);
 		if (paths) paths.push(note.path); else ownedPaths.set(id, [note.path]);
 		return true;
 	});
-	return { owned: index.entries.filter(entry => ownedPaths.has(entry.id)), ownedPaths, linkedNotOwned };
+	return { owned: index.entries.filter(entry => ownedPaths.has(entry.id)), ownedPaths, linkedNotOwned, moved };
 }
 
 /** One-line summary for the batch report. */
 export function ownershipSummary(partition: OwnedPartition): string {
-	return `Owned: ${partition.owned.length} · Linked but not owned: ${partition.linkedNotOwned.length} (not updated)`;
+	return `Owned: ${partition.owned.length}${partition.moved.length ? ` (${partition.moved.length} moved out of the literature folder)` : ""} · Linked but not owned: ${partition.linkedNotOwned.length} (not updated)`;
 }

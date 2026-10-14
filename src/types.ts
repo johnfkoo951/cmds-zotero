@@ -72,6 +72,10 @@ export interface CmdsZoteroSettings {
 	followZoteroSelection: "off" | "focus" | "interval";
 	/** 0.6.1: seconds between selection reads in the interval mode (3–30). */
 	followZoteroSelectionSeconds: number;
+	/** 0.6.3 filename-folder-pattern (note-path.ts): file name of new literature notes from a fixed token set; `@{citekey}` is the 0.6.1 name. */
+	noteFilenamePattern: string;
+	/** 0.6.3: subfolder below the output folder for new literature notes (fixed tokens, `/` between levels); empty is the 0.6.1 behaviour. */
+	noteFolderPattern: string;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -108,6 +112,8 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	annotationTagStyle: "plain",
 	followZoteroSelection: "off", // 0.6.1 follow-zotero-selection: opt-in
 	followZoteroSelectionSeconds: 10,
+	noteFilenamePattern: "@{citekey}", // 0.6.3: the 0.6.1 file name
+	noteFolderPattern: "",
 };
 
 export interface ItemIdentity {

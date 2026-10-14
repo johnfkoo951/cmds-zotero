@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, type AnnotationTagStyle, type CitationTrigger, type CmdsZoteroSettings } from "./types";
 import { isAnnotationColor } from "./annotations/colors";
 import { annotationsHeading, calloutType, synthesisLines } from "./layout";
+import { notePatternProblem } from "./note-path";
 
 function integer(value: unknown, fallback: number, min: number, max: number): number {
 	return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
@@ -62,6 +63,9 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		annotationTagStyle: (["plain", "hashtag"] as const).includes(data.annotationTagStyle as AnnotationTagStyle) ? data.annotationTagStyle as AnnotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
 		followZoteroSelection: (["off", "focus", "interval"] as const).find(mode => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection, // 0.6.1
 		followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30),
+		// 0.6.3 filename-folder-pattern: an unusable stored pattern keeps the 0.6.1 naming.
+		noteFilenamePattern: typeof data.noteFilenamePattern === "string" && !notePatternProblem(data.noteFilenamePattern) ? data.noteFilenamePattern.trim() : DEFAULT_SETTINGS.noteFilenamePattern,
+		noteFolderPattern: typeof data.noteFolderPattern === "string" && !notePatternProblem(data.noteFolderPattern, true) ? data.noteFolderPattern.trim() : DEFAULT_SETTINGS.noteFolderPattern,
 	};
 }
 

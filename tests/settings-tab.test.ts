@@ -25,6 +25,8 @@ test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the pic
 		calloutAbstract: "Abstract", calloutCite: "Cite", calloutMetadata: "md", calloutLinks: "LINK", calloutSynthesis: "Synth",
 		synthesisLines: ["**Contribution**::", "**Related**::"], annotationsHeading: "Annotations", noteItemTypeFields: false,
 		joinContinuations: false, noteRichText: false, annotationTagStyle: "plain",
+		// 0.6.3 filename-folder-pattern: the 0.6.1 path.
+		noteFilenamePattern: "@{citekey}", noteFolderPattern: "",
 	});
 });
 
