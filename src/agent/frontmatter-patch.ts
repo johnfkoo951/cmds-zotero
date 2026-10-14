@@ -70,7 +70,7 @@ function plainSafe(value: string): boolean {
 }
 
 /** A YAML double-quoted scalar: JSON string escapes (`\\`, `\"`, `\n`, `\t`, `\uXXXX`), a subset of YAML's, plus `\uXXXX` for the characters JSON leaves raw. */
-function doubleQuoted(value: string): string {
+export function doubleQuoted(value: string): string {
 	return JSON.stringify(value).replace(YAML_UNSAFE_RAW, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
@@ -80,7 +80,7 @@ export function serializeScalar(value: PatchValue): string {
 	return plainSafe(value) ? value : doubleQuoted(value);
 }
 
-function keyLineIndexes(lines: string[], key: string): number[] {
+export function keyLineIndexes(lines: string[], key: string): number[] {
 	const prefix = `${key}:`;
 	const found: number[] = [];
 	for (let i = 0; i < lines.length; i += 1) {
@@ -93,7 +93,7 @@ function keyLineIndexes(lines: string[], key: string): number[] {
 }
 
 /** A column-0 quoted spelling of `key` (`"zoteroStatus": …`, `'zoteroStatus': …`): the same key to YAML, so appending a plain line would duplicate it. */
-function hasQuotedKeyLine(lines: string[], key: string): boolean {
+export function hasQuotedKeyLine(lines: string[], key: string): boolean {
 	return lines.some(line => line.startsWith(`"${key}"`) || line.startsWith(`'${key}'`));
 }
 
@@ -111,7 +111,7 @@ function quotedEnd(value: string, start: number): number {
 }
 
 /** Splits the text after `key:` into the scalar and any trailing comment (with the whitespace that introduces it). */
-function splitValue(raw: string): { scalar: string; comment: string } | "multiline" {
+export function splitValue(raw: string): { scalar: string; comment: string } | "multiline" {
 	const leading = /^[ \t]*/.exec(raw)?.[0].length ?? 0;
 	const value = raw.slice(leading);
 	if (!value || value.startsWith("#")) return { scalar: "", comment: value ? ` ${value}` : "" };

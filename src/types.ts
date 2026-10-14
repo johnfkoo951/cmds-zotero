@@ -94,6 +94,10 @@ export interface CmdsZoteroSettings {
 	zoteroDataDirectory: string;
 	/** Vault folder the pandoc export kit writes into, one subfolder per note. */
 	exportFolder: string;
+	/** 0.6.3 filename-folder-pattern (note-path.ts): file name of new literature notes from a fixed token set; `@{citekey}` is the 0.6.1 name. */
+	noteFilenamePattern: string;
+	/** 0.6.3: subfolder below the output folder for new literature notes (fixed tokens, `/` between levels); empty is the 0.6.1 behaviour. */
+	noteFolderPattern: string;
 }
 
 /** 0.6.2: the fixed named citation formats (no templates); see citations/formats.ts. */
@@ -145,6 +149,8 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	bibliographyOrder: "style",
 	zoteroDataDirectory: "~/Zotero",
 	exportFolder: "CMDS Zotero exports",
+	noteFilenamePattern: "@{citekey}", // 0.6.3: the 0.6.1 file name
+	noteFolderPattern: "",
 };
 
 export interface ItemIdentity {

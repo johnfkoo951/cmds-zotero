@@ -6,9 +6,7 @@ import { doctorChecks, doctorReport, type DoctorFacts } from "../doctor/checks";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndex } from "../types";
 import { DoctorModal } from "../modals/doctor";
-
-/** Frontmatter keys Better Notes writes into the Markdown files it syncs; a note carrying them belongs to Better Notes. */
-const BETTER_NOTES_KEYS: readonly string[] = ["$libraryID", "$itemKey"];
+import { BETTER_NOTES_KEYS } from "../note-adopt"; // 0.6.3: shared with the better-notes-guard
 
 /**
  * 0.6.1 doctor: the facts only Obsidian can check. Read-only: pdf.js is loaded (as PDF text extraction does), peer note
@@ -21,12 +19,19 @@ export async function environmentFacts(plugin: CMDSZoteroPlugin, index: ZoteroIn
 	try { pdfjs = Boolean(await loadPdfJs()); } catch { pdfjs = false; }
 	const folder = plugin.settings.outputFolder.trim().replace(/^\/+|\/+$/g, "");
 	const claimed = new Set<string>();
-	if (index) for (const files of plugin.links.localFilesByEntry(index).values()) for (const file of files) claimed.add(file.path);
+	const moved: string[] = [];
+	if (index) for (const files of plugin.links.localFilesByEntry(index).values()) for (const file of files) {
+		claimed.add(file.path);
+		// 0.6.3 find-moved-notes: a literature note (type zotero, own zoteroID) outside the folder; read-only, from the cache.
+		const frontmatter = plugin.app.metadataCache.getFileCache(file)?.frontmatter;
+		if (folder && !file.path.startsWith(`${folder}/`) && frontmatter?.type === "zotero" && typeof frontmatter.zoteroID === "string") moved.push(file.path);
+	}
+	moved.sort((a, b) => a.localeCompare(b));
 	const inFolder = folder ? plugin.app.vault.getMarkdownFiles().filter(file => file.path.startsWith(`${folder}/`)).sort((a, b) => a.path.localeCompare(b.path)) : [];
 	const betterNotes = inFolder.filter(file => { const frontmatter = plugin.app.metadataCache.getFileCache(file)?.frontmatter; return !!frontmatter && BETTER_NOTES_KEYS.some(key => key in frontmatter); }).map(file => file.path);
 	// Without an index no note can be claimed, so "unmatched" would list every note: it is left empty then.
 	const unmatched = index ? inFolder.filter(file => !claimed.has(file.path) && !betterNotes.includes(file.path)).map(file => file.path) : [];
-	return { pdfjs, peers: await plugin.links.peerMapStatus(), outputFolder: folder ? { folder, notes: inFolder.length, unmatched, betterNotes } : null };
+	return { pdfjs, peers: await plugin.links.peerMapStatus(), outputFolder: folder ? { folder, notes: inFolder.length, unmatched, betterNotes, ...(moved.length ? { moved } : {}) } : null };
 }
 
 /** The vault's real folder on disk, or null on a non-desktop adapter. */

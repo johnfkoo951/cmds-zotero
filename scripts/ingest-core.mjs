@@ -8779,7 +8779,10 @@ var DEFAULT_SETTINGS = {
   bibliographyLocale: "",
   bibliographyOrder: "style",
   zoteroDataDirectory: "~/Zotero",
-  exportFolder: "CMDS Zotero exports"
+  exportFolder: "CMDS Zotero exports",
+  noteFilenamePattern: "@{citekey}",
+  // 0.6.3: the 0.6.1 file name
+  noteFolderPattern: ""
 };
 
 // src/citations/scan.ts
@@ -10477,6 +10480,8 @@ function outputCheck(output) {
   if (output === null) return { id: "output-folder", status: "unknown", title, detail: "Not checked here." };
   if (output.betterNotes.length) return flagged("output-folder", title, "better-notes-in-output", `${plural(output.betterNotes.length, "note")} in ${output.folder} ${output.betterNotes.length === 1 ? "carries" : "carry"} Better Notes sync frontmatter; keep Better Notes exports in another folder so the two plugins never write the same note.`, output.betterNotes);
   if (output.unmatched.length) return flagged("output-folder", title, "foreign-notes-in-output", `${plural(output.unmatched.length, "note")} in ${output.folder} ${output.unmatched.length === 1 ? "belongs" : "belong"} to no index entry. They are never changed; move them if they are not literature notes.`, output.unmatched);
+  const moved = output.moved ?? [];
+  if (moved.length) return { id: "output-folder", status: "ok", title, detail: `${plural(output.notes, "note")} in ${output.folder}, each linked to an index entry; ${plural(moved.length, "literature note")} ${moved.length === 1 ? "lives" : "live"} elsewhere in the vault and ${moved.length === 1 ? "is" : "are"} updated where ${moved.length === 1 ? "it is" : "they are"}.`, paths: moved.slice(0, MAX_PATHS) };
   return { id: "output-folder", status: "ok", title, detail: `${plural(output.notes, "note")} in ${output.folder}, each linked to an index entry.` };
 }
 function doctorChecks(facts) {
@@ -11595,6 +11600,27 @@ function dataDirectoryProblem(value) {
   return null;
 }
 
+// src/note-path.ts
+var NOTE_PATH_TOKENS = ["citekey", "title", "shortTitle", "year", "firstAuthor", "itemType", "collection"];
+var TOKEN = /\{([A-Za-z]+)\}/g;
+function notePatternProblem(pattern, folder = false) {
+  const value = pattern.trim();
+  if (!value) return folder ? null : "Enter a file name pattern, for example @{citekey}.";
+  if ([...value].some((char) => char.charCodeAt(0) < 32)) return "Control characters are not allowed.";
+  const unknown = [...value.matchAll(TOKEN)].map((match) => match[1]).filter((token) => !NOTE_PATH_TOKENS.includes(token));
+  if (unknown.length) return `Unknown token {${unknown[0]}}. Use ${NOTE_PATH_TOKENS.map((token) => `{${token}}`).join(", ")}.`;
+  const literal = value.replace(TOKEN, "");
+  if (/[{}]/.test(literal)) return "Braces may only surround a token name.";
+  if (!folder) {
+    if (literal.includes("/")) return "The file name pattern cannot contain /; use the folder pattern for subfolders.";
+    if (!/\{[A-Za-z]+\}/.test(value)) return "Use at least one token, for example {citekey}, so notes get different names.";
+  } else if (value.startsWith("/") || value.split("/").some((part) => part.trim() === "" || part.trim() === "." || part.trim() === "..")) {
+    return "Use folder names separated by /, without empty, . or .. segments.";
+  }
+  if (/[\\:*?"<>|#^[\]]/.test(literal)) return 'Remove characters that cannot be used in file names: \\ : * ? " < > | # ^ [ ]';
+  return null;
+}
+
 // src/settings-data.ts
 var CITATION_FORMAT_SETTINGS = ["pandoc", "narrative", "wikilink", "author-date", "zotero-link", "note-link"];
 function integer(value, fallback, min, max) {
@@ -11671,7 +11697,10 @@ function normalizeSettings(raw) {
     bibliographyLocale: bibliographyLocale(data.bibliographyLocale),
     bibliographyOrder: ["style", "citation", "alphabetical"].find((order) => order === data.bibliographyOrder) ?? DEFAULT_SETTINGS.bibliographyOrder,
     zoteroDataDirectory: typeof data.zoteroDataDirectory === "string" && data.zoteroDataDirectory.trim() && !dataDirectoryProblem(data.zoteroDataDirectory) ? data.zoteroDataDirectory.trim() : DEFAULT_SETTINGS.zoteroDataDirectory,
-    exportFolder: text4(data.exportFolder, DEFAULT_SETTINGS.exportFolder)
+    exportFolder: text4(data.exportFolder, DEFAULT_SETTINGS.exportFolder),
+    // 0.6.3 filename-folder-pattern: an unusable stored pattern keeps the 0.6.1 naming.
+    noteFilenamePattern: typeof data.noteFilenamePattern === "string" && !notePatternProblem(data.noteFilenamePattern) ? data.noteFilenamePattern.trim() : DEFAULT_SETTINGS.noteFilenamePattern,
+    noteFolderPattern: typeof data.noteFolderPattern === "string" && !notePatternProblem(data.noteFolderPattern, true) ? data.noteFolderPattern.trim() : DEFAULT_SETTINGS.noteFolderPattern
   };
 }
 function bibliographyLocale(value) {

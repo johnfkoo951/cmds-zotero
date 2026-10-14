@@ -65,7 +65,7 @@ test("partitionOwnedNotes with an empty output folder owns nothing and reads not
 	assert.deepEqual(partition.linkedNotOwned, ["References/Zotero/@koo2022.md"]);
 	assert.equal(reads, 0);
 	const none = await partitionOwnedNotes(index, [note("20. Wiki/x.md", { tags: [] })], "References/Zotero", () => Promise.resolve(""));
-	assert.deepEqual(none, { owned: [], ownedPaths: new Map(), linkedNotOwned: [] });
+	assert.deepEqual(none, { owned: [], ownedPaths: new Map(), linkedNotOwned: [], moved: [] });
 });
 
 test("0.6: partitionOwnedNotes reads with bounded concurrency and gives the sequential partition", async () => {

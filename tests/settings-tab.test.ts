@@ -29,6 +29,8 @@ test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the pic
 		citationFormat: "pandoc", citekeyProblemMarks: true, citationHover: false, authorDateRendering: false, citationClickAction: "nothing", pasteZoteroLinks: false,
 		// 0.6.2 WP6: references, bibliography and export kit.
 		bibliographyLocale: "", bibliographyOrder: "style", zoteroDataDirectory: "~/Zotero", exportFolder: "CMDS Zotero exports",
+		// 0.6.3 filename-folder-pattern: the 0.6.1 path.
+		noteFilenamePattern: "@{citekey}", noteFolderPattern: "",
 	});
 });
 

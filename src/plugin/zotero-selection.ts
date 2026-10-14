@@ -19,10 +19,9 @@ async function readSelection(plugin: CMDSZoteroPlugin): Promise<SelectedItem[]> 
 
 const label = (entry: ZoteroIndexEntry): string => `${entry.title} — @${entry.citekey} · ${entry.year} · library ${entry.libraryID}`;
 
-/** Opens the literature note, or the import preview when this vault has no note for the entry yet. */
-async function openOrPreview(plugin: CMDSZoteroPlugin, entry: ZoteroIndexEntry, index: ZoteroIndex): Promise<void> {
-	if (plugin.links.localFiles(entry, index).length) await plugin.navigation.openNote(entry);
-	else await plugin.literature.previewImport(entry);
+/** Opens the literature note, or the import preview when this vault has no note for the entry yet (0.6.3: shared with Open or import literature note). */
+function openOrPreview(plugin: CMDSZoteroPlugin, entry: ZoteroIndexEntry): Promise<void> {
+	return plugin.literature.openOrImport(entry);
 }
 
 /**
@@ -39,7 +38,7 @@ export async function actOnZoteroSelection(plugin: CMDSZoteroPlugin, mode: "open
 		if (plan.kind === "empty") { new Notice(EMPTY_SELECTION_MESSAGE); return; }
 		if (plan.kind === "unindexed") throw new Error(unindexedMessage(plan.unindexed));
 		if (plan.unindexed.length) new Notice(unindexedMessage(plan.unindexed));
-		const act = (entry: ZoteroIndexEntry): Promise<void> => mode === "import" ? plugin.literature.previewImport(entry) : openOrPreview(plugin, entry, index);
+		const act = (entry: ZoteroIndexEntry): Promise<void> => mode === "import" ? plugin.literature.previewImport(entry) : openOrPreview(plugin, entry);
 		if (plan.kind === "one") { await act(plan.entry); return; }
 		new PickerModal(plugin.app, plan.entries, label, entry => { void plugin.run(() => act(entry)); }, `Choose one of the ${plan.entries.length} items selected in Zotero…`).open();
 	});

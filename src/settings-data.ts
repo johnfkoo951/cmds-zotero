@@ -5,6 +5,7 @@ import { canonicalLocale, dataDirectoryProblem, localeProblem } from "./bibliogr
 
 /** 0.6.2: the stored names of the fixed citation formats (the same list as citations/formats.ts, kept here so the offline core stays small). */
 export const CITATION_FORMAT_SETTINGS: readonly CitationFormatSetting[] = ["pandoc", "narrative", "wikilink", "author-date", "zotero-link", "note-link"];
+import { notePatternProblem } from "./note-path";
 
 function integer(value: unknown, fallback: number, min: number, max: number): number {
 	return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
@@ -78,6 +79,9 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		bibliographyOrder: (["style", "citation", "alphabetical"] as const).find(order => order === data.bibliographyOrder) ?? DEFAULT_SETTINGS.bibliographyOrder,
 		zoteroDataDirectory: typeof data.zoteroDataDirectory === "string" && data.zoteroDataDirectory.trim() && !dataDirectoryProblem(data.zoteroDataDirectory) ? data.zoteroDataDirectory.trim() : DEFAULT_SETTINGS.zoteroDataDirectory,
 		exportFolder: text(data.exportFolder, DEFAULT_SETTINGS.exportFolder),
+		// 0.6.3 filename-folder-pattern: an unusable stored pattern keeps the 0.6.1 naming.
+		noteFilenamePattern: typeof data.noteFilenamePattern === "string" && !notePatternProblem(data.noteFilenamePattern) ? data.noteFilenamePattern.trim() : DEFAULT_SETTINGS.noteFilenamePattern,
+		noteFolderPattern: typeof data.noteFolderPattern === "string" && !notePatternProblem(data.noteFolderPattern, true) ? data.noteFolderPattern.trim() : DEFAULT_SETTINGS.noteFolderPattern,
 	};
 }
 

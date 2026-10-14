@@ -6,7 +6,7 @@
  * note listing, a guarded reader and the YAML parser.
  */
 import { parseNoteText } from "../frontmatter-read";
-import { safeVaultPath } from "../note-writer";
+import { ownerMarker, safeVaultPath } from "../note-writer";
 import { SCAN_CONCURRENCY, scanInOrder } from "../vault-scan";
 
 /** Reads one vault note; null when no note exists at the path (any more). */
@@ -18,6 +18,12 @@ export interface IdentitySource {
 	/** A reader for one round of reads (the build, or the re-reads before an answer); it checks the vault boundary first. */
 	reader: () => IdentityNoteReader;
 	parseYaml: (yaml: string) => unknown;
+	/**
+	 * 0.6.3 find-moved-notes: paths outside the folder that may be moved literature notes (the host lists notes whose cached
+	 * frontmatter has a `zoteroID`). With it the map covers the whole vault: a note outside the folder counts only when its
+	 * text carries the owner marker of its `zoteroID` (a paper hub or another note naming the item never does).
+	 */
+	outside?: () => readonly string[];
 }
 
 /** The `zoteroID` string a note's frontmatter declares; null without frontmatter, for invalid YAML or any other value. */
@@ -56,8 +62,13 @@ export class IdentityMap {
 		return map;
 	}
 
-	/** True for paths below the folder: the only notes the map tracks. */
-	covers(path: string): boolean { return path.startsWith(this.prefix); }
+	/** 0.6.3: a map that knows no notes and never reads (for previews refused before any lookup). */
+	static empty(folder: string): IdentityMap {
+		return new IdentityMap(folder, { list: () => [], reader: () => () => Promise.resolve(null), parseYaml: () => null }, 1);
+	}
+
+	/** True for the notes the map tracks: below the folder, or anywhere when it looks for moved notes (0.6.3). */
+	covers(path: string): boolean { return path.startsWith(this.prefix) || this.source.outside !== undefined; }
 
 	/** Sorted paths of the folder's notes whose `zoteroID` is `identity`; notes reported changed are read again first. */
 	async pathsFor(identity: string): Promise<string[]> {
@@ -71,7 +82,7 @@ export class IdentityMap {
 	 * reported for the path before or after the write still re-reads it.
 	 */
 	noteWritten(path: string, text: string): void {
-		if (this.covers(path)) this.set(path, noteZoteroID(text, this.source.parseYaml));
+		if (this.covers(path)) this.set(path, this.identityOf(path, text));
 	}
 
 	/** A note changed, appeared or disappeared (a vault event): it is read again before the next answer. */
@@ -82,7 +93,18 @@ export class IdentityMap {
 	/** A folder was renamed or deleted: the listing and every note below the folder are read again before the next answer. */
 	foldersChanged(): void { this.relist = true; }
 
-	private listed(): string[] { return this.source.list().filter(path => this.covers(path)); }
+	private listed(): string[] {
+		const inside = this.source.list().filter(path => path.startsWith(this.prefix));
+		const outside = (this.source.outside?.() ?? []).filter(path => !path.startsWith(this.prefix));
+		return [...inside, ...[...new Set(outside)].sort()];
+	}
+
+	/** The note's `zoteroID`; outside the folder only when the text carries that item's owner marker (a moved literature note). */
+	private identityOf(path: string, text: string): string | null {
+		const id = noteZoteroID(text, this.source.parseYaml);
+		if (id === null || path.startsWith(this.prefix)) return id;
+		return text.includes(ownerMarker(id)) ? id : null;
+	}
 
 	/** Applies reported changes, one round at a time; a round that starts while another runs waits for it. */
 	private async catchUp(): Promise<void> {
@@ -112,8 +134,10 @@ export class IdentityMap {
 		const read = this.source.reader();
 		await scanInOrder(paths, this.concurrency, path => read(path), (path, outcome) => {
 			if (!outcome) return true;
+			// 0.6.3: an unreadable note outside the folder is only not counted as moved; inside the folder it fails the answer.
+			if (!outcome.ok && !path.startsWith(this.prefix)) { this.set(path, null); return true; }
 			if (!outcome.ok) { this.failure = { error: outcome.error }; return false; }
-			this.set(path, outcome.value === null ? null : noteZoteroID(outcome.value, this.source.parseYaml));
+			this.set(path, outcome.value === null ? null : this.identityOf(path, outcome.value));
 			return true;
 		});
 	}
