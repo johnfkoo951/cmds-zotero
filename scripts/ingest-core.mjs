@@ -8737,7 +8737,9 @@ var DEFAULT_SETTINGS = {
   calloutSynthesis: "Synth",
   synthesisLines: ["**Contribution**::", "**Related**::"],
   annotationsHeading: "Annotations",
-  noteItemTypeFields: false
+  noteItemTypeFields: false,
+  joinContinuations: false,
+  annotationTagStyle: "plain"
 };
 
 // src/citations/scan.ts
@@ -10525,7 +10527,7 @@ function normalizePageLabel(label, page) {
   const trimmed = label.trim();
   return trimmed === String(page) || PLACEHOLDER_LABEL.test(trimmed) ? "" : trimmed;
 }
-function displayPageLabel(label, page) {
+function displayPageLabel2(label, page) {
   return normalizePageLabel(label, page) || String(page);
 }
 var QUOTE_HEAD = /^ {0,3}>[ \t]*\[!quote\]/i;
@@ -10561,8 +10563,8 @@ function extractQuoteCallouts(markdown) {
 }
 var MIN_QUOTE_CHARS = 8;
 function renderMatch(match, openURI) {
-  const label = displayPageLabel(match.pageLabel, match.page);
-  const locator = match.span ? `p.${label}-${displayPageLabel(match.span.pageLabel, match.span.page)}` : `p.${label}`;
+  const label = displayPageLabel2(match.pageLabel, match.page);
+  const locator = match.span ? `p.${label}-${displayPageLabel2(match.span.pageLabel, match.span.page)}` : `p.${label}`;
   return { page: match.page, pageLabel: label, locator, spansPages: Boolean(match.span), uri: openURI ? pdfURI(openURI, match.page) : null, method: match.method, score: match.score, snippet: match.snippet };
 }
 function locateBatch(pages, quotes, attachment) {
@@ -11497,7 +11499,9 @@ function normalizeSettings(raw) {
     calloutSynthesis: calloutType(data.calloutSynthesis, DEFAULT_SETTINGS.calloutSynthesis),
     synthesisLines: synthesisLines(data.synthesisLines),
     annotationsHeading: annotationsHeading(data.annotationsHeading),
-    noteItemTypeFields: flag2(data.noteItemTypeFields, DEFAULT_SETTINGS.noteItemTypeFields)
+    noteItemTypeFields: flag2(data.noteItemTypeFields, DEFAULT_SETTINGS.noteItemTypeFields),
+    joinContinuations: flag2(data.joinContinuations, DEFAULT_SETTINGS.joinContinuations),
+    annotationTagStyle: ["plain", "hashtag"].includes(data.annotationTagStyle) ? data.annotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle
   };
 }
 function normalizeTagList(value) {
