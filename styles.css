@@ -151,6 +151,10 @@ body {
   border-radius: 50%;
   background: var(--cmds-zotero-color);
 }
+/* 0.6.1: a "+" continuation the note joins into the highlight before it. */
+.cmds-zotero-annotation-continuation {
+  font-style: italic;
+}
 .cmds-zotero-annotation-text {
   margin-top: var(--size-2-1);
   overflow-wrap: anywhere;

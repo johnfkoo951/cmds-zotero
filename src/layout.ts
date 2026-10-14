@@ -35,6 +35,8 @@ export interface LayoutOptions {
 	annotationsHeading: string;
 	/** Metadata fields per Zotero item type (item-fields.ts) instead of the 0.6.0 fixed list; off by default. */
 	itemTypeFields: boolean;
+	/** Highlights continued with a leading `+` join the highlight before them (annotations/join.ts); off by default. */
+	joinContinuations: boolean;
 }
 
 export const DEFAULT_CALLOUTS: Readonly<CalloutNames> = { abstract: "Abstract", cite: "Cite", metadata: "md", links: "LINK", synthesis: "Synth" };
@@ -90,7 +92,7 @@ export function annotationsHeading(value: unknown): string {
 
 export type LayoutSettings = Pick<CmdsZoteroSettings,
 	"noteAbstract" | "noteCitation" | "noteMetadata" | "noteLinks" | "noteZoteroNotes" | "noteSynthesis" |
-	"calloutAbstract" | "calloutCite" | "calloutMetadata" | "calloutLinks" | "calloutSynthesis" | "synthesisLines" | "annotationsHeading" | "noteItemTypeFields">;
+	"calloutAbstract" | "calloutCite" | "calloutMetadata" | "calloutLinks" | "calloutSynthesis" | "synthesisLines" | "annotationsHeading" | "noteItemTypeFields" | "joinContinuations">;
 
 /** The layout a note is rendered with; every value is normalised again, so a hand-built settings object is safe. */
 export function layoutOf(settings: Partial<LayoutSettings>): LayoutOptions {
@@ -108,6 +110,7 @@ export function layoutOf(settings: Partial<LayoutSettings>): LayoutOptions {
 		synthesisLines: synthesisLines(settings.synthesisLines),
 		annotationsHeading: annotationsHeading(settings.annotationsHeading),
 		itemTypeFields: settings.noteItemTypeFields === true,
+		joinContinuations: settings.joinContinuations === true,
 	};
 }
 

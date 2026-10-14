@@ -41,6 +41,8 @@ export const layoutSection: SectionDefinition = {
 		section.toggle(toggleField("noteItemTypeFields")).setName("Fields by item type")
 			.setDesc("Choose the metadata fields per item type (for example university and thesis type for a thesis, institution and report number for a report) and add the date, short title, language, access date, the key: value lines of the extra field and the dates the item was added and modified. Off keeps the fixed list of earlier versions.");
 		section.toggle(toggleField("noteLinks")).setName("Links").setDesc("Show the links to the item in Zotero and to its attachments.");
+		section.toggle(toggleField("joinContinuations")).setName("Join continued highlights")
+			.setDesc("A highlight whose Zotero comment starts with + is added to the highlight before it in the same attachment: one block with both texts, the page span and the comments without the +. Off keeps every highlight separate.");
 		section.toggle(toggleField("noteZoteroNotes")).setName("Zotero notes").setDesc("Show the item's child notes from Zotero.");
 		section.toggle(toggleField("noteSynthesis")).setName("Synthesis scaffold").setDesc("Add the synthesis heading and callout to new notes. It belongs to you and is never updated.");
 		section.textArea(synthesisLinesField).setName("Synthesis lines").setDesc("Lines of the synthesis callout in new notes, one per line. An empty list keeps the default.")

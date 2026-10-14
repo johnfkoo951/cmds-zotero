@@ -4,6 +4,7 @@ import { LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/ty
 import { colorName } from "./annotations/colors";
 import { richTextMarkdown } from "./annotations/rich-text";
 import { DEFAULT_ANNOTATIONS_HEADING, layoutOf } from "./layout";
+import { displayPageLabel, joinContinuations } from "./annotations/join";
 import { extraFields, fieldsFor, RECORD_DATES, type FieldSpec } from "./item-fields";
 
 export const hashText = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -436,9 +437,8 @@ export const IMAGE_NOT_CACHED = "Image not available in Zotero's cache; open it 
 /** Renders one annotation as CMDS callout Markdown; reused by the import and the annotation sidebar. */
 export function annotationBody(a: Annotation, image: string | undefined, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings): string {
 	const uri = annotationURI(a, entry);
-	const page = Number.isSafeInteger(a.page) && a.page > 0 ? a.page : 1;
 	// Zotero page labels can be placeholders such as "-"; fall back to the PDF page position unless the label carries a letter or digit.
-	const label = inline(/[\p{L}\p{N}]/u.test(a.pageLabel) ? a.pageLabel : String(page));
+	const label = inline(displayPageLabel(a));
 	const color = colorName(a.color);
 	const link = `[p. ${label}](${uri})`;
 	const comment = a.comment ? `**Comment**: *${richInline(a.comment, true)}*` : "";
@@ -547,7 +547,10 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	sections.set("notes", layout.zoteroNotes ? `## Zotero notes\n\n${noteText || "*No Zotero notes.*"}` : "");
 
 	const seen = new Set<string>();
-	for (const { attachment, annotation: a } of readingOrder(entry)) {
+	// 0.6.1: with "Join continued highlights" a `+` continuation renders inside the block of the highlight it continues.
+	const ordered = readingOrder(entry);
+	const annotationList = layout.joinContinuations ? joinContinuations(ordered).map(({ item, annotation }) => ({ attachment: item.attachment, annotation })) : ordered;
+	for (const { attachment, annotation: a } of annotationList) {
 		const id = `annotation-${key(attachment.key)}-${key(a.key)}`;
 		if (a.attachmentKey !== attachment.key) throw new Error("Annotation attachment identity mismatch");
 		if (seen.has(id)) continue;
