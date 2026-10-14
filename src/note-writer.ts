@@ -2,6 +2,10 @@ import { createHash } from "crypto";
 import type { Annotation, CmdsZoteroSettings, ZoteroIndexEntry } from "./types";
 import { LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
 import { colorName } from "./annotations/colors";
+import { richTextMarkdown } from "./annotations/rich-text";
+import { DEFAULT_ANNOTATIONS_HEADING, layoutOf, type LayoutSettings } from "./layout";
+import { displayPageLabel, joinContinuations } from "./annotations/join";
+import { extraFields, fieldsFor, RECORD_DATES, type FieldSpec } from "./item-fields";
 
 export const hashText = (text: string): string => createHash("sha256").update(text).digest("hex");
 // 0.5 R14: the marker that proves a literature note was created by this plugin for exactly this item.
@@ -193,8 +197,42 @@ export function readingOrder(entry: ZoteroIndexEntry): { attachment: ZoteroIndex
 	});
 }
 
+/**
+ * The annotations a note renders, in reading order; with "Join continued highlights" (0.6.1) a `+` continuation is
+ * folded into the block of the highlight it continues (annotations/join.ts).
+ */
+export function annotationsInOrder(entry: ZoteroIndexEntry, settings: Partial<LayoutSettings>): ReturnType<typeof readingOrder> {
+	const ordered = readingOrder(entry);
+	return layoutOf(settings).joinContinuations ? joinContinuations(ordered).map(({ item, annotation }) => ({ attachment: item.attachment, annotation })) : ordered;
+}
+
+/**
+ * Section ID of a joined continuation's chain head, per continuation ID: with "Join continued highlights" (0.6.1) a `+`
+ * continuation renders inside its head's block and never gets a block of its own.
+ */
+export function continuationHeads(entry: ZoteroIndexEntry): Map<string, string> {
+	const heads = new Map<string, string>();
+	for (const joined of joinContinuations(readingOrder(entry))) {
+		const attachment = joined.item.attachment.key;
+		for (const continuation of joined.continuations) heads.set(`annotation-${attachment}-${continuation}`, `annotation-${attachment}-${joined.annotation.key}`);
+	}
+	return heads;
+}
+
 /** Single-line text for callout titles and inline fields. */
 function inline(value: unknown): string { return plainText(value).replace(/\s*\n\s*/g, " "); }
+/**
+ * 0.6.1 RICH-TEXT: single-line text with Zotero's rich-text whitelist (`<i>`, `<b>`, `<sup>`, `<sub>`, spans, `<br>`) as
+ * Markdown; every other character is escaped exactly as `inline` escapes it. `italic`: the caller wraps the result in `*…*`.
+ * Titles, annotation text and comments use it; DOIs, URLs, citekeys and tags never do.
+ */
+export function richInline(value: unknown, italic = false): string {
+	if (typeof value !== "string") return "";
+	return richTextMarkdown(stripControl(value), escapeMarkdown, { italic }).replace(/\n{3,}/g, "\n\n").trim().replace(/\s*\n\s*/g, " ");
+}
+
+/** Note text: `richInline` when the layout reads Zotero rich text (0.6.1, off by default), else the 0.6.0 `inline` text. */
+function noteInline(value: unknown, rich: boolean, italic = false): string { return rich ? richInline(value, italic) : inline(value); }
 
 /**
  * Strict DOI: no whitespace and none of the characters that would form Markdown links, emphasis, code or table cells
@@ -345,7 +383,7 @@ const ANNOTATION_OPENING = /<!-- cmds-zotero:(annotation-[A-Za-z0-9]{1,32}-[A-Za
  * orders after it (detached blocks included); a block with no later neighbour is appended as before. `order` lists every
  * annotation section ID in reading order; `blocks` arrive in that order.
  */
-function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: string }[], order: readonly string[]): string {
+function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: string }[], order: readonly string[], heading: string): string {
 	const rank = new Map(order.map((id, position) => [id, position]));
 	let result = content;
 	for (const block of blocks) {
@@ -361,17 +399,43 @@ function spliceAnnotationsInOrder(content: string, blocks: { id: string; text: s
 				break;
 			}
 		}
-		result = before === null ? spliceAnnotations(result, [block.text]) : `${result.slice(0, before)}${block.text}\n\n${result.slice(before)}`;
+		result = before === null ? spliceAnnotations(result, [block.text], heading) : `${result.slice(0, before)}${block.text}\n\n${result.slice(before)}`;
 	}
 	return result;
 }
-function spliceAnnotations(content: string, blocks: string[]): string {
+/**
+ * The `## <heading>` line new annotation blocks go under: the configured heading (0.6.1 R17), else `## Annotations`.
+ * Only a line after the last generated non-annotation block (`overview`, `citation`, `metadata`, `notes`) and outside
+ * every managed block counts, so blocks never land inside a managed block or in a section above the annotations.
+ */
+function annotationsHeadingLine(content: string, heading: string): RegExpExecArray | null {
+	const managed: [number, number][] = [];
+	let from = 0;
+	for (const opening of content.matchAll(/<!-- cmds-zotero:([a-zA-Z0-9-]+):(?:[a-f0-9]{64}|detached) -->/g)) {
+		const closing = `<!-- /cmds-zotero:${opening[1]} -->`;
+		const at = content.indexOf(closing, opening.index);
+		const end = at < 0 ? content.length : at + closing.length;
+		managed.push([opening.index, end]);
+		if (!opening[1].startsWith("annotation-")) from = Math.max(from, end);
+	}
+	const find = (text: string): RegExpExecArray | null => {
+		const line = new RegExp(`^## ${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*$`, "gm");
+		line.lastIndex = from;
+		for (let match = line.exec(content); match; match = line.exec(content)) {
+			const at = match.index;
+			if (!managed.some(([start, end]) => at >= start && at < end)) return match;
+		}
+		return null;
+	};
+	return find(heading) ?? (heading === DEFAULT_ANNOTATIONS_HEADING ? null : find(DEFAULT_ANNOTATIONS_HEADING));
+}
+function spliceAnnotations(content: string, blocks: string[], heading: string): string {
 	const joined = blocks.join("\n\n");
 	let at = -1;
 	for (const match of content.matchAll(/<!-- \/cmds-zotero:annotation-[A-Za-z0-9-]+ -->/g)) at = match.index + match[0].length;
 	if (at < 0) {
-		const heading = /^## Annotations[ \t]*$/m.exec(content);
-		if (heading) at = heading.index + heading[0].length;
+		const found = annotationsHeadingLine(content, heading);
+		if (found) at = found.index + found[0].length;
 	}
 	if (at < 0) return `${content.replace(/\n*$/, "\n")}\n${joined}\n`;
 	return `${content.slice(0, at)}\n\n${joined}${content.slice(at).replace(/^\n*(?=[^\n])/, "\n\n").replace(/^\n*$/, "\n")}`;
@@ -401,7 +465,7 @@ export function creatorNames(entry: ZoteroIndexEntry): CreatorName[] {
 	});
 }
 
-export function filteredTags(tags: string[], settings: CmdsZoteroSettings): string[] {
+export function filteredTags(tags: string[], settings: Pick<CmdsZoteroSettings, "excludedTags">): string[] {
 	const excluded = new Set(settings.excludedTags.map(tag => tag.toLowerCase()));
 	return tags.filter(tag => tag.trim() && !excluded.has(tag.trim().toLowerCase()));
 }
@@ -413,36 +477,157 @@ export function annotationURI(a: Annotation, entry: ZoteroIndexEntry): string {
 	return `zotero://open-pdf/${scope}/items/${key(a.attachmentKey)}?page=${page}&annotation=${encodeURIComponent(key(a.key))}`;
 }
 
-/** Renders one annotation as CMDS callout Markdown; reused by the import and the annotation sidebar. */
-export function annotationBody(a: Annotation, image: string | undefined, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings): string {
+/**
+ * 0.6.1: the `Tags:` line of an annotation, or "" without tags. Excluded tags (settings) are left out. `plain` keeps
+ * Zotero's text, comma-separated (the 0.6.0 line); `hashtag` writes Obsidian tags with the frontmatter slug rules
+ * (`normalizeTag`: spaces become `-`, letters in any script are kept), deduplicated case-insensitively; a tag without a
+ * valid slug (empty or all digits) stays as escaped text.
+ */
+export function annotationTagsLine(tags: readonly string[], settings: Pick<CmdsZoteroSettings, "excludedTags" | "annotationTagStyle">): string {
+	const kept = filteredTags([...tags], settings);
+	if (!kept.length) return "";
+	if (settings.annotationTagStyle !== "hashtag") return `Tags: ${kept.map(inline).join(", ")}`;
+	const seen = new Set<string>();
+	const parts = kept.flatMap(tag => {
+		const slug = normalizeTag(tag);
+		const id = (slug ?? tag.trim()).toLowerCase();
+		if (seen.has(id)) return [];
+		seen.add(id);
+		return [slug ? `#${slug}` : inline(tag)];
+	});
+	return `Tags: ${parts.join(" ")}`;
+}
+
+/** 0.6.1 G21: the body of an image annotation whose image was not copied (no cached image, or the sidebar). */
+export const IMAGE_NOT_CACHED = "Image not available in Zotero's cache; open it in Zotero.";
+
+/** 0.6.1: the body of an image annotation inserted without its image (insert-item-content). */
+export const IMAGE_IN_ZOTERO = "Image annotation; open it in Zotero.";
+
+/**
+ * Renders one annotation as CMDS callout Markdown; reused by the import and the annotation sidebar. `imageNote`: the line
+ * an image annotation without a copied image shows.
+ */
+export function annotationBody(a: Annotation, image: string | undefined, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings, imageNote: string = IMAGE_NOT_CACHED): string {
 	const uri = annotationURI(a, entry);
-	const page = Number.isSafeInteger(a.page) && a.page > 0 ? a.page : 1;
 	// Zotero page labels can be placeholders such as "-"; fall back to the PDF page position unless the label carries a letter or digit.
-	const label = inline(/[\p{L}\p{N}]/u.test(a.pageLabel) ? a.pageLabel : String(page));
+	const label = inline(displayPageLabel(a));
 	const color = colorName(a.color);
 	const link = `[p. ${label}](${uri})`;
-	const comment = a.comment ? `**Comment**: *${inline(a.comment)}*` : "";
-	const tags = a.tags.length ? `Tags: ${a.tags.map(inline).join(", ")}` : "";
+	const rich = settings.noteRichText === true;
+	const comment = a.comment ? `**Comment**: *${noteInline(a.comment, rich, true)}*` : "";
+	const tags = annotationTagsLine(a.tags, settings);
 	const type = (a.type || "highlight").toLowerCase();
 	if (image) {
 		const title = `[!Image] ${color ? `${color} · ` : ""}p. ${label}`;
 		return quoted([title, `![Annotation image](${encodedPath(image)}) ${link}`, comment, tags].filter(Boolean).join("\n"));
 	}
+	if (type === "image") {
+		// 0.6.1 G21: no cached image to copy — name it and link to it instead of an empty highlight.
+		return quoted([`[!Image] ${color ? `${color} · ` : ""}p. ${label}`, `*${imageNote}* ${link}`, comment, tags].filter(Boolean).join("\n"));
+	}
 	if (type === "ink") {
 		// A freehand drawing has no text and BBT renders no image for it: name it and link to it.
-		return quoted([`[!Note] ink · ${color ? `${color} · ` : ""}p. ${label}`, `${inline(a.comment) || "*Drawing; open it in Zotero.*"} ${link}`, tags].filter(Boolean).join("\n"));
+		return quoted([`[!Note] ink · ${color ? `${color} · ` : ""}p. ${label}`, `${noteInline(a.comment, rich) || "*Drawing; open it in Zotero.*"} ${link}`, tags].filter(Boolean).join("\n"));
 	}
 	if (type === "note" || (!a.text && a.comment)) {
-		const body = inline(a.comment) || "*(empty note)*";
+		const body = noteInline(a.comment, rich) || "*(empty note)*";
 		return quoted([`[!Note] p. ${label}`, `${body} ${link}`, tags].filter(Boolean).join("\n"));
 	}
 	if (color && settings.headingHighlightColor !== "none" && color === settings.headingHighlightColor && a.text) {
-		return [`##### ${inline(a.text)} ${link}`, comment, tags].filter(Boolean).join("\n\n");
+		return [`##### ${noteInline(a.text, rich)} ${link}`, comment, tags].filter(Boolean).join("\n\n");
 	}
-	const text = inline(a.text);
+	const text = noteInline(a.text, rich);
 	const marked = color ? `<mark class="cmds-zotero-hl-${color}">${text}</mark>` : text;
 	const title = `[!Highlight] ${color ? `${color} · ` : ""}${type === "underline" ? "underline · " : ""}p. ${label}`;
 	return quoted([title, `${marked} (${link})`, comment, tags].filter(Boolean).join("\n"));
+}
+
+
+// 0.6.1: the parts of the built-in note as separate renderers, shared by renderLiterature and the insert-item-content
+// fragments (fragments.ts). Each returns Markdown without managed markers.
+
+/** The journal (journal article) or repository (preprint) of the 0.6.0 `zotero_journal` key and `Journal` field. */
+function journalOf(entry: ZoteroIndexEntry): string {
+	const itemType = metadataText(entry, "itemType");
+	return itemType === "journalArticle" ? metadataText(entry, "publicationTitle") : itemType === "preprint" ? metadataText(entry, "repository") : "";
+}
+
+/** The abstract callout, or "" when the item has no abstract. */
+export function abstractCallout(entry: ZoteroIndexEntry, calloutName: string): string {
+	const abstract = textFromHTML(entry.metadata.abstractNote);
+	return abstract ? quoted(`[!${calloutName}]\nabstract:: ${abstract}`) : "";
+}
+
+/** The bibliography callout, or "" without bibliography text. */
+export function citationCallout(bibliography: string, calloutName: string): string {
+	const citation = bibliographyText(bibliography);
+	return citation ? quoted(`[!${calloutName}]\n${citation}`) : "";
+}
+
+/** The metadata fields callout. `related`: citekeys of related items present in the index. */
+export function metadataCallout(entry: ZoteroIndexEntry, settings: CmdsZoteroSettings, related: readonly string[] = []): string {
+	const layout = layoutOf(settings);
+	const creators = creatorNames(entry);
+	const tags = filteredTags(entry.tags, settings);
+	const itemType = metadataText(entry, "itemType");
+	const journal = journalOf(entry);
+	const relatedKeys = related.filter(citekey => /^[A-Za-z0-9_:.+/-]+$/.test(citekey));
+	const fields: [string, string][] = [];
+	for (const creator of creators) fields.push([creator.role.charAt(0).toUpperCase() + creator.role.slice(1), inline(creator.name)]);
+	if (!creators.length) for (const name of entry.authors) fields.push(["Author", inline(name)]);
+	fields.push(["Title", noteInline(entry.title, layout.richText)], ["Year", inline(entry.year)], ["Citekey", `@${safeCitekey(entry.citekey)}`]);
+	if (tags.length) fields.push(["Tags", tags.map(inline).join(", ")]);
+	if (itemType) fields.push(["itemType", itemType]);
+	// 0.6.1: with "Fields by item type" the fields follow the item type (item-fields.ts); off, the 0.6.0 fixed list.
+	const fieldValue = (spec: FieldSpec): string => {
+		const value = spec.kind === "doi" ? safeDOI(entry.metadata[spec.field]) : metadataText(entry, spec.field);
+		return value && spec.kind === "italic" ? `*${value}*` : value;
+	};
+	const pushSpecs = (specs: readonly FieldSpec[]): void => { for (const spec of specs) { const value = fieldValue(spec); if (value) fields.push([spec.label, value]); } };
+	if (layout.itemTypeFields) pushSpecs(fieldsFor(itemType));
+	else {
+		if (journal) fields.push(["Journal", `*${journal}*`]);
+		for (const [label, field] of [["Volume", "volume"], ["Issue", "issue"], ["Publisher", "publisher"], ["Location", "place"], ["Pages", "pages"], ["DOI", "DOI"], ["ISBN", "ISBN"]] as const) {
+			const value = field === "DOI" ? safeDOI(entry.metadata[field]) : metadataText(entry, field);
+			if (value) fields.push([label, value]);
+		}
+		if (itemType === "bookSection" && metadataText(entry, "publicationTitle")) fields.push(["Book", metadataText(entry, "publicationTitle")]);
+	}
+	if (entry.url) fields.push(["URL", safeURL(entry.url)]);
+	if (entry.collections.length) fields.push(["Collections", entry.collections.map(inline).join("; ")]);
+	if (layout.itemTypeFields) {
+		for (const [label, value] of extraFields(entry.metadata.extra)) {
+			const name = inline(label);
+			if (name && inline(value) && !fields.some(([other]) => other.toLowerCase() === name.toLowerCase())) fields.push([name, inline(value)]);
+		}
+		pushSpecs(RECORD_DATES);
+	}
+	// Always present so the metadata hash does not flip merely because relations appear; the `[!Synth]` `Related::` line stays user-owned.
+	fields.push(["Zotero related", relatedKeys.map(citekey => `[[@${citekey}]]`).join(", ")]);
+	return quoted(`[!${layout.callouts.metadata}]\n${fields.map(([label, value]) => `**${label}**:: ${value}`).join("\n")}`);
+}
+
+/** The links callout: the item in Zotero and its attachment files. */
+export function linksCallout(entry: ZoteroIndexEntry, calloutName: string): string {
+	const links = [`[Open in Zotero](${entry.zoteroSelectURI})`, ...entry.attachments.filter(a => a.path).map(a => `[${inline(a.title) || "Attachment"}](${fileURI(a.path ?? "")})`)];
+	return quoted(`[!${calloutName}]\n${links.join(" · ")}`);
+}
+
+/** The item's Zotero child notes (BBT JSON `notes`), in Zotero's order: their raw HTML and, if present, their key. */
+export function zoteroChildNotes(entry: ZoteroIndexEntry): { html: string; key?: string }[] {
+	const notes: unknown[] = Array.isArray(entry.metadata.notes) ? entry.metadata.notes : [];
+	return notes.map(n => {
+		const record = n && typeof n === "object" ? n as Record<string, unknown> : null;
+		const html: unknown = typeof n === "string" ? n : record && "note" in record ? record.note : "";
+		const key = record && typeof record.key === "string" && /^[A-Za-z0-9]+$/.test(record.key) ? record.key : undefined;
+		return { html: typeof html === "string" ? html : "", ...(key ? { key } : {}) };
+	});
+}
+
+/** Each child note as note-section text (`noteBody`), in Zotero's order; an empty note gives "". */
+export function zoteroNoteBodies(entry: ZoteroIndexEntry, convert?: (html: string) => string): string[] {
+	return zoteroChildNotes(entry).map(note => note.html ? noteBody(note.html, convert) : "");
 }
 
 
@@ -460,47 +645,32 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const authors = creators.filter(c => c.role === "author").map(c => c.name);
 	const authorList = authors.length ? authors : creators.length ? creators.map(c => c.name) : entry.authors;
 	const tags = filteredTags(entry.tags, settings);
-	const itemType = metadataText(entry, "itemType");
-	const journal = itemType === "journalArticle" ? metadataText(entry, "publicationTitle") : itemType === "preprint" ? metadataText(entry, "repository") : "";
-	const related = (context.related ?? []).filter(citekey => /^[A-Za-z0-9_:.+/-]+$/.test(citekey));
+	const journal = journalOf(entry);
+	const related = context.related ?? [];
 	const sections = new Map<string, string>();
+	// 0.6.1 R17: a switched-off part renders as an empty body; the block, its ID and its markers stay.
+	const layout = layoutOf(settings);
+	const callout = layout.callouts;
 
-	const abstract = textFromHTML(entry.metadata.abstractNote);
-	sections.set("overview", [`# ${inline(entry.title)}`, abstract ? quoted(`[!Abstract]\nabstract:: ${abstract}`) : ""].filter(Boolean).join("\n\n"));
+	const abstract = layout.abstract ? abstractCallout(entry, callout.abstract) : "";
+	sections.set("overview", [`# ${noteInline(entry.title, layout.richText)}`, abstract].filter(Boolean).join("\n\n"));
 	// 0.5 R12: without bibliography text an owned note keeps its `citation` section byte-identical (the section is simply
 	// not re-rendered); a new note is refused rather than written with a placeholder.
-	const citation = bibliographyText(bibliography);
-	if (citation) sections.set("citation", quoted(`[!Cite]\n${citation}`));
+	const citation = layout.citation ? citationCallout(bibliography, callout.cite) : "";
+	if (!layout.citation) sections.set("citation", "");
+	else if (citation) sections.set("citation", citation);
 	else if (previous === null) throw new Error(BIBLIOGRAPHY_REQUIRED_MESSAGE);
 
-	const fields: [string, string][] = [];
-	for (const creator of creators) fields.push([creator.role.charAt(0).toUpperCase() + creator.role.slice(1), inline(creator.name)]);
-	if (!creators.length) for (const name of entry.authors) fields.push(["Author", inline(name)]);
-	fields.push(["Title", inline(entry.title)], ["Year", inline(entry.year)], ["Citekey", `@${safeCitekey(entry.citekey)}`]);
-	if (tags.length) fields.push(["Tags", tags.map(inline).join(", ")]);
-	if (itemType) fields.push(["itemType", itemType]);
-	if (journal) fields.push(["Journal", `*${journal}*`]);
-	for (const [label, field] of [["Volume", "volume"], ["Issue", "issue"], ["Publisher", "publisher"], ["Location", "place"], ["Pages", "pages"], ["DOI", "DOI"], ["ISBN", "ISBN"]] as const) {
-		const value = field === "DOI" ? safeDOI(entry.metadata[field]) : metadataText(entry, field);
-		if (value) fields.push([label, value]);
-	}
-	if (itemType === "bookSection" && metadataText(entry, "publicationTitle")) fields.push(["Book", metadataText(entry, "publicationTitle")]);
-	if (entry.url) fields.push(["URL", safeURL(entry.url)]);
-	if (entry.collections.length) fields.push(["Collections", entry.collections.map(inline).join("; ")]);
-	// Always present so the metadata hash does not flip merely because relations appear; the `[!Synth]` `Related::` line stays user-owned.
-	fields.push(["Zotero related", related.map(citekey => `[[@${citekey}]]`).join(", ")]);
-	const links = [`[Open in Zotero](${entry.zoteroSelectURI})`, ...entry.attachments.filter(a => a.path).map(a => `[${inline(a.title) || "Attachment"}](${fileURI(a.path ?? "")})`)];
-	sections.set("metadata", `${quoted(`[!md]\n${fields.map(([label, value]) => `**${label}**:: ${value}`).join("\n")}`)}\n\n${quoted(`[!LINK]\n${links.join(" · ")}`)}`);
+	sections.set("metadata", [
+		layout.metadata ? metadataCallout(entry, settings, related) : "",
+		layout.links ? linksCallout(entry, callout.links) : "",
+	].filter(Boolean).join("\n\n"));
 
-	const notes: unknown[] = Array.isArray(entry.metadata.notes) ? entry.metadata.notes : [];
-	const noteText = notes.map(n => {
-		const html: unknown = typeof n === "string" ? n : n && typeof n === "object" && "note" in n ? (n as Record<string, unknown>).note : "";
-		return typeof html === "string" ? noteBody(html, context.noteMarkdown) : "";
-	}).filter(Boolean).join("\n\n---\n\n");
-	sections.set("notes", `## Zotero notes\n\n${noteText || "*No Zotero notes.*"}`);
+	const noteText = zoteroNoteBodies(entry, context.noteMarkdown).filter(Boolean).join("\n\n---\n\n");
+	sections.set("notes", layout.zoteroNotes ? `## Zotero notes\n\n${noteText || "*No Zotero notes.*"}` : "");
 
 	const seen = new Set<string>();
-	for (const { attachment, annotation: a } of readingOrder(entry)) {
+	for (const { attachment, annotation: a } of annotationsInOrder(entry, settings)) {
 		const id = `annotation-${key(attachment.key)}-${key(a.key)}`;
 		if (a.attachmentKey !== attachment.key) throw new Error("Annotation attachment identity mismatch");
 		if (seen.has(id)) continue;
@@ -531,11 +701,13 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		// JSON scalars and flow sequences are valid YAML and keep quoting unambiguous.
 		const frontmatter = yaml.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n");
 		const intro = ["overview", "citation"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
-		const synthesis = "## Synthesis\n\n> [!Synth]\n> **Contribution**::\n> **Related**::";
+		// The Synthesis scaffold is user-owned from the start: written once, never managed.
+		const synthesis = layout.synthesis ? `## Synthesis\n\n${quoted([`[!${callout.synthesis}]`, ...layout.synthesisLines].join("\n"))}` : "";
 		const details = ["metadata", "notes"].map(id => block(id, sections.get(id) ?? "")).join("\n\n");
 		const annotations = [...sections].filter(([id]) => id.startsWith("annotation-")).map(([id, body]) => block(id, body)).join("\n\n");
 		for (const [id, body] of sections) report.push({ id, state: "fresh", reason: "new note", body });
-		return { content: `---\n${frontmatter}\n---\n\n${owner}\n\n${intro}\n\n${synthesis}\n\n${details}\n\n## Notes\n\n## Annotations\n\n${annotations}\n`, conflicts, softConflicts, detached, reset, sections: report, images };
+		const body = [owner, intro, synthesis, details, "## Notes", `## ${layout.annotationsHeading}`].filter(Boolean).join("\n\n");
+		return { content: `---\n${frontmatter}\n---\n\n${body}\n\n${annotations}\n`, conflicts, softConflicts, detached, reset, sections: report, images };
 	}
 	// 0.5 R5: per-block states; edited blocks are soft conflicts (kept verbatim, note still written), detached blocks are
 	// user-owned and never re-rendered, malformed/duplicate/missing markers stay hard.
@@ -544,6 +716,9 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const resetWanted = new Set(context.reset ?? []);
 	const consumed = new Set<number>();
 	const lineOf = (offset: number): number => previous.slice(0, offset).split("\n").length;
+	// A joined continuation is still in Zotero; its older block of its own is kept, under a reason that says why.
+	const joinedInto = layout.joinContinuations ? continuationHeads(entry) : new Map<string, string>();
+	const gone = (id: string): string => joinedInto.has(id) ? "joined into the previous highlight" : "no longer in Zotero";
 	let content = previous.replace(MANAGED_BLOCK, (whole: string, id: string, mark: string, tail: string, body: string, offset: number) => {
 		const line = lineOf(offset);
 		consumed.add(offset);
@@ -569,7 +744,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		}
 		if (mark === DETACHED_MARK) {
 			detached.push(id);
-			report.push({ id, state: "detached", reason: `cannot reset: no longer in Zotero${repaired}`, line, body });
+			report.push({ id, state: "detached", reason: `cannot reset: ${gone(id)}${repaired}`, line, body });
 			return withTail(detachedBlock(id, body), tail);
 		}
 		if (edited) {
@@ -578,7 +753,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 			return withTail(storedBlock(id, mark, body), tail);
 		}
 		if (fresh === undefined) {
-			report.push({ id, state: "unchanged", reason: `no longer in Zotero: kept${repaired}`, line, body });
+			report.push({ id, state: "unchanged", reason: `${gone(id)}: kept${repaired}`, line, body });
 			return withTail(storedBlock(id, mark, body), tail);
 		}
 		report.push({ id, state: "unchanged", reason: `not edited: refreshed from Zotero${repaired}`, line, body: fresh });
@@ -610,6 +785,6 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 			report.push({ id, state: "missing", reason: "managed block not found", body: "" });
 		}
 	}
-	if (additions.length) content = spliceAnnotationsInOrder(content, additions, [...sections.keys()].filter(id => id.startsWith("annotation-")));
+	if (additions.length) content = spliceAnnotationsInOrder(content, additions, [...sections.keys()].filter(id => id.startsWith("annotation-")), layout.annotationsHeading);
 	return { content, conflicts, softConflicts, detached, reset, sections: report, images };
 }

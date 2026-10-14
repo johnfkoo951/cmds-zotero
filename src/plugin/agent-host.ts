@@ -97,7 +97,7 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		return mapBounded(reads, 2, async read => {
 			const found = await plugin.literature.entryForRecent(read, index);
 			const files = found.entry ? notes.get(found.entry.id) ?? [] : [];
-			const note = found.entry ? literatureNoteStatus(found.entry, await readNoteTexts(files, file => plugin.app.vault.cachedRead(file))) : null;
+			const note = found.entry ? literatureNoteStatus(found.entry, await readNoteTexts(files, file => plugin.app.vault.cachedRead(file)), plugin.settings) : null;
 			return { read, id: found.entry?.id ?? null, inIndex: !!(index && indexEntryFor(read, index.entries)), fresh: found.fresh, note, ...(found.entry ? {} : { problem: `${describeBbtError(found.error)} Not in the saved index and not readable from Zotero.` }) };
 		});
 	};

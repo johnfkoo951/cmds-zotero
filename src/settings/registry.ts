@@ -7,6 +7,7 @@ import { connectionSection } from "./sections/connection";
 import { librarySection } from "./sections/library";
 import { citationsSection } from "./sections/citations";
 import { notesSection } from "./sections/notes";
+import { layoutSection } from "./sections/layout";
 import { annotationsSection } from "./sections/annotations";
 import { bibliographySection } from "./sections/bibliography";
 import { recentSection } from "./sections/recent";
@@ -15,6 +16,6 @@ import { agentsSection } from "./sections/agents";
 import { advancedSection } from "./sections/advanced";
 
 export const SETTINGS_SECTIONS: readonly SectionDefinition[] = [
-	connectionSection, librarySection, citationsSection, notesSection, annotationsSection, bibliographySection, recentSection, vaultsSection,
+	connectionSection, librarySection, citationsSection, notesSection, layoutSection, annotationsSection, bibliographySection, recentSection, vaultsSection,
 	agentsSection, advancedSection,
 ];

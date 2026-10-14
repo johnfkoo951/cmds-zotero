@@ -13,13 +13,18 @@ const sections = buildSections(SETTINGS_SECTIONS);
 const controls = controlRows(sections);
 const rowFor = (key: string) => controls.find(row => row.field.key === key);
 
-test("0.5 keys and defaults are unchanged; 0.6 adds only refresh requests and the picker wait", () => {
+test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the picker wait, 0.6.1 the note layout", () => {
 	assert.deepEqual(DEFAULT_SETTINGS, {
 		bbtEndpoint: "http://127.0.0.1:23119/better-bibtex", zoteroIndexPath: "80. References/zotero-index.json", caywFormat: "pandoc",
 		requestTimeoutMs: 20000, attachmentTimeoutMs: 60000, concurrency: 2, indexMaxAgeMinutes: 60, outputFolder: "References/Zotero",
 		imageFolder: "References/Zotero/images", bibliographyStyle: "apa", peerVaults: [], citationTrigger: "bracket", excludedTags: ["obscite"],
 		headingHighlightColor: "gray", referencesFollowActiveNote: true, referencesHeadings: ["References", "Bibliography", "Works Cited", "참고 문헌", "참고 자료"], recentReadsDays: 30,
 		collectConcurrency: 4, pickerWaitSeconds: 600,
+		// 0.6.1 R17: note layout (the 0.6.0 note).
+		noteAbstract: true, noteCitation: true, noteMetadata: true, noteLinks: true, noteZoteroNotes: true, noteSynthesis: true,
+		calloutAbstract: "Abstract", calloutCite: "Cite", calloutMetadata: "md", calloutLinks: "LINK", calloutSynthesis: "Synth",
+		synthesisLines: ["**Contribution**::", "**Related**::"], annotationsHeading: "Annotations", noteItemTypeFields: false,
+		joinContinuations: false, noteRichText: false, annotationTagStyle: "plain",
 	});
 });
 
