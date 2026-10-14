@@ -3,7 +3,8 @@
  *
  * A citekey is `unknown` when a loaded snapshot has no item carrying it, `ambiguous` when several items carry it (current
  * or former keys, across libraries), and `former` when it is only a previous key of one item. Without a loaded snapshot
- * nothing is claimed (UI negatives need a loaded snapshot).
+ * nothing is claimed (UI negatives need a loaded snapshot), and an incomplete snapshot never marks a key `unknown`: it
+ * cannot prove absence (AGENTS.md).
  */
 import type { ZoteroIndexEntry } from "../types";
 import { scanCitations } from "./scan";
@@ -12,10 +13,10 @@ export type CitekeyProblem = "unknown" | "ambiguous" | "former";
 
 export interface CitekeyLookup { entriesWithCitekey(citekey: string): readonly ZoteroIndexEntry[] }
 
-export function citekeyProblem(citekey: string, lookup: CitekeyLookup, loaded: boolean): CitekeyProblem | null {
+export function citekeyProblem(citekey: string, lookup: CitekeyLookup, loaded: boolean, complete = true): CitekeyProblem | null {
 	if (!loaded) return null;
 	const matches = lookup.entriesWithCitekey(citekey);
-	if (!matches.length) return "unknown";
+	if (!matches.length) return complete ? "unknown" : null;
 	if (matches.length > 1) return "ambiguous";
 	return matches[0].citekey === citekey ? null : "former";
 }

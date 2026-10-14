@@ -158,6 +158,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 	/** True once a validated snapshot has been published, even one with zero entries; UI negatives need this. */
 	indexLoaded(): boolean { return this.lastIndex !== null; }
 
+	/** True when the loaded snapshot says it is complete; an incomplete one cannot prove that a citekey is absent. */
+	indexComplete(): boolean { return this.lastIndex?.complete === true; }
+
 	/** Age of the loaded snapshot in minutes, or null when none is loaded or its timestamp is unusable. */
 	cachedIndexAgeMinutes(): number | null { return this.index.ageMinutes(this.lastIndex); }
 

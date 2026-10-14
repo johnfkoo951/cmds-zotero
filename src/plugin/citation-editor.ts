@@ -53,7 +53,7 @@ export class CitationEditorController implements CitationEditorHost {
 
 	problem(citekey: string): ReturnType<CitationEditorHost["problem"]> {
 		const derived = indexDerived(this.plugin.cachedEntries());
-		const problem = citekeyProblem(citekey, derived, this.plugin.indexLoaded());
+		const problem = citekeyProblem(citekey, derived, this.plugin.indexLoaded(), this.plugin.indexComplete());
 		return problem ? { problem, text: problemText(problem, citekey, derived.entriesWithCitekey(citekey)) } : null;
 	}
 

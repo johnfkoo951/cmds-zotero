@@ -208,6 +208,9 @@ test("citekey problems: unknown, ambiguous and former keys, and nothing without 
 	assert.equal(citekeyProblem("shared2020", derived, true), "ambiguous");
 	assert.equal(citekeyProblem("nobody", derived, true), "unknown");
 	assert.equal(citekeyProblem("nobody", derived, false), null);
+	// An incomplete snapshot cannot prove absence: no unknown mark, but ambiguous and former keys are still evidence.
+	assert.equal(citekeyProblem("nobody", derived, true, false), null);
+	assert.equal(citekeyProblem("kim2019old", derived, true, false), "former");
 	assert.match(problemText("former", "kim2019old", [current]), /former citekey of @kim2020/);
 	assert.match(problemText("ambiguous", "shared2020", [other, another]), /2 items/);
 });
