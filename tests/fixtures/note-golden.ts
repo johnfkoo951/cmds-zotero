@@ -72,3 +72,22 @@ export const GOLDEN_ENTRIES: Record<string, ZoteroIndexEntry> = {
 };
 
 export const GOLDEN_RELATED: Record<string, string[]> = { "journal-article": ["Chapter2025", "Student2024"] };
+
+/**
+ * 0.6.1 review: Zotero rich text in a title and in annotations. tests/fixtures/golden/rich-text.md is what the 0.6.0
+ * renderer wrote for it; with "Zotero rich text" off (the default) the note must stay byte-identical.
+ */
+export const RICH_TEXT_ENTRY: ZoteroIndexEntry = {
+	...base, id: "1:ITEM0006", itemKey: "ITEM0006", citekey: "Rich2026", title: "The <i>E. coli</i> genome in a <span class=\"nocase\">iPhone</span> study of H<sub>2</sub>O",
+	authors: ["Rich, R."], year: "2026", doi: "", url: "", collections: [], tags: [], zoteroSelectURI: "zotero://select/library/items/ITEM0006",
+	attachments: [{
+		key: "ATTACH01", openURI: "zotero://open-pdf/library/items/ATTACH01", path: "/synthetic/papers/Rich 2026.pdf", title: "Full text PDF",
+		annotations: [
+			annotation("ANNOT001", { text: "a <i>species</i> name", comment: "see <b>this</b>", page: 2, pageLabel: "2", sortIndex: "00001|000100|00010" }),
+			annotation("ANNOT002", { type: "note", comment: "x<sup>2</sup><br>next", color: "#5fb236", page: 3, pageLabel: "3", sortIndex: "00002|000100|00010" }),
+			annotation("ANNOT003", { type: "ink", comment: "<i>drawn</i>", color: "#ff6666", page: 4, pageLabel: "4", sortIndex: "00003|000100|00010" }),
+			annotation("ANNOT004", { text: "<b>Methods</b>", color: "#aaaaaa", page: 5, pageLabel: "5", sortIndex: "00004|000100|00010" }),
+		],
+	}],
+	metadata: { itemType: "journalArticle", publicationTitle: "Journal of Examples", creators: [{ creatorType: "author", lastName: "Rich", firstName: "R." }] },
+};

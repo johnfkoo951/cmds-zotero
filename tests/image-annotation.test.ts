@@ -16,8 +16,10 @@ test("an image annotation without an image is a named [!Image] block with its Zo
 });
 
 test("its comment and tags are kept, and an uncoloured or upper-case typed image still gets the placeholder", () => {
-	const body = annotationBody({ ...image, comment: "Figure <i>3</i>", tags: ["figure", "결과"] }, undefined, entry, DEFAULT_SETTINGS);
+	const body = annotationBody({ ...image, comment: "Figure <i>3</i>", tags: ["figure", "결과"] }, undefined, entry, { ...DEFAULT_SETTINGS, noteRichText: true });
 	assert.equal(body.split("\n").slice(2).join("\n"), "> **Comment**: *Figure 3*\n> Tags: figure, 결과");
+	const plain = annotationBody({ ...image, comment: "Figure <i>3</i>" }, undefined, entry, DEFAULT_SETTINGS);
+	assert.equal(plain.split("\n").slice(2).join("\n"), "> **Comment**: *Figure \\<i\\>3\\</i\\>*", "rich text is opt-in");
 	assert.match(annotationBody({ ...image, color: "", type: "Image" }, undefined, entry, DEFAULT_SETTINGS), /^> \[!Image\] p\. 7\n> \*Image not available/);
 });
 

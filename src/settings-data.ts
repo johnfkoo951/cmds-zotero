@@ -58,6 +58,7 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		annotationsHeading: annotationsHeading(data.annotationsHeading),
 		noteItemTypeFields: flag(data.noteItemTypeFields, DEFAULT_SETTINGS.noteItemTypeFields),
 		joinContinuations: flag(data.joinContinuations, DEFAULT_SETTINGS.joinContinuations),
+		noteRichText: flag(data.noteRichText, DEFAULT_SETTINGS.noteRichText),
 		annotationTagStyle: (["plain", "hashtag"] as const).includes(data.annotationTagStyle as AnnotationTagStyle) ? data.annotationTagStyle as AnnotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
 	};
 }

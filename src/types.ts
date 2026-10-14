@@ -61,6 +61,8 @@ export interface CmdsZoteroSettings {
 	noteItemTypeFields: boolean;
 	/** 0.6.1: a highlight whose comment starts with `+` renders inside the block of the highlight it continues (annotations/join.ts). */
 	joinContinuations: boolean;
+	/** 0.6.1: Zotero rich text (`<i>`, `<b>`, `<sup>`, `<sub>`, spans, `<br>`) in titles and annotations as Markdown; off keeps the 0.6.0 escaped text. */
+	noteRichText: boolean;
 	/** 0.6.1: annotation tags as written by Zotero (`Tags: a, b`), or as Obsidian tags (`Tags: #a #b`) with the frontmatter slug rules. */
 	annotationTagStyle: AnnotationTagStyle;
 }
@@ -95,6 +97,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	annotationsHeading: "Annotations",
 	noteItemTypeFields: false,
 	joinContinuations: false,
+	noteRichText: false,
 	annotationTagStyle: "plain",
 };
 

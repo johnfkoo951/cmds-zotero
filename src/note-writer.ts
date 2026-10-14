@@ -218,6 +218,9 @@ export function richInline(value: unknown, italic = false): string {
 	return richTextMarkdown(stripControl(value), escapeMarkdown, { italic }).replace(/\n{3,}/g, "\n\n").trim().replace(/\s*\n\s*/g, " ");
 }
 
+/** Note text: `richInline` when the layout reads Zotero rich text (0.6.1, off by default), else the 0.6.0 `inline` text. */
+function noteInline(value: unknown, rich: boolean, italic = false): string { return rich ? richInline(value, italic) : inline(value); }
+
 /**
  * Strict DOI: no whitespace and none of the characters that would form Markdown links, emphasis, code or table cells
  * (`[ ] * | \``); `<`/`>` stay allowed for SICI DOIs (`<273::AID>`) but `<` may not start an HTML tag (`<a`, `</`, `<!`).
@@ -477,7 +480,8 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 	const label = inline(displayPageLabel(a));
 	const color = colorName(a.color);
 	const link = `[p. ${label}](${uri})`;
-	const comment = a.comment ? `**Comment**: *${richInline(a.comment, true)}*` : "";
+	const rich = settings.noteRichText === true;
+	const comment = a.comment ? `**Comment**: *${noteInline(a.comment, rich, true)}*` : "";
 	const tags = annotationTagsLine(a.tags, settings);
 	const type = (a.type || "highlight").toLowerCase();
 	if (image) {
@@ -490,16 +494,16 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 	}
 	if (type === "ink") {
 		// A freehand drawing has no text and BBT renders no image for it: name it and link to it.
-		return quoted([`[!Note] ink · ${color ? `${color} · ` : ""}p. ${label}`, `${richInline(a.comment) || "*Drawing; open it in Zotero.*"} ${link}`, tags].filter(Boolean).join("\n"));
+		return quoted([`[!Note] ink · ${color ? `${color} · ` : ""}p. ${label}`, `${noteInline(a.comment, rich) || "*Drawing; open it in Zotero.*"} ${link}`, tags].filter(Boolean).join("\n"));
 	}
 	if (type === "note" || (!a.text && a.comment)) {
-		const body = richInline(a.comment) || "*(empty note)*";
+		const body = noteInline(a.comment, rich) || "*(empty note)*";
 		return quoted([`[!Note] p. ${label}`, `${body} ${link}`, tags].filter(Boolean).join("\n"));
 	}
 	if (color && settings.headingHighlightColor !== "none" && color === settings.headingHighlightColor && a.text) {
-		return [`##### ${richInline(a.text)} ${link}`, comment, tags].filter(Boolean).join("\n\n");
+		return [`##### ${noteInline(a.text, rich)} ${link}`, comment, tags].filter(Boolean).join("\n\n");
 	}
-	const text = richInline(a.text);
+	const text = noteInline(a.text, rich);
 	const marked = color ? `<mark class="cmds-zotero-hl-${color}">${text}</mark>` : text;
 	const title = `[!Highlight] ${color ? `${color} · ` : ""}${type === "underline" ? "underline · " : ""}p. ${label}`;
 	return quoted([title, `${marked} (${link})`, comment, tags].filter(Boolean).join("\n"));
@@ -538,7 +542,7 @@ export function metadataCallout(entry: ZoteroIndexEntry, settings: CmdsZoteroSet
 	const fields: [string, string][] = [];
 	for (const creator of creators) fields.push([creator.role.charAt(0).toUpperCase() + creator.role.slice(1), inline(creator.name)]);
 	if (!creators.length) for (const name of entry.authors) fields.push(["Author", inline(name)]);
-	fields.push(["Title", richInline(entry.title)], ["Year", inline(entry.year)], ["Citekey", `@${safeCitekey(entry.citekey)}`]);
+	fields.push(["Title", noteInline(entry.title, layout.richText)], ["Year", inline(entry.year)], ["Citekey", `@${safeCitekey(entry.citekey)}`]);
 	if (tags.length) fields.push(["Tags", tags.map(inline).join(", ")]);
 	if (itemType) fields.push(["itemType", itemType]);
 	// 0.6.1: with "Fields by item type" the fields follow the item type (item-fields.ts); off, the 0.6.0 fixed list.
@@ -615,7 +619,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const callout = layout.callouts;
 
 	const abstract = layout.abstract ? abstractCallout(entry, callout.abstract) : "";
-	sections.set("overview", [`# ${richInline(entry.title)}`, abstract].filter(Boolean).join("\n\n"));
+	sections.set("overview", [`# ${noteInline(entry.title, layout.richText)}`, abstract].filter(Boolean).join("\n\n"));
 	// 0.5 R12: without bibliography text an owned note keeps its `citation` section byte-identical (the section is simply
 	// not re-rendered); a new note is refused rather than written with a placeholder.
 	const citation = layout.citation ? citationCallout(bibliography, callout.cite) : "";

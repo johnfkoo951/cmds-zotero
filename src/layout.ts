@@ -3,7 +3,7 @@
  *
  * The managed section IDs and the marker grammar never change: a switched-off section keeps its managed block with an
  * empty body, so an older note never reports a missing section and switching the section back on refreshes it in place.
- * Defaults reproduce the 0.6.0 note byte for byte.
+ * Defaults reproduce the 0.6.0 note byte for byte (annotation tags aside: excluded tags are left out since 0.6.1).
  */
 import type { CmdsZoteroSettings } from "./types";
 
@@ -37,6 +37,8 @@ export interface LayoutOptions {
 	itemTypeFields: boolean;
 	/** Highlights continued with a leading `+` join the highlight before them (annotations/join.ts); off by default. */
 	joinContinuations: boolean;
+	/** Zotero rich-text tags in titles and annotations as Markdown (annotations/rich-text.ts); off by default. */
+	richText: boolean;
 }
 
 export const DEFAULT_CALLOUTS: Readonly<CalloutNames> = { abstract: "Abstract", cite: "Cite", metadata: "md", links: "LINK", synthesis: "Synth" };
@@ -92,7 +94,7 @@ export function annotationsHeading(value: unknown): string {
 
 export type LayoutSettings = Pick<CmdsZoteroSettings,
 	"noteAbstract" | "noteCitation" | "noteMetadata" | "noteLinks" | "noteZoteroNotes" | "noteSynthesis" |
-	"calloutAbstract" | "calloutCite" | "calloutMetadata" | "calloutLinks" | "calloutSynthesis" | "synthesisLines" | "annotationsHeading" | "noteItemTypeFields" | "joinContinuations">;
+	"calloutAbstract" | "calloutCite" | "calloutMetadata" | "calloutLinks" | "calloutSynthesis" | "synthesisLines" | "annotationsHeading" | "noteItemTypeFields" | "joinContinuations" | "noteRichText">;
 
 /** The layout a note is rendered with; every value is normalised again, so a hand-built settings object is safe. */
 export function layoutOf(settings: Partial<LayoutSettings>): LayoutOptions {
@@ -111,6 +113,7 @@ export function layoutOf(settings: Partial<LayoutSettings>): LayoutOptions {
 		annotationsHeading: annotationsHeading(settings.annotationsHeading),
 		itemTypeFields: settings.noteItemTypeFields === true,
 		joinContinuations: settings.joinContinuations === true,
+		richText: settings.noteRichText === true,
 	};
 }
 

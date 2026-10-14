@@ -43,6 +43,8 @@ export const layoutSection: SectionDefinition = {
 		section.toggle(toggleField("noteLinks")).setName("Links").setDesc("Show the links to the item in Zotero and to its attachments.");
 		section.toggle(toggleField("joinContinuations")).setName("Join continued highlights")
 			.setDesc("A highlight whose Zotero comment starts with + is added to the highlight before it in the same attachment: one block with both texts, the page span and the comments without the +. Off keeps every highlight separate.");
+		section.toggle(toggleField("noteRichText")).setName("Zotero rich text")
+			.setDesc("Show italics, bold, superscript and subscript from Zotero titles, annotation texts and comments as Markdown (<i> becomes *italics*), and drop nocase spans. Off shows the tags as text, as earlier versions did.");
 		section.dropdown(choiceField("annotationTagStyle", ["plain", "hashtag"])).setName("Annotation tags")
 			.setDesc("Write the Zotero tags of an annotation as Zotero has them, or as Obsidian tags (#method, spaces become -) that show up in the tag pane and in search. Excluded tags are left out either way.")
 			.addOption("plain", "As in Zotero").addOption("hashtag", "Obsidian tags");

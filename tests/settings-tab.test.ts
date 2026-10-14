@@ -24,7 +24,7 @@ test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the pic
 		noteAbstract: true, noteCitation: true, noteMetadata: true, noteLinks: true, noteZoteroNotes: true, noteSynthesis: true,
 		calloutAbstract: "Abstract", calloutCite: "Cite", calloutMetadata: "md", calloutLinks: "LINK", calloutSynthesis: "Synth",
 		synthesisLines: ["**Contribution**::", "**Related**::"], annotationsHeading: "Annotations", noteItemTypeFields: false,
-		joinContinuations: false, annotationTagStyle: "plain",
+		joinContinuations: false, noteRichText: false, annotationTagStyle: "plain",
 	});
 });
 
