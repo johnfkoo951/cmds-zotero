@@ -24,21 +24,34 @@ export async function assertVaultBoundary(app: App, value: string): Promise<void
 	await assertSegmentsInside(await fs.realpath(app.vault.adapter.getBasePath()), rel);
 }
 
+/** The boundary check of one vault scan; `changedFolders` names the vault-relative folders that changed during it. */
+export interface VaultBoundaryScan {
+	(value: string): Promise<void>;
+	changedFolders(): Promise<string[]>;
+}
+
 /**
  * PERF-07: `assertVaultBoundary` for the files of one vault scan. The vault root's realpath is resolved once and the
  * parent folders' lstat answers are shared by the scan's files; each file's own segment is still checked on every call.
- * Create one per scan and never keep it across scans.
+ * A folder swapped for a symbolic link after its check would be followed for the rest of the scan, so the scan asks
+ * `changedFolders()` at its end and treats the notes under them as skipped. Create one per scan; never keep it across scans.
  */
-export function vaultBoundaryScan(app: App): (value: string) => Promise<void> {
+export function vaultBoundaryScan(app: App): VaultBoundaryScan {
 	const lstatDir = memoizedLstat();
 	let root: Promise<string> | undefined;
-	return async value => {
+	const check = (async (value: string) => {
 		const rel = relativePath(value);
 		const adapter = app.vault.adapter;
 		if (!(adapter instanceof FileSystemAdapter)) throw new Error("A desktop file-system vault is required.");
 		root ??= fs.realpath(adapter.getBasePath());
 		await assertSegmentsInside(await root, rel, lstatDir);
+	}) as VaultBoundaryScan;
+	check.changedFolders = async () => {
+		if (!root) return [];
+		const base = await root;
+		return (await lstatDir.changedSince()).map(full => path.relative(base, full).split(path.sep).join("/"));
 	};
+	return check;
 }
 
 export async function ensureDirectory(app: App, filePath: string): Promise<void> {
@@ -130,7 +143,7 @@ export class VaultIndexStorage implements IndexStorage {
 				const backup = `${BACKUP_DIR}/${backupName}`;
 				await assertVaultBoundary(this.app, backup);
 				await ensureDirectory(this.app, backup);
-				await this.copyIndex(backup);
+				await this.copyIndex(backup, current);
 			}
 			if (!sameDigest(await this.currentDigest(), current)) throw new Error("Index changed during staging; refresh was cancelled.");
 			if (!this.canWrite()) throw new Error("The plugin was unloaded; index replacement was cancelled.");
@@ -148,13 +161,23 @@ export class VaultIndexStorage implements IndexStorage {
 
 	/**
 	 * Backs up the index with one file-system copy (a copy-on-write clone where the volume supports it) instead of writing
-	 * a copy from memory. An index that vanished since it was checked gets the same verdict as the post-staging comparison.
+	 * a copy from memory. The backup must hold exactly the bytes being replaced (`current`): the index path is checked for
+	 * symbolic links again right before the copy, the copy never overwrites an existing file, and the finished backup is
+	 * hashed. A backup that differs (the index was swapped or edited during staging) is deleted and the refresh cancelled,
+	 * so nothing read through a swapped path stays in the vault. An index that vanished gets the same verdict.
 	 */
-	private async copyIndex(backup: string): Promise<void> {
-		try { await fs.copyFile(this.fullPath(this.indexPath), this.fullPath(backup), fsConstants.COPYFILE_FICLONE); }
+	private async copyIndex(backup: string, current: IndexDigest): Promise<void> {
+		const changed = (): Error => new Error("Index changed during staging; refresh was cancelled.");
+		await assertVaultBoundary(this.app, this.indexPath);
+		const target = this.fullPath(backup);
+		try { await fs.copyFile(this.fullPath(this.indexPath), target, fsConstants.COPYFILE_EXCL | fsConstants.COPYFILE_FICLONE); }
 		catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT" && !(await this.app.vault.adapter.exists(this.indexPath))) throw new Error("Index changed during staging; refresh was cancelled.");
+			if ((error as NodeJS.ErrnoException).code === "ENOENT" && !(await this.app.vault.adapter.exists(this.indexPath))) throw changed();
 			throw error;
+		}
+		if (!sameDigest(await digestFile(target), current)) {
+			await fs.rm(target, { force: true });
+			throw changed();
 		}
 	}
 

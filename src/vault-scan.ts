@@ -56,14 +56,40 @@ export type Lstat = (path: string) => Promise<Stats>;
 
 const lstatPath: Lstat = path => fs.lstat(path);
 
-/** One scan's directory answers: each path is asked once and every later caller sees the same stats or the same error. */
-export function memoizedLstat(lstat: Lstat = lstatPath): Lstat {
+/** A memoized `Lstat` that can tell, after the scan, which of the folders it answered changed meanwhile. */
+export interface ScanLstat extends Lstat {
+	/** Paths whose answer was cached and that are now gone, another file (device or inode) or a symbolic link. */
+	changedSince(): Promise<string[]>;
+}
+
+/**
+ * One scan's directory answers: each path is asked once while its answer is a success, and every later caller sees the
+ * same stats. A failed lookup is not kept: a folder missing at its first check may exist a moment later, and the files
+ * under it must then get their own checks (0.6 review of PERF-07). `changedSince` asks every cached path again.
+ */
+export function memoizedLstat(lstat: Lstat = lstatPath): ScanLstat {
 	const answers = new Map<string, Promise<Stats>>();
-	return path => {
-		let answer = answers.get(path);
-		if (!answer) { answer = lstat(path); answers.set(path, answer); }
+	const ask = ((path: string): Promise<Stats> => {
+		const known = answers.get(path);
+		if (known) return known;
+		const answer = lstat(path);
+		answers.set(path, answer);
+		answer.catch(() => { if (answers.get(path) === answer) answers.delete(path); });
 		return answer;
+	}) as ScanLstat;
+	ask.changedSince = async () => {
+		const changed: string[] = [];
+		await Promise.all([...answers].map(async ([path, answer]) => {
+			let before: Stats;
+			try { before = await answer; } catch { return; }
+			try {
+				const now = await lstat(path);
+				if (now.dev !== before.dev || now.ino !== before.ino || now.isSymbolicLink() !== before.isSymbolicLink()) changed.push(path);
+			} catch { changed.push(path); }
+		}));
+		return changed.sort();
 	};
+	return ask;
 }
 
 export const SYMLINK_REFUSAL = "Symbolic-link output paths are not allowed.";

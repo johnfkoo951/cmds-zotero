@@ -21,6 +21,7 @@ import { LiteratureController } from "./plugin/literature-controller";
 import { NavigationController } from "./plugin/navigation";
 import type { NoteBatch } from "./plugin/note-batch";
 import { StatusController } from "./plugin/status";
+import { cachedGitProbe, type GitProbe } from "./git-probe";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
 const LEGACY_PLUGIN_MESSAGE = "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing.";
@@ -40,6 +41,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	publish!: (index: ZoteroIndex) => Promise<void>;
 	private lastView: MarkdownView | null = null;
 	pdfText!: PdfTextService;
+	/** PERF-09: the Git probe of this configuration, cached while the Git inputs keep their lstat signature; replaced on reconfigure. */
+	gitProbe!: GitProbe;
 	// Host controllers: created with the plugin, they keep their own state across configure(); host code calls them directly.
 	readonly indexing = new IndexController(this);
 	readonly bibliography = new BibliographyController(this);
@@ -82,6 +85,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	private configure(): void {
 		this.bbt = new BbtService(this.settings);
+		this.gitProbe = cachedGitProbe();
 		const canCollect: CollectPrecondition = () => this.legacyPluginEnabled() === true ? { ok: false, reason: "legacy-plugin-enabled", message: LEGACY_PLUGIN_MESSAGE } : { ok: true };
 		const indexService: IndexService = new IndexService(this.bbt, new VaultIndexStorage(this.app, this.settings.zoteroIndexPath, () => this.active && this.index === indexService), () => this.settings.indexMaxAgeMinutes, canCollect);
 		this.index = indexService;

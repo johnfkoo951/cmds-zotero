@@ -116,9 +116,37 @@ test("VaultIndexStorage uses guarded filesystem replacement with a real temporar
 			await assert.rejects(storage.writeValidated(updated), /Index changed during staging/);
 			assert.equal(await fs.readFile(join(root, indexPath), "utf8"), external);
 			assert.equal((await fileTree(root)).some(path => path.endsWith(".tmp")), false);
+			assert.deepEqual((await fileTree(root)).filter(path => path.startsWith(".cmds-zotero/backups/")), [], "a backup of the edited bytes is not kept: it would not be the index it claims to back up");
 			assert.equal(adapter.removed.length, 1);
 			assert.ok(adapter.removed.every(path => path.startsWith(`${indexPath}.`) && path.endsWith(".tmp")));
 			assert.equal(adapter.renameCalls, 0);
+		});
+
+		await t.test("an index swapped for a symbolic link during staging is never copied into a backup", async () => {
+			const { root, adapter, storage } = await fixture("symlink-swap");
+			const outside = join(directory, "outside-secret.json");
+			await fs.writeFile(outside, JSON.stringify({ secret: "OUTSIDE-THE-VAULT" }));
+			adapter.afterWrite = async path => {
+				if (!path.endsWith(".tmp")) return;
+				await fs.unlink(join(root, indexPath));
+				await fs.symlink(outside, join(root, indexPath));
+			};
+			await assert.rejects(storage.writeValidated(updated), /Symbolic-link|Index changed during staging/);
+			for (const path of (await fileTree(root)).filter(file => file.startsWith(".cmds-zotero/backups/"))) {
+				assert.doesNotMatch(await fs.readFile(join(root, path), "utf8"), /OUTSIDE-THE-VAULT/, path);
+			}
+			assert.equal((await fs.lstat(join(root, indexPath))).isSymbolicLink(), true, "the swapped path is left as found");
+			assert.equal(await fs.readFile(outside, "utf8"), JSON.stringify({ secret: "OUTSIDE-THE-VAULT" }), "the outside file is untouched");
+		});
+
+		await t.test("the backup is checked against the replaced bytes: an index rewritten in place during staging cancels the refresh", async () => {
+			const { root, adapter, storage } = await fixture("rewritten-in-place");
+			adapter.afterWrite = async path => {
+				if (path.endsWith(".tmp")) await fs.writeFile(join(root, indexPath), original.slice(0, 20));
+			};
+			await assert.rejects(storage.writeValidated(updated), /Index changed during staging/);
+			assert.deepEqual((await fileTree(root)).filter(path => path.startsWith(".cmds-zotero/backups/")), []);
+			assert.equal(await fs.readFile(join(root, indexPath), "utf8"), original.slice(0, 20), "the external bytes are left as found");
 		});
 
 		await t.test("backups are pruned to the newest three plugin-owned files; foreign files are never deleted", async () => {

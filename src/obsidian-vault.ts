@@ -39,7 +39,13 @@ export class ObsidianVaultReader implements VaultReader {
 			notes.push(recordOf(file, outcome.value));
 			return true;
 		});
-		return notes;
+		// A folder replaced (for example by a symbolic link) during the scan may have been read through: its notes are
+		// dropped and reported as unreadable, so the scan is incomplete instead of carrying text from outside the vault.
+		const changed = await boundary.changedFolders();
+		if (!changed.length) return notes;
+		const under = (notePath: string): boolean => changed.some(folder => notePath.startsWith(`${folder}/`));
+		for (const note of notes) if (under(note.path) && !this.report.skipped.includes(note.path)) this.skip(note.path, "unreadable");
+		return notes.filter(note => !under(note.path));
 	}
 
 	/**
@@ -51,7 +57,8 @@ export class ObsidianVaultReader implements VaultReader {
 		const files = this.listable();
 		if (files.length > this.limit) return findListedNote(await this.listNotes(), path);
 		const wanted = new Set<string>(notePathCandidates(path));
-		const boundary = vaultBoundaryScan(this.app);
+		// At most two candidates: each gets the full per-file boundary check, so no folder answer is reused between reads.
+		const boundary = (value: string): Promise<void> => assertVaultBoundary(this.app, value);
 		for (const file of files.filter(candidate => wanted.has(candidate.path)).sort((a, b) => a.path.localeCompare(b.path))) {
 			try { return recordOf(file, await this.readParsed(file.path, boundary)); }
 			catch { /* Unreadable: a scan skips it, so the next candidate decides. */ }

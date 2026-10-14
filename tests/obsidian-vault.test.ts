@@ -147,3 +147,39 @@ test("PERF-07: the live findNote gives the listing's answer, reading only candid
 	assert.deepEqual(reads, ["b/zeta.md"], "only the candidate note was read");
 	assert.deepEqual(reader.scanWarnings(), { skipped: [], truncated: false, skippedDetail: [] }, "no scan ran");
 });
+
+test("0.6 review of PERF-07: notes under a folder swapped for a symbolic link during a scan are dropped and reported, never returned", async () => {
+	const module = await readerModule();
+	const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-swap-scan-")));
+	const outside = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-swap-outside-")));
+	temporary.push(root, outside);
+	await fs.writeFile(join(root, "A.md"), "---\ntype: note\n---\n");
+	await fs.mkdir(join(root, "F"));
+	for (let index = 1; index <= 16; index++) {
+		const name = `n${String(index).padStart(2, "0")}.md`;
+		await fs.writeFile(join(root, "F", name), "---\ntype: inside\n---\n");
+		await fs.writeFile(join(outside, name), "---\nsecret: OUTSIDE\n---\n");
+	}
+	const { app } = await fakeApp(root, module);
+	const vault = (app as { vault: { read: (file: FakeFile) => Promise<string> } }).vault;
+	const read = vault.read;
+	let swapped = false;
+	vault.read = async file => {
+		// F's folder check has already been answered by the time its first note is read; swap F right then.
+		if (file.path === "F/n01.md" && !swapped) {
+			swapped = true;
+			await fs.rename(join(root, "F"), join(root, "F-original"));
+			await fs.symlink(outside, join(root, "F"));
+		}
+		return read(file);
+	};
+	const reader = new module.ObsidianVaultReader(app);
+	const notes = await reader.listNotes();
+	assert.equal(swapped, true);
+	assert.ok(notes.every(note => !(note.frontmatter && "secret" in note.frontmatter)), "no frontmatter from outside the vault is returned");
+	assert.deepEqual(notes.map(note => note.path), ["A.md"]);
+	const warnings = reader.scanWarnings();
+	assert.equal(warnings.skipped.length, 16, "every note under the swapped folder is reported, so the scan is incomplete");
+	assert.ok(warnings.skipped.every(path => path.startsWith("F/")));
+	assert.ok(warnings.skippedDetail.every(item => item.kind === "unreadable"));
+});

@@ -58,13 +58,45 @@ test("scanInOrder stops when visit says so: nothing new starts, work in flight s
 	await assert.rejects(scanInOrder([1], 0, async item => item, () => true), /positive integer/);
 });
 
-test("memoizedLstat asks each path once and repeats the same answer or error", async () => {
+test("memoizedLstat asks each path once while it answers, and asks a failed path again", async () => {
 	const calls: string[] = [];
 	const lstat = memoizedLstat(async path => { calls.push(path); if (path === "/missing") throw Object.assign(new Error("absent"), { code: "ENOENT" }); return { isSymbolicLink: () => false } as Stats; });
 	await lstat("/a"); await lstat("/a");
 	await assert.rejects(lstat("/missing"), /absent/);
 	await assert.rejects(lstat("/missing"), /absent/);
-	assert.deepEqual(calls, ["/a", "/missing"]);
+	assert.deepEqual(calls, ["/a", "/missing", "/missing"], "a folder missing at its first check may exist a moment later (0.6 review of PERF-07)");
+});
+
+test("memoizedLstat.changedSince names the cached folders that were replaced, removed or turned into a symbolic link", async t => {
+	const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-changed-")));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	for (const name of ["kept", "swapped", "removed", "renamed"]) await fs.mkdir(join(root, name));
+	await fs.mkdir(join(root, "elsewhere"));
+	const lstat = memoizedLstat();
+	for (const name of ["kept", "swapped", "removed", "renamed"]) await lstat(join(root, name));
+	await assert.rejects(lstat(join(root, "never")));
+	assert.deepEqual(await lstat.changedSince(), []);
+	await fs.rm(join(root, "swapped"), { recursive: true });
+	await fs.symlink(join(root, "elsewhere"), join(root, "swapped"));
+	await fs.rm(join(root, "removed"), { recursive: true });
+	await fs.rename(join(root, "renamed"), join(root, "renamed-away"));
+	await fs.mkdir(join(root, "renamed"));
+	assert.deepEqual(await lstat.changedSince(), [join(root, "removed"), join(root, "renamed"), join(root, "swapped")]);
+});
+
+test("a folder missing at its first check still gets each file's own symlink check once it appears", async t => {
+	const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-late-folder-")));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	const outside = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-outside-")));
+	t.after(() => fs.rm(outside, { recursive: true, force: true }));
+	await fs.writeFile(join(outside, "n.md"), "outside");
+	const shared = memoizedLstat();
+	await assertSegmentsInside(root, "G/n.md", shared);
+	await fs.mkdir(join(root, "G"));
+	await fs.symlink(join(outside, "n.md"), join(root, "G", "n.md"));
+	await fs.symlink(outside, join(root, "H"));
+	await assert.rejects(assertSegmentsInside(root, "G/n.md", shared), new RegExp(SYMLINK_REFUSAL), "the file's own segment is checked");
+	await assertSegmentsInside(root, "H/n.md", shared).then(() => assert.fail("H is a symbolic link"), error => assert.match(String(error), new RegExp(SYMLINK_REFUSAL)));
 });
 
 test("assertSegmentsInside refuses a symlinked folder or file, stops at an absent segment, and propagates other errors", async t => {

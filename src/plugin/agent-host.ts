@@ -5,7 +5,6 @@ import type { ActionHost, AgentAction, ImportRequest, PdfTextRequest, RefreshReq
 import { EXPORT_TRANSLATORS } from "../agent/cites-core"; // 0.5 R10
 import { buildConnection } from "../agent/connection";
 import { describeBbtError, mapBounded, transportReasonOf } from "../api/transport";
-import { probeGit } from "../git-probe";
 import { validateIndex } from "../identity";
 import { indexDerived } from "../index-derived";
 import { refreshRefusal, type IndexService } from "../index-service";
@@ -36,7 +35,7 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		mode: "live", obsidian: "ok", pluginVersion: plugin.manifest.version, pluginApiVersions: [1, 2], pluginEnabled: true, bbt: bbtInfo,
 		index: { source: index ? "plugin" : "none", path: plugin.settings.zoteroIndexPath, generatedAt: index?.generatedAt ?? null, count: index?.count ?? null, complete: index?.complete ?? null, schemaVersion: index?.schemaVersion ?? null },
 		maxAgeMinutes: plugin.settings.indexMaxAgeMinutes, legacyPluginEnabled: plugin.legacyPluginEnabled(),
-		git: root ? await probeGit(root, plugin.settings.zoteroIndexPath) : null, now,
+		git: root ? await plugin.gitProbe(root, plugin.settings.zoteroIndexPath) : null, now, // PERF-09: cached per configuration
 	});
 	const host: ActionHost = {
 		vault: plugin.app.vault.getName(), now, connection, settings: plugin.settings,

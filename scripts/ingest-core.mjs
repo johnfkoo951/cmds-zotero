@@ -8076,6 +8076,7 @@ function endpointLabel(rawURL) {
   const query = rawURL.indexOf("?");
   return query < 0 ? rawURL : rawURL.slice(0, query);
 }
+var MAX_WAIT_MS = 30 * 6e4;
 function httpRequest(rawURL, timeoutMs, body, signal) {
   const endpoint = endpointLabel(rawURL);
   const fail = (reject) => (error) => {
@@ -8084,7 +8085,7 @@ function httpRequest(rawURL, timeoutMs, body, signal) {
   return new Promise((resolve3, reject) => {
     const url = new URL(rawURL);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid BBT endpoint");
-    if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 3e5) throw new Error("Invalid request timeout");
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_WAIT_MS) throw new Error("Invalid request timeout");
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, { signal, method: body === void 0 ? "GET" : "POST", headers: body === void 0 ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, (response) => {
       const chunks = [];
@@ -8718,8 +8719,10 @@ var DEFAULT_SETTINGS = {
   referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS],
   // 0.5 R10
   recentReadsDays: 30,
-  collectConcurrency: 4
+  collectConcurrency: 4,
   // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
+  pickerWaitSeconds: 600
+  // 0.6 OPT-14: ten minutes
 };
 
 // src/citations/scan.ts
@@ -11382,8 +11385,10 @@ function normalizeSettings(raw) {
     referencesHeadings: referencesHeadings(data.referencesHeadings),
     // 0.5 R10
     recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
-    collectConcurrency: integer(data.collectConcurrency, defaultCollectConcurrency(concurrency), 1, 8)
+    collectConcurrency: integer(data.collectConcurrency, defaultCollectConcurrency(concurrency), 1, 8),
     // 0.6 OPT-10
+    pickerWaitSeconds: integer(data.pickerWaitSeconds, DEFAULT_SETTINGS.pickerWaitSeconds, 30, 1800)
+    // 0.6 OPT-14
   };
 }
 function normalizeTagList(value) {
