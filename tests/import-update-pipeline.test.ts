@@ -9,7 +9,8 @@ import { managedBlock, ownerMarker, renderLiterature, sectionGroup } from "../sr
 import { repairManagedMarkers } from "../src/note-repair";
 import { editFrontmatterLines, frontmatterRefreshChanges, legacyKeysIn, mergedItemCandidates, relinkBody, relinkEdit, verifyFrontmatterEdit } from "../src/note-frontmatter";
 import { AdoptIndex, adoptCandidates, adoptedNoteText, adoptRefusal, hasBetterNotesSync } from "../src/note-adopt";
-import { includedRows, lastZoteroChange, localDayStart, planSummary, reviewRow, unchangedReason, zoteroTime } from "../src/batch/plan";
+import { includedRows, lastZoteroChange, localDayStart, planSummary, reviewRow, scopeEntries, unchangedReason, zoteroTime } from "../src/batch/plan";
+import { doctorChecks } from "../src/doctor/checks";
 import { IdentityMap } from "../src/batch/identity-map";
 import { normalizeSettings } from "../src/settings-data";
 
@@ -210,4 +211,23 @@ test("find-moved-notes: the identity map finds owned notes outside the folder, n
 	assert.deepEqual(await map.pathsFor(id), ["Elsewhere/renamed.md"], "a rename outside the folder is followed");
 	const folderOnly = await IdentityMap.build("References/Zotero", { list: source.list, reader: source.reader, parseYaml });
 	assert.deepEqual(await folderOnly.pathsFor(id), [], "without the outside listing the map stays in the folder (0.6.1)");
+});
+
+test("batch-import-by-scope: fielded terms and plain words narrow the index; an empty search names nothing", () => {
+	const a = entry({ id: "1:A", citekey: "a2020", title: "Methods of things", collections: ["Thesis/Methods"], tags: ["survey"], year: "2020" });
+	const b = entry({ id: "1:B", citekey: "b2021", title: "Other study", collections: ["Thesis/Related"], tags: ["survey"], year: "2021" });
+	const context = { libraryName: () => null };
+	assert.deepEqual(scopeEntries([a, b], "col:Thesis", context).map(e => e.id), ["1:A", "1:B"]);
+	assert.deepEqual(scopeEntries([a, b], "col:Thesis/Methods", context).map(e => e.id), ["1:A"]);
+	assert.deepEqual(scopeEntries([a, b], "tag:survey year:2021-", context).map(e => e.id), ["1:B"]);
+	assert.deepEqual(scopeEntries([a, b], "tag:survey methods", context).map(e => e.id), ["1:A"], "plain words must occur in title, authors or citekey");
+	assert.deepEqual(scopeEntries([a, b], "  ", context), []);
+});
+
+test("find-moved-notes diagnostics: moved literature notes are named in the output-folder check, which stays ok", () => {
+	const facts = { bbt: { reachable: true, zotero: "10.0.3", betterbibtex: "7" }, legacyPluginEnabled: false, index: { path: "i.json", count: 3, ageMinutes: 1, stale: false, maxAgeMinutes: 60, complete: true }, git: null, pdfjs: true, peers: [], outputFolder: { folder: "References/Zotero", notes: 2, unmatched: [], betterNotes: [], moved: ["Projects/Moved.md"] } };
+	const check = doctorChecks(facts).find(row => row.id === "output-folder");
+	assert.equal(check?.status, "ok");
+	assert.match(check?.detail ?? "", /1 literature note lives elsewhere in the vault and is updated where it is/);
+	assert.deepEqual(check?.paths, ["Projects/Moved.md"]);
 });

@@ -329,3 +329,24 @@ mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius
   margin: var(--size-2-2) 0 0;
   padding-inline-start: var(--size-4-4);
 }
+
+/* 0.6.3 import and update pipeline: preview notes, warnings, rebuild repairs, update scope, batch review */
+.cmds-zotero-preview-note {
+  font-size: var(--font-smaller);
+  color: var(--text-muted);
+}
+.cmds-zotero-preview-warning {
+  color: var(--cmds-zotero-state-warning);
+  margin-bottom: var(--size-2-2);
+}
+.cmds-zotero-preview-repairs {
+  font-size: var(--font-smaller);
+  margin-bottom: var(--size-2-2);
+}
+.cmds-zotero-preview-scope .setting-item {
+  padding: var(--size-2-1) 0;
+}
+.cmds-zotero-batch-review .setting-item-name {
+  font-family: inherit;
+}
+.cmds-zotero-review-skip .setting-item-name { color: var(--cmds-zotero-state-muted); }
