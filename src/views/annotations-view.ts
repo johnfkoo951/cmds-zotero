@@ -75,8 +75,8 @@ export class AnnotationsView extends ItemView {
 		const list = container.createDiv({ cls: "cmds-zotero-annotation-list" });
 		this.list = list;
 		if (!this.entry) { list.createEl("p", { cls: "setting-item-description", text: "Open a literature note, or pin a Zotero item, to see its annotations." }); return; }
-		header.createEl("div", { cls: "cmds-zotero-sidebar-title", text: this.entry.title });
-		header.createEl("div", { cls: "setting-item-description", text: `@${this.entry.citekey} · ${this.entry.attachments.reduce((n, a) => n + a.annotations.length, 0)} annotations` });
+		header.createDiv({ cls: "cmds-zotero-sidebar-title", text: this.entry.title });
+		header.createDiv({ cls: "setting-item-description", text: `@${this.entry.citekey} · ${this.entry.attachments.reduce((n, a) => n + a.annotations.length, 0)} annotations` });
 		this.renderList(list);
 	}
 

@@ -3,6 +3,7 @@ import { CitekeySuggest } from "../citations/suggest";
 import type CMDSZoteroPlugin from "../main";
 import { PageJumpModal } from "../modals/page-jump";
 import { citekeyAtCursor, parseProtocolRequest } from "../protocol";
+import { insertCitationFromPicker } from "./picker";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
 
@@ -15,8 +16,8 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.registerView(VIEW_TYPE_ANNOTATIONS, leaf => new AnnotationsView(leaf, plugin));
 	plugin.registerEditorSuggest(new CitekeySuggest(plugin));
 
-	plugin.addCommand({ id: "insert-citation", name: "Insert citation from Zotero", editorCallback: (editor: Editor) => {
-		void plugin.run(async () => { editor.replaceSelection(await plugin.bbt.cayw()); });
+	plugin.addCommand({ id: "insert-citation", name: "Insert citation from Zotero", editorCallback: (editor: Editor, context) => {
+		void plugin.run(() => insertCitationFromPicker(plugin, editor, context)); // 0.6 OPT-14
 	} });
 	plugin.addCommand({ id: "refresh-index", name: "Refresh citekey index", callback: () => { void plugin.indexing.refreshIndex(); } });
 	plugin.addCommand({ id: "search-library", name: "Search literature", callback: () => { void plugin.navigation.pick(entry => plugin.navigation.showActions(entry)); } });

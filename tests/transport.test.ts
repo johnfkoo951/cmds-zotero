@@ -174,14 +174,14 @@ test("httpRequest and rpc throw typed errors for a closed port, a hung server, H
 test("BbtService observes the whole call: an HTTP 404 picker answer or an unusable readiness answer is a failed outcome", async () => {
 	let readiness: unknown = { zotero: "7", betterbibtex: "7" };
 	const api = await serve((request, response) => {
-		if (request.url?.startsWith("/cayw")) { response.statusCode = 404; response.end("not here"); return; }
+		if (request.url?.startsWith("/better-bibtex/cayw") || request.url?.startsWith("/cayw")) { response.statusCode = 404; response.end("not here"); return; }
 		response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: readiness }));
 	});
 	const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint, requestTimeoutMs: 1000 });
 	try {
 		await service.capabilities();
 		assert.equal(service.lastOutcome?.ok, true);
-		await assert.rejects(service.cayw(), (error: unknown) => isBbtTransportError(error) && error.reason === "http-404");
+		await assert.rejects(service.pickCitation(), (error: unknown) => isBbtTransportError(error) && error.reason === "http-404");
 		assert.equal(service.lastOutcome?.ok, false, "a 404 from the picker is never recorded as ok");
 		assert.equal(service.lastOutcome?.reason, "http-404");
 		assert.equal(service.lastOutcome?.status, 404);

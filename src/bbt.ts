@@ -28,6 +28,35 @@ export interface FreshTarget { citekey: string; itemKey: string; libraryType: "u
 // 0.5 R4: the last real BBT observation (no polling); `aborted` requests are the plugin's own cancellation and are not recorded.
 export interface BbtOutcome { ok: boolean; at: Date; reason?: BbtTransportReason; status?: number; message?: string }
 
+/** What Zotero's citation picker answered (0.6 OPT-14): the formatted citation, or nothing when it was closed without a pick. */
+export type PickerAnswer = { kind: "picked"; text: string } | { kind: "empty" };
+
+/** The picker did not produce a citation for a reason that is not a Better BibTeX failure: Zotero still starting, or the wait ran out. */
+export class PickerWaitError extends Error {
+	readonly name = "PickerWaitError";
+}
+
+/** The readiness probe's answer (`GET /cayw?probe=true`): BBT says "ready" or "starting"; anything else is a fault. */
+export function pickerReadiness(status: number, body: string, endpoint: string): "ready" | "starting" {
+	if (status !== 200) throw new BbtTransportError(status === 404 ? "http-404" : "http-other", endpoint, `BBT picker HTTP ${status}`, { status });
+	const answer = body.trim();
+	if (answer === "ready" || answer === "starting") return answer;
+	throw new BbtTransportError("invalid-response", endpoint, "Unexpected citation picker readiness answer");
+}
+
+/** The pick's answer: HTTP 200 with the formatted citation, or an empty body when the picker was closed without a pick. */
+export function pickerAnswer(status: number, body: string, endpoint: string): PickerAnswer {
+	if (status !== 200) throw new BbtTransportError(status === 404 ? "http-404" : "http-other", endpoint, `BBT picker HTTP ${status}`, { status });
+	const text = body.trim();
+	return text ? { kind: "picked", text } : { kind: "empty" };
+}
+
+/** "10 minutes", "1 minute", "45 seconds": the picker wait in words. */
+export function formatWait(seconds: number): string {
+	if (seconds % 60 === 0) return `${seconds / 60} minute${seconds === 60 ? "" : "s"}`;
+	return `${seconds} seconds`;
+}
+
 export class BbtService {
 	private controller = new AbortController();
 	private outcome: BbtOutcome | null = null;
@@ -56,14 +85,15 @@ export class BbtService {
 	 * concurrent in-flight successes: during `collect` (up to 8 requests at once) a slower request that started before
 	 * the failure was observed must not overwrite it with `ok`, so the outcome compares start times, not completion.
 	 */
-	private async observed<T>(run: () => Promise<T>): Promise<T> {
+	private async observed<T>(run: () => Promise<T>, counts: (error: BbtTransportError) => boolean = () => true): Promise<T> {
 		const started = new Date();
 		try {
 			const result = await run();
 			if (!(this.outcome && !this.outcome.ok && started.getTime() < this.outcome.at.getTime())) this.recordOutcome({ ok: true, at: new Date() });
 			return result;
 		} catch (error) {
-			if (isBbtTransportError(error) && error.reason !== "aborted") this.recordOutcome({ ok: false, at: new Date(), reason: error.reason, ...(error.status !== undefined ? { status: error.status } : {}), message: error.message });
+			// `counts` leaves out faults that say nothing about Zotero (0.6 OPT-14: a citation pick that ran out of time).
+			if (isBbtTransportError(error) && error.reason !== "aborted" && counts(error)) this.recordOutcome({ ok: false, at: new Date(), reason: error.reason, ...(error.status !== undefined ? { status: error.status } : {}), message: error.message });
 			throw error;
 		}
 	}
@@ -105,13 +135,32 @@ export class BbtService {
 		try { await this.capabilities(); return true; } catch { return false; }
 	}
 
-	async cayw(): Promise<string> {
-		const params = new URLSearchParams({ format: this.settings.caywFormat, brackets: "true" });
+	/**
+	 * Zotero's citation picker (CAYW), 0.6 OPT-14. A readiness probe (`?probe=true`, the short request timeout) comes first,
+	 * so a closed Zotero fails fast and a starting one says so without opening anything. The pick then waits up to
+	 * `pickerWaitSeconds` for the person choosing, apart from the request timeout. Running out of that wait is a
+	 * `PickerWaitError` and `signal` (Cancel) an `aborted` fault: neither is recorded as a Better BibTeX failure, and an
+	 * answer that arrives after either is discarded with the closed request.
+	 */
+	async pickCitation(signal?: AbortSignal): Promise<PickerAnswer> {
 		const endpoint = `${this.settings.bbtEndpoint.replace(/\/$/, "")}/cayw`;
-		return this.observed(async () => {
-			const response = await httpRequest(`${endpoint}?${params.toString()}`, this.settings.requestTimeoutMs, undefined, this.controller.signal);
-			if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", endpoint, `BBT picker HTTP ${response.status}`, { status: response.status });
-			return response.text.trim();
+		const settings = this.settings;
+		return this.withSignal(signal, async joined => {
+			const readiness = await this.observed(async () => {
+				const response = await httpRequest(`${endpoint}?probe=true`, settings.requestTimeoutMs, undefined, joined);
+				return pickerReadiness(response.status, response.text, endpoint);
+			});
+			if (readiness === "starting") throw new PickerWaitError("Zotero is still starting. Try again in a moment.");
+			const params = new URLSearchParams({ format: settings.caywFormat, brackets: "true" });
+			try {
+				return await this.observed(async () => {
+					const response = await httpRequest(`${endpoint}?${params.toString()}`, settings.pickerWaitSeconds * 1000, undefined, joined);
+					return pickerAnswer(response.status, response.text, endpoint);
+				}, error => error.reason !== "timeout");
+			} catch (error) {
+				if (isBbtTransportError(error) && error.reason === "timeout") throw new PickerWaitError(`No citation was picked within ${formatWait(settings.pickerWaitSeconds)}. Run the command again to pick.`);
+				throw error;
+			}
 		});
 	}
 

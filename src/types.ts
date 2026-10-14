@@ -31,6 +31,11 @@ export interface CmdsZoteroSettings {
 	 * `concurrency` (twice the value, at most 8: the 0.6 wave-1 behaviour).
 	 */
 	collectConcurrency: number;
+	/**
+	 * 0.6 OPT-14: seconds "Insert citation from Zotero" waits for a pick in Zotero's citation picker, apart from the request
+	 * timeout (30–1800). Running out of it, or Cancel, is not a Better BibTeX failure.
+	 */
+	pickerWaitSeconds: number;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -55,6 +60,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS], // 0.5 R10
 	recentReadsDays: 30,
 	collectConcurrency: 4, // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
+	pickerWaitSeconds: 600, // 0.6 OPT-14: ten minutes
 };
 
 export interface ItemIdentity {

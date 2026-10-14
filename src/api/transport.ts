@@ -177,6 +177,9 @@ function endpointLabel(rawURL: string): string {
 	return query < 0 ? rawURL : rawURL.slice(0, query);
 }
 
+/** The longest a single HTTP exchange may wait: the citation picker's 30-minute limit (0.6 OPT-14); RPCs stay far below. */
+export const MAX_WAIT_MS = 30 * 60_000;
+
 export function httpRequest(rawURL: string, timeoutMs: number, body?: string, signal?: AbortSignal): Promise<HttpResult> {
 	const endpoint = endpointLabel(rawURL);
 	// A socket-level `error` event is a transport fault even without a recognised Node code (`connection-refused`),
@@ -187,7 +190,7 @@ export function httpRequest(rawURL: string, timeoutMs: number, body?: string, si
 	return new Promise((resolve, reject) => {
 		const url = new URL(rawURL);
 		if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid BBT endpoint");
-		if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 300000) throw new Error("Invalid request timeout");
+		if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_WAIT_MS) throw new Error("Invalid request timeout");
 		const transport = url.protocol === "https:" ? https : http;
 		const request = transport.request(url, { signal, method: body === undefined ? "GET" : "POST", headers: body === undefined ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, response => {
 			const chunks: Buffer[] = [];
