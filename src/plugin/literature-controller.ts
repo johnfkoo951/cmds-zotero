@@ -142,7 +142,7 @@ export class LiteratureController {
 		const target = found.entry;
 		// 0.6 OPT-02: one identity map serves the note state before the import and the preview, so both see the same notes.
 		const identities = await this.plugin.importer.identityMap();
-		const before = literatureNoteStatus(target, await readNoteTexts((await identities.pathsFor(target.id)).map(path => ({ path })), note => this.readNote(note.path)));
+		const before = literatureNoteStatus(target, await readNoteTexts((await identities.pathsFor(target.id)).map(path => ({ path })), note => this.readNote(note.path)), this.plugin.settings);
 		const preview = await this.plugin.importer.preview(target, index ?? undefined, { identities, ...(found.fresh || !this.isOfflineError(found.error) ? {} : { offline: true }) });
 		const existing = this.plugin.app.vault.getAbstractFileByPath(preview.path);
 		const original = existing instanceof TFile ? await this.plugin.app.vault.read(existing) : null;
@@ -154,7 +154,7 @@ export class LiteratureController {
 		const outcome = sendOutcome(preview, result);
 		if (outcome.status !== "refused") this.plugin.indexing.noteChanged(outcome.path);
 		const written = this.plugin.app.vault.getAbstractFileByPath(result.path);
-		const after = outcome.status !== "refused" && written instanceof TFile ? literatureNoteStatus(target, await readNoteTexts([written], file => this.plugin.app.vault.read(file))) : undefined;
+		const after = outcome.status !== "refused" && written instanceof TFile ? literatureNoteStatus(target, await readNoteTexts([written], file => this.plugin.app.vault.read(file)), this.plugin.settings) : undefined;
 		return { item, fresh: found.fresh, before, preview: report, outcome, ...(after ? { after } : {}), warnings };
 	}
 

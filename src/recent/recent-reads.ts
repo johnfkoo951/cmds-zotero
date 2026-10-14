@@ -7,7 +7,7 @@
 import type { ItemIdentity, ZoteroIndexEntry } from "../types";
 import { parseItemURI, text } from "../api/normalize";
 import { record } from "../identity";
-import { ownerMarker } from "../note-writer";
+import { continuationHeads, ownerMarker } from "../note-writer";
 import { indexDerived } from "../index-derived";
 
 export const RECENT_WINDOW_CHOICES: readonly number[] = [7, 30, 90, 365];
@@ -163,8 +163,11 @@ export function noteAnnotationIDs(text: string): Set<string> {
 	return new Set([...text.matchAll(ANNOTATION_MARKER)].map(match => match[1]));
 }
 
-/** Compares a literature note's annotation blocks with the item's annotations; no BBT call and no write. */
-export function literatureNoteStatus(entry: ZoteroIndexEntry, notes: readonly { path: string; text: string }[]): NoteStatus {
+/**
+ * Compares a literature note's annotation blocks with the item's annotations; no BBT call and no write. With
+ * `joinContinuations` a continuation counts as present when its own (older) block or its chain head's block is there.
+ */
+export function literatureNoteStatus(entry: ZoteroIndexEntry, notes: readonly { path: string; text: string }[], settings: { joinContinuations?: boolean } = {}): NoteStatus {
 	const expected = new Set(entry.attachments.flatMap(attachment => attachment.annotations.map(annotation => `annotation-${attachment.key}-${annotation.key}`)));
 	const base = { missing: 0, orphaned: 0, annotations: expected.size };
 	if (!notes.length) return { ...base, state: "none", path: null, missing: expected.size };
@@ -172,7 +175,9 @@ export function literatureNoteStatus(entry: ZoteroIndexEntry, notes: readonly { 
 	const [note] = notes;
 	if (!note.text.includes(ownerMarker(entry.id))) return { ...base, state: "foreign", path: note.path };
 	const present = noteAnnotationIDs(note.text);
-	const missing = [...expected].filter(id => !present.has(id)).length;
+	const heads = settings.joinContinuations === true ? continuationHeads(entry) : new Map<string, string>();
+	const shown = (id: string): boolean => present.has(id) || present.has(heads.get(id) ?? "");
+	const missing = [...expected].filter(id => !shown(id)).length;
 	const orphaned = [...present].filter(id => !expected.has(id)).length;
 	return { state: missing ? "behind" : "current", path: note.path, missing, orphaned, annotations: expected.size };
 }

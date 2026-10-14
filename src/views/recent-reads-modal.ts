@@ -146,7 +146,7 @@ export class RecentReadsModal extends Modal {
 		if (!found.entry) {
 			row.problem = `${describeBbtError(found.error)} This paper is not in the saved index yet and could not be read from Zotero.`;
 		} else {
-			row.status = literatureNoteStatus(found.entry, await readNoteTexts(notes.get(found.entry.id) ?? [], file => this.app.vault.cachedRead(file)));
+			row.status = literatureNoteStatus(found.entry, await readNoteTexts(notes.get(found.entry.id) ?? [], file => this.app.vault.cachedRead(file)), this.plugin.settings);
 			if (row.status.state === "foreign" || row.status.state === "duplicate") row.problem = describeNoteStatus(row.status);
 		}
 		row.selected = !!row.entry && !row.problem && !!row.status && needsSending(row.status);
@@ -213,7 +213,7 @@ export class RecentReadsModal extends Modal {
 			row.result = describeSendOutcome(outcome);
 			// Re-read the note from the path just written: the metadata cache may not know a new note's frontmatter yet.
 			const written = outcome.status !== "refused" ? this.app.vault.getAbstractFileByPath(outcome.path) : null;
-			if (written instanceof TFile) row.status = literatureNoteStatus(entry, await readNoteTexts([written], file => this.app.vault.read(file)));
+			if (written instanceof TFile) row.status = literatureNoteStatus(entry, await readNoteTexts([written], file => this.app.vault.read(file)), this.plugin.settings);
 		} catch (error) {
 			counts.failed++;
 			row.result = `Not written: ${error instanceof Error ? error.message : "the send failed"}`;

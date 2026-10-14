@@ -206,6 +206,19 @@ export function annotationsInOrder(entry: ZoteroIndexEntry, settings: Partial<La
 	return layoutOf(settings).joinContinuations ? joinContinuations(ordered).map(({ item, annotation }) => ({ attachment: item.attachment, annotation })) : ordered;
 }
 
+/**
+ * Section ID of a joined continuation's chain head, per continuation ID: with "Join continued highlights" (0.6.1) a `+`
+ * continuation renders inside its head's block and never gets a block of its own.
+ */
+export function continuationHeads(entry: ZoteroIndexEntry): Map<string, string> {
+	const heads = new Map<string, string>();
+	for (const joined of joinContinuations(readingOrder(entry))) {
+		const attachment = joined.item.attachment.key;
+		for (const continuation of joined.continuations) heads.set(`annotation-${attachment}-${continuation}`, `annotation-${attachment}-${joined.annotation.key}`);
+	}
+	return heads;
+}
+
 /** Single-line text for callout titles and inline fields. */
 function inline(value: unknown): string { return plainText(value).replace(/\s*\n\s*/g, " "); }
 /**
@@ -682,6 +695,9 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 	const resetWanted = new Set(context.reset ?? []);
 	const consumed = new Set<number>();
 	const lineOf = (offset: number): number => previous.slice(0, offset).split("\n").length;
+	// A joined continuation is still in Zotero; its older block of its own is kept, under a reason that says why.
+	const joinedInto = layout.joinContinuations ? continuationHeads(entry) : new Map<string, string>();
+	const gone = (id: string): string => joinedInto.has(id) ? "joined into the previous highlight" : "no longer in Zotero";
 	let content = previous.replace(MANAGED_BLOCK, (whole: string, id: string, mark: string, tail: string, body: string, offset: number) => {
 		const line = lineOf(offset);
 		consumed.add(offset);
@@ -707,7 +723,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		}
 		if (mark === DETACHED_MARK) {
 			detached.push(id);
-			report.push({ id, state: "detached", reason: `cannot reset: no longer in Zotero${repaired}`, line, body });
+			report.push({ id, state: "detached", reason: `cannot reset: ${gone(id)}${repaired}`, line, body });
 			return withTail(detachedBlock(id, body), tail);
 		}
 		if (edited) {
@@ -716,7 +732,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 			return withTail(storedBlock(id, mark, body), tail);
 		}
 		if (fresh === undefined) {
-			report.push({ id, state: "unchanged", reason: `no longer in Zotero: kept${repaired}`, line, body });
+			report.push({ id, state: "unchanged", reason: `${gone(id)}: kept${repaired}`, line, body });
 			return withTail(storedBlock(id, mark, body), tail);
 		}
 		report.push({ id, state: "unchanged", reason: `not edited: refreshed from Zotero${repaired}`, line, body: fresh });

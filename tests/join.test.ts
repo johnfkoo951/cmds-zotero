@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS, type Annotation, type ZoteroIndexEntry } from "../src/types";
 import { displayPageLabel, isContinuation, joinContinuations } from "../src/annotations/join";
-import { readingOrder, renderLiterature } from "../src/note-writer";
+import { continuationHeads, ownerMarker, readingOrder, renderLiterature } from "../src/note-writer";
+import { describeNoteStatus, literatureNoteStatus, needsSending } from "../src/recent/recent-reads";
 import { normalizeSettings } from "../src/settings-data";
 import { GOLDEN_BIBLIOGRAPHY, GOLDEN_ENTRIES, GOLDEN_IMAGE_HASHES, GOLDEN_RELATED } from "./fixtures/note-golden";
 
@@ -72,7 +73,9 @@ test("switching it on: the unedited first block refreshes, the continuation's ol
 	assert.deepEqual([after.conflicts, after.softConflicts], [[], []]);
 	assert.deepEqual(ids(after.content), ["annotation-ATTACH01-KKK1", "annotation-ATTACH01-KKK2"]);
 	assert.match(after.content, /Text KKK1 … Text KKK2/);
-	assert.equal(after.sections.find(section => section.id === "annotation-ATTACH01-KKK2")?.reason, "no longer in Zotero: kept");
+	assert.equal(after.sections.find(section => section.id === "annotation-ATTACH01-KKK2")?.reason, "joined into the previous highlight: kept", "still in Zotero, only joined");
+	const deleted = renderLiterature(entryWith([a("KKK1", { sortIndex: "00002|000100|00010" })]), GOLDEN_BIBLIOGRAPHY, ON, before);
+	assert.equal(deleted.sections.find(section => section.id === "annotation-ATTACH01-KKK2")?.reason, "no longer in Zotero: kept", "deleted in Zotero");
 	const edited = before.replace("Text KKK1</mark>", "Text KKK1 (mine)</mark>");
 	const kept = renderLiterature(entry, GOLDEN_BIBLIOGRAPHY, ON, edited);
 	assert.deepEqual(kept.softConflicts, ["Edited generated section preserved: annotation-ATTACH01-KKK1"]);
@@ -88,4 +91,25 @@ test("golden notes: joining changes nothing when no comment starts with '+'", ()
 		assert.equal(renderLiterature(GOLDEN_ENTRIES[name], GOLDEN_BIBLIOGRAPHY, ON, null, GOLDEN_IMAGE_HASHES, { related: GOLDEN_RELATED[name] ?? [] }).content, expected, name);
 	}
 	assert.deepEqual(readingOrder(base).length, 7);
+});
+
+test("note status: a joined note is current, and a continuation never reads as a new annotation", () => {
+	const golden = GOLDEN_ENTRIES["journal-article"];
+	const entry: ZoteroIndexEntry = { ...golden, attachments: [{ ...golden.attachments[0], annotations: golden.attachments[0].annotations.map(x => x.key === "ANNOT002" ? { ...x, comment: "+ continues" } : x) }] };
+	assert.deepEqual([...continuationHeads(entry)], [["annotation-ATTACH01-ANNOT002", "annotation-ATTACH01-ANNOT001"]]);
+	const render = (previous: string | null, settings = ON) => renderLiterature(entry, GOLDEN_BIBLIOGRAPHY, settings, previous, GOLDEN_IMAGE_HASHES, { related: GOLDEN_RELATED["journal-article"] }).content;
+	const joined = render(null);
+	assert.equal(render(joined), joined, "stable");
+	const status = literatureNoteStatus(entry, [{ path: "n.md", text: joined }], ON);
+	assert.deepEqual(status, { state: "current", path: "n.md", missing: 0, orphaned: 0, annotations: 7 });
+	assert(!needsSending(status));
+	assert.equal(describeNoteStatus(status), "Note is up to date");
+	assert.equal(literatureNoteStatus(entry, [{ path: "n.md", text: joined }]).state, "behind", "without the setting the continuation needs its own block");
+	// A note written before joining keeps the continuation's own block: present, and not counted as deleted in Zotero.
+	const older = render(null, DEFAULT_SETTINGS);
+	assert.deepEqual(literatureNoteStatus(entry, [{ path: "n.md", text: render(older) }], ON), { state: "current", path: "n.md", missing: 0, orphaned: 0, annotations: 7 });
+	// The chain head missing: the head and its continuation both count as missing.
+	const headless = joined.replace(/<!-- cmds-zotero:annotation-ATTACH01-ANNOT001:[a-f0-9]{64} -->[\s\S]*?<!-- \/cmds-zotero:annotation-ATTACH01-ANNOT001 -->\n\n/, "");
+	assert.ok(headless.includes(ownerMarker(entry.id)) && headless.length < joined.length);
+	assert.deepEqual(literatureNoteStatus(entry, [{ path: "n.md", text: headless }], ON).missing, 2);
 });
