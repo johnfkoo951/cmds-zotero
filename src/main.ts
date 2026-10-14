@@ -19,6 +19,7 @@ import { registerCommands } from "./plugin/commands";
 import { IndexController } from "./plugin/index-controller";
 import { LiteratureController } from "./plugin/literature-controller";
 import { NavigationController } from "./plugin/navigation";
+import type { NoteBatch } from "./plugin/note-batch";
 import { StatusController } from "./plugin/status";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
@@ -59,17 +60,18 @@ export default class CMDSZoteroPlugin extends Plugin {
 			const view = leaf?.view;
 			if (view instanceof MarkdownView) this.lastView = view;
 		}));
-		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.indexing.scheduleMap(); }));
+		// 0.6 OPT-05: the note map re-resolves only the notes these events name (a folder event: every note).
+		this.registerEvent(this.app.metadataCache.on("changed", file => { if (file.extension === "md") this.indexing.noteChanged(file.path); }));
 		// 0.5 R13/F07: only Markdown notes and folders (which may contain notes) can change the note map; attachments never do.
-		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (this.indexing.affectsNoteMap(file) || oldPath.endsWith(".md")) this.indexing.scheduleMap(); }));
-		this.registerEvent(this.app.vault.on("delete", file => { if (this.indexing.affectsNoteMap(file)) this.indexing.scheduleMap(); }));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (this.indexing.affectsNoteMap(file) || oldPath.endsWith(".md")) this.indexing.noteMoved(file, oldPath); }));
+		this.registerEvent(this.app.vault.on("delete", file => { if (this.indexing.affectsNoteMap(file)) this.indexing.noteMoved(file); }));
 		// 0.5 R4: status-bar item; click probes BBT once (no refresh); the minute tick only re-renders the age text.
 		this.status.statusBar = this.addStatusBarItem();
 		this.status.statusBar.addClass("cmds-zotero-status-bar", "mod-clickable");
 		this.registerDomEvent(this.status.statusBar, "click", () => { void this.status.testConnection(); });
 		this.registerInterval(window.setInterval(() => this.status.renderStatus(), 60_000));
 		this.status.renderStatus();
-		void this.indexing.warmIndex();
+		this.indexing.startWarmUp(); // 0.6 OPT-03: after the layout is ready, at an idle moment
 	}
 
 	/** True when the legacy plugin that shares the index path is enabled; null when the plugin registry is unavailable. */
@@ -196,7 +198,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	/** CSL bibliography text for one entry, cached per index generation and style; concurrent requests share one flight. */
 	bibliographyFor(entry: ZoteroIndexEntry): Promise<string> { return this.bibliography.bibliographyForStyle(entry, this.settings.bibliographyStyle); }
 
-	bibliographyBatch(entries: ZoteroIndexEntry[], style?: string, options?: { fresh?: boolean }): Promise<BibliographyDetail[]> { return this.bibliography.bibliographyBatch(entries, style, options); }
+	/** `fresh: false` joins the current render generation; `refresh` is the References sidebar's Refresh (0.6 OPT-13). */
+	bibliographyBatch(entries: ZoteroIndexEntry[], style?: string, options?: { fresh?: boolean; refresh?: boolean }): Promise<BibliographyDetail[]> { return this.bibliography.bibliographyBatch(entries, style, options); }
 
 	copyCslJson(entries: readonly ZoteroIndexEntry[]): Promise<void> { return this.bibliography.copyCslJson(entries); }
 
@@ -206,7 +209,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	literatureNoteFiles(): Map<string, TFile[]> { return this.literature.literatureNoteFiles(); }
 
-	sendToNote(entry: ZoteroIndexEntry, index: ZoteroIndex | null, options?: { offline?: boolean }): Promise<SendOutcome> { return this.literature.sendToNote(entry, index, options); }
+	sendToNote(entry: ZoteroIndexEntry, index: ZoteroIndex | null, options?: Parameters<LiteratureController["sendToNote"]>[2]): Promise<SendOutcome> { return this.literature.sendToNote(entry, index, options); }
+
+	/** 0.6: a literature-note batch session (identity map read once, progress Notice with Cancel); the caller closes it. */
+	openNoteBatch(message: string): Promise<NoteBatch> { return this.literature.openNoteBatch(message); }
 
 	pick(choose: (entry: ZoteroIndexEntry) => void): Promise<void> { return this.navigation.pick(choose); }
 

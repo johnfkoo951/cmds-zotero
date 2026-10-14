@@ -1,9 +1,9 @@
 import { Editor, Notice, TFile } from "obsidian";
-import { scanCitations } from "../citations/scan";
+import { findCitingNotes } from "../citations/citing-notes";
 import type CMDSZoteroPlugin from "../main";
 import { ActionsModal, PageJumpModal, PickerModal } from "../modals";
 import { classifyLink, resolveOpenPdfTarget } from "../protocol";
-import { indexEntryFor, localDay, readLabel } from "../recent/recent-reads";
+import { localDay, readLabel, recentFirst } from "../recent/recent-reads";
 import type { ZoteroIndexEntry } from "../types";
 import { pdfURI, noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "../uris";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
@@ -16,14 +16,9 @@ export class NavigationController {
 		await this.plugin.run(async () => {
 			const index = await this.plugin.indexing.loadIndexForRead();
 			if (!index.entries.length) throw new Error("No literature entries. Check Zotero and refresh the index.");
-			// Recently read papers first, from the last Zotero answer (never awaited here, so the picker opens instantly).
-			const readOn = new Map<string, string | null>();
-			for (const read of this.plugin.literature.recentForPicker()) {
-				const entry = indexEntryFor(read, index.entries);
-				if (entry && !readOn.has(entry.id)) readOn.set(entry.id, read.readOn);
-			}
-			const recent = [...readOn.keys()].flatMap(id => index.entries.filter(entry => entry.id === id));
-			const ordered = [...recent, ...index.entries.filter(entry => !readOn.has(entry.id))];
+			// Recently read papers first, from the last Zotero answer (never awaited here, so the picker opens instantly);
+			// 0.6 PERF-12: ordered through the generation's item-key and id maps instead of a scan per read.
+			const { ordered, readOn } = recentFirst(index.entries, this.plugin.literature.recentForPicker());
 			const today = localDay(new Date());
 			new PickerModal(this.plugin.app, ordered, entry => `${entry.title} — @${entry.citekey} · ${entry.year} · library ${entry.libraryID}${readOn.has(entry.id) ? ` · ${readLabel(readOn.get(entry.id) ?? null, today)}` : ""}`, choose).open();
 		});
@@ -51,17 +46,9 @@ export class NavigationController {
 		]).open();
 	}
 
-	/** Vault-wide scan for notes citing an entry's citekey or one of its previous citekeys. */
+	/** Vault-wide scan for notes citing an entry's citekey or one of its previous citekeys (0.6 OPT-15: 8 reads in flight). */
 	async showCitingNotes(entry: ZoteroIndexEntry): Promise<void> {
-		const keys = new Set([entry.citekey, ...entry.citekeyHistory]);
-		const hits: { file: TFile; line: number; count: number }[] = [];
-		for (const file of this.plugin.app.vault.getMarkdownFiles()) {
-			const text = await this.plugin.app.vault.cachedRead(file);
-			if (![...keys].some(key => text.includes(`@${key}`))) continue;
-			const occurrences = scanCitations(text).filter(item => keys.has(item.citekey));
-			if (occurrences.length) hits.push({ file, line: occurrences[0].line, count: occurrences.length });
-		}
-		hits.sort((a, b) => b.count - a.count || a.file.path.localeCompare(b.file.path));
+		const hits = await findCitingNotes(this.plugin.app.vault.getMarkdownFiles(), [entry.citekey, ...entry.citekeyHistory], file => this.plugin.app.vault.cachedRead(file));
 		new ActionsModal(this.plugin.app, `Notes citing @${entry.citekey}`, hits.length ? hits.map(hit => ({
 			name: hit.file.path, description: `${hit.count} citation${hit.count === 1 ? "" : "s"}`,
 			action: async () => { const leaf = this.plugin.app.workspace.getLeaf(false); await leaf.openFile(hit.file, { eState: { line: hit.line } }); },

@@ -88,12 +88,22 @@ export function verifyEntry(value: unknown): value is ZoteroIndexEntry {
 	return (record(value) && sealedEntries.has(value)) || validateEntry(value);
 }
 
-function validateIndexWith(value: unknown, validEntry: (entry: unknown) => entry is ZoteroIndexEntry): value is ZoteroIndex {
-	if (!record(value) || value.schemaVersion !== 2 || value.source !== "better-bibtex" || typeof value.generatedAt !== "string" || !Number.isFinite(Date.parse(value.generatedAt)) || typeof value.complete !== "boolean" || !Array.isArray(value.entries) || value.count !== value.entries.length || !value.entries.every(validEntry)) return false;
+/** The index-level checks that come before the entries: schema, source, timestamp, completeness flag and count. */
+function indexHeaderValid(value: unknown): value is Record<string, unknown> & { entries: unknown[] } {
+	return record(value) && value.schemaVersion === 2 && value.source === "better-bibtex" && typeof value.generatedAt === "string" && Number.isFinite(Date.parse(value.generatedAt)) && typeof value.complete === "boolean" && Array.isArray(value.entries) && value.count === value.entries.length;
+}
+
+/** The index-level checks once every entry is valid: unique IDs, capabilities and diagnostics. */
+function indexTailValid(value: Record<string, unknown> & { entries: ZoteroIndexEntry[] }): boolean {
 	if (new Set(value.entries.map(entry => entry.id)).size !== value.entries.length || !record(value.capabilities) || !Array.isArray(value.diagnostics)) return false;
 	const caps = value.capabilities;
 	if (typeof caps.zotero !== "string" || typeof caps.betterbibtex !== "string" || [caps.metadata, caps.attachments, caps.annotations, caps.bibliography].some(flag => typeof flag !== "boolean")) return false;
 	return value.diagnostics.every(diagnostic => record(diagnostic) && typeof diagnostic.code === "string" && typeof diagnostic.message === "string" && ["info", "warning", "error"].includes(String(diagnostic.severity)) && (diagnostic.itemID === undefined || typeof diagnostic.itemID === "string") && (diagnostic.citekey === undefined || typeof diagnostic.citekey === "string"));
+}
+
+function validateIndexWith(value: unknown, validEntry: (entry: unknown) => entry is ZoteroIndexEntry): value is ZoteroIndex {
+	if (!indexHeaderValid(value) || !value.entries.every(validEntry)) return false;
+	return indexTailValid(value as typeof value & { entries: ZoteroIndexEntry[] });
 }
 
 /** Full validation, every entry hashed again: for bytes that cross a trust boundary (a file read, another process). */
@@ -113,5 +123,28 @@ export function verifyIndex(value: unknown): value is ZoteroIndex {
 export function validateAndSealIndex(value: unknown): value is ZoteroIndex {
 	if (!validateIndex(value)) return false;
 	for (const entry of value.entries) sealedEntries.add(entry);
+	return true;
+}
+
+/** Entries validated between two pauses of `validateAndSealIndexInChunks`. */
+export const VALIDATION_CHUNK = 500;
+
+/**
+ * 0.6 OPT-03: `validateAndSealIndex` for a snapshot read from disk that yields to the event loop (`pause`) after every
+ * `chunkSize` entries, so loading a large index never blocks the window in one piece. Same checks in the same order, so
+ * the verdict equals `validateIndex`'s and every entry is hashed once; entries are sealed only after the whole index
+ * passed. The caller must not hand the value to anyone before the promise resolves true.
+ */
+export async function validateAndSealIndexInChunks(value: unknown, pause: () => Promise<void>, chunkSize = VALIDATION_CHUNK): Promise<boolean> {
+	if (!Number.isInteger(chunkSize) || chunkSize < 1) throw new Error("Chunk size must be a positive integer");
+	if (!indexHeaderValid(value)) return false;
+	const entries = value.entries;
+	for (let start = 0; start < entries.length; start += chunkSize) {
+		if (start > 0) await pause();
+		for (let index = start; index < Math.min(entries.length, start + chunkSize); index++) if (!validateEntry(entries[index])) return false;
+	}
+	if (value.entries !== entries || entries.length !== value.count) return false;
+	if (!indexTailValid(value as typeof value & { entries: ZoteroIndexEntry[] })) return false;
+	for (const entry of entries) sealedEntries.add(entry as ZoteroIndexEntry);
 	return true;
 }

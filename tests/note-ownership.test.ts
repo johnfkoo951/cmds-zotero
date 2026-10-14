@@ -67,3 +67,26 @@ test("partitionOwnedNotes with an empty output folder owns nothing and reads not
 	const none = await partitionOwnedNotes(index, [note("20. Wiki/x.md", { tags: [] })], "References/Zotero", () => Promise.resolve(""));
 	assert.deepEqual(none, { owned: [], ownedPaths: new Map(), linkedNotOwned: [] });
 });
+
+test("0.6: partitionOwnedNotes reads with bounded concurrency and gives the sequential partition", async () => {
+	const entries = Array.from({ length: 40 }, (_, i) => entry({ id: `1:ITEM${String(i).padStart(4, "0")}`, itemKey: `ITEM${String(i).padStart(4, "0")}`, citekey: `key${i}`, zoteroSelectURI: `zotero://select/library/items/ITEM${String(i).padStart(4, "0")}` }));
+	const many: ZoteroIndex = { ...index, count: entries.length, entries };
+	const notes = entries.map((item, i) => note(`Lit/@key${i}.md`, { zoteroID: item.id }));
+	let inFlight = 0;
+	let maxInFlight = 0;
+	const read = async (path: string): Promise<string> => {
+		inFlight++;
+		maxInFlight = Math.max(maxInFlight, inFlight);
+		for (let i = 0; i < Number(/\d+/.exec(path)?.[0] ?? 0) % 3; i++) await new Promise(resolve => setImmediate(resolve));
+		inFlight--;
+		const n = Number(/\d+/.exec(path)?.[0]);
+		if (n % 7 === 0) throw new Error("unreadable");
+		return n % 2 ? ownerMarker(entries[n].id) : "no marker";
+	};
+	const partition = await partitionOwnedNotes(many, [...notes].reverse(), "Lit", read);
+	assert.ok(maxInFlight > 1 && maxInFlight <= 8, `bounded concurrency (saw ${maxInFlight})`);
+	const sorted = [...notes].sort((a, b) => a.path.localeCompare(b.path));
+	const ownedIndexes = sorted.map(n => Number(/\d+/.exec(n.path)?.[0])).filter(n => n % 2 === 1 && n % 7 !== 0);
+	assert.deepEqual(partition.owned.map(e => e.id), entries.filter((_, i) => ownedIndexes.includes(i)).map(e => e.id), "index order");
+	assert.deepEqual(partition.linkedNotOwned, sorted.filter(n => !ownedIndexes.includes(Number(/\d+/.exec(n.path)?.[0]))).map(n => n.path), "path order, unreadable notes included");
+});

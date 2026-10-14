@@ -7,8 +7,8 @@ import { normalizeAttachments, normalizeEntry } from "../src/api/normalize";
 import { entryHash } from "../src/identity";
 import { ownerMarker } from "../src/note-writer";
 import {
-	addDays, clampRecentDays, dayTerms, daysBetween, describeNoteStatus, indexEntryFor, literatureNoteStatus, localDay, needsSending,
-	noteAnnotationIDs, orderRecent, parseRecentItem, readLabel, recentKey, windowTerms,
+	addDays, clampRecentDays, dayTerms, daysBetween, describeNoteStatus, describeSendOutcome, indexEntryFor, literatureNoteStatus, localDay, needsSending,
+	noteAnnotationIDs, orderRecent, parseRecentItem, readLabel, readNoteTexts, recentKey, sendOutcome, windowTerms,
 } from "../src/recent/recent-reads";
 
 // Synthetic records only (AGENTS.md): no real library data.
@@ -283,4 +283,29 @@ test("0.6 PERF-12: recentFirst orders the picker exactly as 0.5.0 did: recent re
 	assert.deepEqual([...actual.readOn.values()], ["2026-10-12", "2026-10-11", null, "2026-09-30"], "the first read of an entry keeps its day");
 	assert.deepEqual(recentFirst(entries, []).ordered, entries);
 	assert.equal(recentFirst(entries, reads).ordered.length, entries.length, "every entry is listed once");
+});
+
+test("0.6 STRUCT-02: sendOutcome maps a preview and its apply result exactly as both send paths did", () => {
+	const result = (extra: Partial<{ path: string; conflicts: string[]; changed: boolean; preserved: string[] }> = {}) => ({ path: "Lit/@a.md", conflicts: [], changed: true, preserved: [], ...extra });
+	assert.deepEqual(sendOutcome({ exists: false }, result()), { status: "created", path: "Lit/@a.md", preserved: [] });
+	assert.deepEqual(sendOutcome({ exists: true }, result()), { status: "updated", path: "Lit/@a.md", preserved: [] });
+	assert.deepEqual(sendOutcome({ exists: true }, result({ changed: false, preserved: ["notes"] })), { status: "unchanged", path: "Lit/@a.md", preserved: ["notes"] });
+	assert.deepEqual(sendOutcome({ exists: true }, result({ conflicts: ["Note changed after preview", "again"], preserved: ["notes"] })), { status: "refused", path: "Lit/@a.md", preserved: [], message: "Note changed after preview; again" });
+	assert.equal(describeSendOutcome(sendOutcome({ exists: true }, result({ preserved: ["notes", "overview"] }))), "Updated Lit/@a.md; your edits kept in 2 sections");
+	const preserved = ["x"];
+	const outcome = sendOutcome({ exists: true }, result({ preserved }));
+	preserved.push("y");
+	assert.deepEqual(outcome.preserved, ["x"], "the outcome owns its list");
+});
+
+test("0.6 STRUCT-02: readNoteTexts reads every note concurrently and keeps the input order", async () => {
+	const order: string[] = [];
+	const texts = await readNoteTexts([{ path: "b.md", delay: 2 }, { path: "a.md", delay: 0 }], async file => {
+		for (let i = 0; i < file.delay; i++) await new Promise(resolve => setImmediate(resolve));
+		order.push(file.path);
+		return `text of ${file.path}`;
+	});
+	assert.deepEqual(texts, [{ path: "b.md", text: "text of b.md" }, { path: "a.md", text: "text of a.md" }]);
+	assert.deepEqual(order, ["a.md", "b.md"], "reads overlap");
+	assert.deepEqual(await readNoteTexts([], async () => "never"), []);
 });

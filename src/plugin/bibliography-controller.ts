@@ -2,10 +2,11 @@ import { Editor, Notice, TFile } from "obsidian";
 import { EXPORT_TRANSLATORS, defaultSidecarPath, groupEntriesByLibrary, mergeExports, type StructuredExport } from "../agent/cites-core"; // 0.5 R10
 import { describeBbtError, mapBounded } from "../api/transport";
 import { BibliographyStore, type BibliographyDetail } from "../bibliography-store"; // 0.5 R12
-import { resolveReferenceRows } from "../citations/reference-rows"; // 0.5 R10
+import { resolveReferenceRows, resolvedEntries } from "../citations/reference-rows"; // 0.5 R10
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
 import { assertVaultBoundary, bibliographySidecarStorage, ensureCmdsIgnore, ensureDirectory } from "../vault-storage";
+import { unreachableRecently } from "./warm-state";
 
 // 0.5 R12: a sidebar render probes `api.ready` once with this bound before any live bibliography call of that generation.
 const BIBLIOGRAPHY_PROBE_MS = 2500;
@@ -18,6 +19,13 @@ export class BibliographyController {
 	private bibliographyStore!: BibliographyStore;
 	private bibliographyGeneration = 0;
 	private bibliographyController: AbortController | null = null;
+	/**
+	 * 0.6 OPT-13: within one render generation, the offline verdict (a failed probe, or a recent "Zotero is not answering"
+	 * failure that stood in for it) and the fallback answers it produced, so a copy that joins the generation neither probes
+	 * again nor recomputes them. Both are dropped when the next generation starts.
+	 */
+	private generationOffline: { generation: number; error: unknown } | null = null;
+	private generationFallbacks = new Map<string, BibliographyDetail>();
 
 	constructor(private readonly plugin: CMDSZoteroPlugin) {}
 
@@ -48,18 +56,26 @@ export class BibliographyController {
 	 * known) matches, then one BBT call whose result is written through to the sidecar. A BBT fault never throws here: it
 	 * returns the sidecar text of an older BBT version when one exists, else a `fallback` carrying the fault. `offline`
 	 * skips the BBT call (the caller already probed). Concurrent requests for one item share a flight; a flight started by
-	 * an earlier render generation is not joined because that generation may be aborted.
+	 * an earlier render generation is not joined because that generation may be aborted. A fallback answer is remembered
+	 * for the rest of its render generation only (0.6 OPT-13).
 	 */
 	bibliographyDetail(entry: ZoteroIndexEntry, style = this.plugin.settings.bibliographyStyle, options: { offline?: boolean; offlineError?: unknown; signal?: AbortSignal; generation?: number } = {}): Promise<BibliographyDetail> {
 		const key = `${entry.id}|${style}`;
 		const cached = this.bibliographyCache.get(key);
 		if (cached) return Promise.resolve(cached);
 		const generation = options.generation ?? 0;
+		const current = (): boolean => generation !== 0 && generation === this.bibliographyGeneration;
+		const fallback = current() ? this.generationFallbacks.get(key) : undefined;
+		if (fallback) return Promise.resolve(fallback);
 		const flight = this.bibliographyFlights.get(key);
 		if (flight && (flight.generation === 0 || flight.generation === generation)) return flight.promise;
 		const store = this.bibliographyStore;
 		const promise = this.renderBibliography(entry, style, options, store)
-			.then(detail => { if (detail.source !== "fallback" && this.bibliographyStore === store) this.bibliographyCache.set(key, detail); return detail; })
+			.then(detail => {
+				if (detail.source !== "fallback") { if (this.bibliographyStore === store) this.bibliographyCache.set(key, detail); }
+				else if (current()) this.generationFallbacks.set(key, detail);
+				return detail;
+			})
 			.finally(() => { if (this.bibliographyFlights.get(key)?.promise === promise) this.bibliographyFlights.delete(key); });
 		this.bibliographyFlights.set(key, { generation, promise });
 		return promise;
@@ -87,27 +103,52 @@ export class BibliographyController {
 	 * hits are served without BBT, and when anything is left BBT is probed once (`api.ready`, 2.5 s) — a failed probe turns
 	 * the whole generation offline instead of N parallel 20 s requests. Live calls run under `settings.concurrency`.
 	 * `fresh: false` joins the current generation (a copy while a render is in flight must not abort it).
+	 * 0.6 OPT-13: while Zotero was found not answering within the warm-up backoff window, the generation is offline without
+	 * a probe, so a closed Zotero costs no connection attempt per edit; a generation decides offline once. `refresh` (the
+	 * sidebar's Refresh button) starts a generation that always probes and forgets the remembered texts of these entries
+	 * that did not come live from BBT, so they are read again from the sidecar or BBT.
 	 */
-	async bibliographyBatch(entries: ZoteroIndexEntry[], style = this.plugin.settings.bibliographyStyle, options: { fresh?: boolean } = {}): Promise<BibliographyDetail[]> {
-		if (options.fresh !== false || !this.bibliographyController) {
+	async bibliographyBatch(entries: ZoteroIndexEntry[], style = this.plugin.settings.bibliographyStyle, options: { fresh?: boolean; refresh?: boolean } = {}): Promise<BibliographyDetail[]> {
+		const refresh = options.refresh === true;
+		if (refresh || options.fresh !== false || !this.bibliographyController) {
 			this.bibliographyController?.abort();
 			const generation = ++this.bibliographyGeneration;
 			for (const [key, flight] of this.bibliographyFlights) if (flight.generation !== 0 && flight.generation !== generation) this.bibliographyFlights.delete(key);
 			this.bibliographyController = new AbortController();
+			this.generationOffline = null;
+			this.generationFallbacks.clear();
 		}
 		const generation = this.bibliographyGeneration;
 		const controller = this.bibliographyController;
+		if (refresh) for (const entry of entries) {
+			const key = `${entry.id}|${style}`;
+			if (this.bibliographyCache.get(key)?.source !== "live") this.bibliographyCache.delete(key);
+		}
 		const store = this.bibliographyStore;
 		await store.load();
 		const version = this.knownBbtVersion();
 		const pending = entries.some(entry => !this.bibliographyCache.has(`${entry.id}|${style}`) && !store.get(style, entry, version));
-		let offlineError: unknown = null;
-		if (pending) {
-			try { await this.plugin.bbt.capabilities({ timeoutMs: BIBLIOGRAPHY_PROBE_MS, signal: controller.signal }); }
-			catch (error) { offlineError = error; }
-		}
+		const offlineError = pending ? await this.offlineVerdict(generation, controller.signal, refresh) : null;
 		return mapBounded(entries, this.plugin.settings.concurrency, entry => this.bibliographyDetail(entry, style, { generation, signal: controller.signal, ...(offlineError ? { offline: true, offlineError } : {}) })
 			.catch((error: unknown): BibliographyDetail => ({ text: "", source: "fallback", error })));
+	}
+
+	/**
+	 * Why the render `generation` must stay offline, or null when BBT may be asked. Decided once per generation: a recent
+	 * "Zotero is not answering" failure (`unreachableRecently`) stands in for the probe unless `probe` is set (Refresh);
+	 * otherwise BBT is probed once with the short bound.
+	 */
+	private async offlineVerdict(generation: number, signal: AbortSignal, probe: boolean): Promise<unknown> {
+		if (this.generationOffline?.generation === generation) return this.generationOffline.error;
+		const last = this.plugin.bbt.lastOutcome;
+		let error: unknown = null;
+		if (!probe && last && unreachableRecently(last, Date.now())) error = new Error(last.message ?? "Zotero did not answer.");
+		else {
+			try { await this.plugin.bbt.capabilities({ timeoutMs: BIBLIOGRAPHY_PROBE_MS, signal }); }
+			catch (caught) { error = caught; }
+		}
+		if (error && generation === this.bibliographyGeneration) this.generationOffline = { generation, error };
+		return error;
 	}
 
 	/** "Insert bibliography": live or cached text goes into the editor; without any text the BBT fault is the message. */
@@ -136,10 +177,7 @@ export class BibliographyController {
 		if (!(file instanceof TFile) || file.extension !== "md") throw new Error("Open a Markdown note first.");
 		const text = view?.file === file ? view.editor.getValue() : await this.plugin.app.vault.cachedRead(file);
 		await this.plugin.indexing.loadIndexForRead();
-		const rows = resolveReferenceRows(text, this.plugin.cachedEntries(), this.plugin.indexLoaded());
-		const entries: ZoteroIndexEntry[] = [];
-		for (const row of rows) if (row.status === "resolved" && row.entry && !entries.some(entry => entry.id === row.entry?.id)) entries.push(row.entry);
-		return { file, entries };
+		return { file, entries: resolvedEntries(resolveReferenceRows(text, this.plugin.cachedEntries(), this.plugin.indexLoaded())) };
 	}
 
 	/** CSL-JSON for the entries: one BBT `item.export` per library, merged into one array with `abstract`/`note` removed. */

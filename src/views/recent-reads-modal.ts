@@ -2,10 +2,12 @@ import { App, Modal, Notice, Setting, TFile } from "obsidian";
 import type CmdsZoteroPlugin from "../main";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { describeBbtError, mapBounded } from "../api/transport";
+import { batchProgressText, runBatch, type BatchRun } from "../batch/batch-run";
 import {
-	RECENT_WINDOW_CHOICES, describeNoteStatus, describeSendOutcome, literatureNoteStatus, localDay, needsSending, readLabel,
-	type NoteStatus, type RecentRead,
+	RECENT_WINDOW_CHOICES, describeNoteStatus, describeSendOutcome, literatureNoteStatus, localDay, needsSending, readLabel, readNoteTexts,
+	type NoteStatus, type RecentRead, type SendOutcome,
 } from "../recent/recent-reads";
+import type { IdentityMap } from "../batch/identity-map";
 
 interface Row {
 	read: RecentRead;
@@ -144,8 +146,7 @@ export class RecentReadsModal extends Modal {
 		if (!found.entry) {
 			row.problem = `${describeBbtError(found.error)} This paper is not in the saved index yet and could not be read from Zotero.`;
 		} else {
-			const files = notes.get(found.entry.id) ?? [];
-			row.status = literatureNoteStatus(found.entry, await Promise.all(files.map(async file => ({ path: file.path, text: await this.app.vault.cachedRead(file) }))));
+			row.status = literatureNoteStatus(found.entry, await readNoteTexts(notes.get(found.entry.id) ?? [], file => this.app.vault.cachedRead(file)));
 			if (row.status.state === "foreign" || row.status.state === "duplicate") row.problem = describeNoteStatus(row.status);
 		}
 		row.selected = !!row.entry && !row.problem && !!row.status && needsSending(row.status);
@@ -154,6 +155,11 @@ export class RecentReadsModal extends Modal {
 		this.describe(row);
 	}
 
+	/**
+	 * Sends the selected rows one at a time. 0.6 batch-performance-progress: the literature folder is read once for the whole
+	 * send; a progress Notice counts the results and offers Cancel. Cancel (or closing this window) stops before the next
+	 * paper, never during a write; rows not reached stay selected so they can be sent again.
+	 */
 	private async send(): Promise<void> {
 		if (this.busy) return;
 		if (this.plugin.recentSendActive) { new Notice("Recently read papers are already being sent to notes."); return; }
@@ -164,36 +170,57 @@ export class RecentReadsModal extends Modal {
 		this.refreshSendButton();
 		for (const row of this.rows) row.toggle?.setDisabled(true);
 		const counts = { created: 0, updated: 0, unchanged: 0, refused: 0, failed: 0 };
+		const progress = (done: number): string => batchProgressText("Sending recently read papers to notes", done, chosen.length, [["created", counts.created], ["updated", counts.updated], ["already up to date", counts.unchanged], ["refused", counts.refused], ["failed", counts.failed]]);
+		let run: BatchRun<Row, void> | null = null;
+		let failure: unknown = null;
 		try {
-			for (const [position, row] of chosen.entries()) {
-				if (this.closed) break;
-				this.setStatus(`Sending ${position + 1} of ${chosen.length}: @${row.read.citekey}…`);
-				const entry = row.entry;
-				if (!entry) continue;
-				try {
-					const outcome = await this.plugin.sendToNote(entry, this.index, { offline: !row.fresh });
-					counts[outcome.status]++;
-					row.result = describeSendOutcome(outcome);
-					// Re-read the note from the path just written: the metadata cache may not know a new note's frontmatter yet.
-					const written = outcome.status !== "refused" ? this.app.vault.getAbstractFileByPath(outcome.path) : null;
-					if (written instanceof TFile) row.status = literatureNoteStatus(entry, [{ path: written.path, text: await this.app.vault.read(written) }]);
-				} catch (error) {
-					counts.failed++;
-					row.result = `Not written: ${error instanceof Error ? error.message : "the send failed"}`;
-				}
-				row.selected = false;
-				row.toggle?.setValue(false);
-				this.describe(row);
-			}
-		} finally {
+			const batch = await this.plugin.openNoteBatch(progress(0));
+			try {
+				run = await runBatch(chosen, {
+					concurrency: 1,
+					// Each entry was read fresh from Zotero (or taken from the saved index) when the list loaded.
+					prepare: row => Promise.resolve(row.entry),
+					cancelled: () => this.closed || batch.cancelled,
+					onItem: (row, position) => {
+						batch.update(progress(position), `@${row.read.citekey}`);
+						this.setStatus(`Sending ${position + 1} of ${chosen.length}: @${row.read.citekey}…`);
+					},
+					apply: row => this.sendRow(row, counts, batch.identities),
+				});
+			} finally { batch.close(); }
+		} catch (error) { failure = error; }
+		finally {
 			this.busy = false;
 			this.plugin.recentSendActive = false;
 			for (const row of this.rows) row.toggle?.setDisabled(!row.entry || !!row.problem);
 		}
-		if (this.closed) return;
 		const parts = [counts.created && `${counts.created} created`, counts.updated && `${counts.updated} updated`, counts.unchanged && `${counts.unchanged} already up to date`, counts.refused && `${counts.refused} refused`, counts.failed && `${counts.failed} failed`].filter(Boolean);
-		this.setStatus(`Done: ${parts.join(", ")}. Open a row's note with its note button.`, counts.refused + counts.failed > 0);
+		const notSent = run ? run.notRun.length : 0;
+		const summary = failure ? `Nothing was sent: ${failure instanceof Error ? failure.message : "the literature folder could not be read"}`
+			: `${run?.cancelled ? "Stopped" : "Done"}: ${parts.join(", ") || "nothing sent"}${notSent ? `; ${notSent} not sent` : ""}.`;
+		if (this.closed) { new Notice(`Recently read papers: ${summary}`); return; }
+		this.setStatus(`${summary}${failure ? "" : " Open a row's note with its note button."}`, !!failure || counts.refused + counts.failed > 0);
 		this.refreshSendButton();
+	}
+
+	/** One send: the row shows the outcome and, after a write, the note state read back from the written file. */
+	private async sendRow(row: Row, counts: Record<SendOutcome["status"] | "failed", number>, identities: IdentityMap): Promise<void> {
+		const entry = row.entry;
+		if (!entry) return;
+		try {
+			const outcome = await this.plugin.sendToNote(entry, this.index, { offline: !row.fresh, identities });
+			counts[outcome.status]++;
+			row.result = describeSendOutcome(outcome);
+			// Re-read the note from the path just written: the metadata cache may not know a new note's frontmatter yet.
+			const written = outcome.status !== "refused" ? this.app.vault.getAbstractFileByPath(outcome.path) : null;
+			if (written instanceof TFile) row.status = literatureNoteStatus(entry, await readNoteTexts([written], file => this.app.vault.read(file)));
+		} catch (error) {
+			counts.failed++;
+			row.result = `Not written: ${error instanceof Error ? error.message : "the send failed"}`;
+		}
+		row.selected = false;
+		row.toggle?.setValue(false);
+		this.describe(row);
 	}
 
 	private async openNote(row: Row): Promise<void> {

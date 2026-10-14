@@ -1,0 +1,13 @@
+- "Update all owned literature notes" and "Send recently read papers to notes" read the literature folder once per batch instead of once per note, so large batches no longer slow down quadratically.
+- "Update all owned literature notes" reads the next notes fresh from Zotero (and renders their bibliography) a few at a time while the notes are written one by one.
+- Both batches show a progress notice with counts and a Cancel button; Cancel stops before the next note, never in the middle of a write, and the report lists the notes that were not run.
+- A second "Update all owned literature notes" run is refused while one is running.
+- The agent `import` action reads the note state before the import from the notes themselves, through the same identity lookup as the preview.
+- Obsidian starts without a pause from CMDS Zotero: the saved citekey index is loaded once the workspace is ready, at an idle moment, and large indexes are checked in small steps instead of one long block.
+- A stale index is refreshed from Zotero about 30 seconds after startup instead of during it; a missing index and the "Refresh citekey index" command are never delayed.
+- Editing notes no longer re-checks every note in the vault: the cross-vault note map re-checks only the notes that changed, and is written only when a literature note appears, moves, disappears or changes its Zotero identity.
+- The literature picker lists recently read papers first without scanning the whole index for each one.
+- "Find notes citing a source" reads up to eight notes at a time, so large vaults answer several times faster; the results and their order are unchanged.
+- The References sidebar's Refresh button renders the list again and fetches the bibliography text again instead of rebuilding the whole index; the "Refresh citekey index" command still rebuilds it.
+- While Zotero is not answering, editing a note no longer makes the References sidebar try to reach Zotero on every change; it shows the saved text until Refresh or until the retry pause ends.
+- The References sidebar has its own icon, so it no longer looks like "Send recently read papers to notes".

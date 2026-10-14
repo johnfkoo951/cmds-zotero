@@ -7,6 +7,7 @@ import { buildConnection } from "../agent/connection";
 import { describeBbtError, mapBounded, transportReasonOf } from "../api/transport";
 import { probeGit } from "../git-probe";
 import { validateIndex } from "../identity";
+import { indexDerived } from "../index-derived";
 import { refreshRefusal, type IndexService } from "../index-service";
 import { readLocalFile } from "../local-file";
 import type CMDSZoteroPlugin from "../main";
@@ -14,7 +15,7 @@ import { ObsidianVaultReader } from "../obsidian-vault";
 import type { PdfTextService } from "../pdf/extract";
 import { hashLocalPdf } from "../pdf/file-hash";
 import { applyReconcile } from "../reconcile-apply";
-import { indexEntryFor, literatureNoteStatus, type RecentReport } from "../recent/recent-reads";
+import { indexEntryFor, literatureNoteStatus, readNoteTexts, type RecentReport } from "../recent/recent-reads";
 import type { ZoteroIndex } from "../types";
 import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory, relativePath } from "../vault-storage";
 
@@ -97,7 +98,7 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		return mapBounded(reads, 2, async read => {
 			const found = await plugin.literature.entryForRecent(read, index);
 			const files = found.entry ? notes.get(found.entry.id) ?? [] : [];
-			const note = found.entry ? literatureNoteStatus(found.entry, await Promise.all(files.map(async file => ({ path: file.path, text: await plugin.app.vault.cachedRead(file) })))) : null;
+			const note = found.entry ? literatureNoteStatus(found.entry, await readNoteTexts(files, file => plugin.app.vault.cachedRead(file))) : null;
 			return { read, id: found.entry?.id ?? null, inIndex: !!(index && indexEntryFor(read, index.entries)), fresh: found.fresh, note, ...(found.entry ? {} : { problem: `${describeBbtError(found.error)} Not in the saved index and not readable from Zotero.` }) };
 		});
 	};
@@ -105,7 +106,7 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 	host.extractPdf = async (target, pdfRequest: PdfTextRequest) => {
 		if (!target.localPath) throw new Error("The PDF file is unavailable.");
 		if (target.item && target.attachment.key) {
-			const entry = index?.entries.find(candidate => candidate.id === target.item?.id);
+			const entry = index ? indexDerived(index.entries).entryById(target.item.id) : null;
 			if (!entry) throw new Error("The PDF parent item is no longer in the index.");
 			return pdfToken.extract({ kind: "attachment", libraryType: entry.libraryType, libraryID: entry.libraryID, attachmentKey: target.attachment.key, id: entry.id, path: target.localPath }, { force: pdfRequest.force });
 		}

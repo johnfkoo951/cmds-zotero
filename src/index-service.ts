@@ -1,5 +1,5 @@
 import type { BbtService } from "./bbt";
-import { validateAndSealIndex, verifyIndex } from "./identity";
+import { validateAndSealIndexInChunks, verifyIndex, VALIDATION_CHUNK } from "./identity";
 import { resolveIndex } from "./agent/resolve";
 import type { FailureReason } from "./agent/types";
 import type { IndexStorage, Resolution, ZoteroIndex } from "./types";
@@ -74,14 +74,33 @@ export function transportErrorOf(error: unknown): BbtTransportError | null {
 
 interface Flight { promise: Promise<RefreshOutcome>; force: boolean; thresholdMs: number }
 
+export interface IndexServiceOptions {
+	/** 0.6 OPT-03: hands control back to the event loop between validation chunks of a loaded snapshot (a macrotask by default). */
+	pause?: () => Promise<void>;
+	/** Entries validated per chunk (`VALIDATION_CHUNK`). */
+	chunkSize?: number;
+}
+
+/** A macrotask turn: Node's (and Electron's renderer's) `setImmediate`, so input and painting run between chunks. */
+const macrotask = (): Promise<void> => new Promise(resolve => { setImmediate(resolve); });
+
 export class IndexService {
 	private cache?: ZoteroIndex;
 	private flight?: Flight;
 	private loaded = false;
 	private fingerprint: string | null = null;
 	private collections = 0;
+	/** 0.6 OPT-03: the snapshot load in progress (one per file version); concurrent readers join it. */
+	private loading: { fingerprint: string | undefined; promise: Promise<boolean> } | null = null;
+	/** Bumped by every load and by every collected snapshot; a load finishing after a newer one started publishes nothing. */
+	private generation = 0;
+	private readonly pause: () => Promise<void>;
+	private readonly chunkSize: number;
 
-	constructor(private bbt: BbtService, private storage: IndexStorage, private maxAgeMinutes: () => number, private canCollect: CollectPrecondition = () => ({ ok: true })) {}
+	constructor(private bbt: BbtService, private storage: IndexStorage, private maxAgeMinutes: () => number, private canCollect: CollectPrecondition = () => ({ ok: true }), options: IndexServiceOptions = {}) {
+		this.pause = options.pause ?? macrotask;
+		this.chunkSize = options.chunkSize ?? VALIDATION_CHUNK;
+	}
 
 	/** True while a BBT collection or the index write that follows it is in flight, whether forced or not. */
 	get collecting(): boolean { return this.collections > 0; }
@@ -119,17 +138,41 @@ export class IndexService {
 		return age === null ? null : age > this.maxAgeMinutes();
 	}
 
+	/**
+	 * Loads the persisted snapshot when none is loaded or the file changed. 0.6 OPT-03: validation runs in chunks that yield
+	 * to the event loop; meanwhile readers keep the previous snapshot (or none), and nothing sees the new one before it has
+	 * passed in full. Concurrent callers for one file version share the load; a load overtaken by a newer load or by a
+	 * collected snapshot publishes nothing, and its callers wait for the newer state.
+	 */
 	private async ensureLoaded(): Promise<void> {
-		const fingerprint = await this.storage.fingerprint?.();
-		if (this.loaded && (fingerprint === undefined || fingerprint === this.fingerprint)) return;
+		for (;;) {
+			const fingerprint = await this.storage.fingerprint?.();
+			if (this.loaded && (fingerprint === undefined || fingerprint === this.fingerprint)) return;
+			let load = this.loading;
+			if (!load || load.fingerprint !== fingerprint) {
+				const started = { fingerprint, promise: this.loadSnapshot(fingerprint, ++this.generation) };
+				const settled = (): void => { if (this.loading === started) this.loading = null; };
+				this.loading = started;
+				void started.promise.then(settled, settled);
+				load = started;
+			}
+			if (await load.promise) return;
+		}
+	}
+
+	/** Reads, parses and validates the persisted index; publishes it (true) unless a newer load or collection took over. */
+	private async loadSnapshot(fingerprint: string | undefined, generation: number): Promise<boolean> {
 		const persisted = await this.storage.read();
-		this.cache = undefined;
+		let snapshot: ZoteroIndex | undefined;
 		if (persisted !== null) {
 			// Bytes from disk are validated in full; their entries are sealed so later in-process checks skip the hash.
-			try { const parsed: unknown = JSON.parse(persisted); if (validateAndSealIndex(parsed)) this.cache = parsed; } catch { /* Legacy or malformed caches must be rebuilt. */ }
+			try { const parsed: unknown = JSON.parse(persisted); if (await validateAndSealIndexInChunks(parsed, this.pause, this.chunkSize)) snapshot = parsed as ZoteroIndex; } catch { /* Legacy or malformed caches must be rebuilt. */ }
 		}
+		if (generation !== this.generation) return false;
+		this.cache = snapshot;
 		this.fingerprint = fingerprint ?? null;
 		this.loaded = true;
+		return true;
 	}
 
 	private async load(options: GetOptions): Promise<RefreshOutcome> {
@@ -161,6 +204,8 @@ export class IndexService {
 			await this.storage.writeValidated(JSON.stringify(candidate, null, 2));
 			this.fingerprint = (await this.storage.fingerprint?.()) ?? null;
 			this.cache = candidate;
+			this.loaded = true;
+			this.generation++; // a snapshot load that read the file before this write publishes nothing
 			return { index: candidate, refreshed: true, reason: options.force ? "forced" : "stale", ageMinutesBefore: ageBefore };
 		} finally { this.collections--; }
 	}

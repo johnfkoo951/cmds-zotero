@@ -38,6 +38,21 @@ export function resolveReferenceRows(text: string, entries: readonly ZoteroIndex
 	return rows;
 }
 
+/**
+ * The entries the resolved rows name, each once, in row order: two rows (a current and a previous citekey) can resolve to
+ * one entry. 0.6 STRUCT-02: shared by the References sidebar and the active-note exports, one Set lookup per row.
+ */
+export function resolvedEntries(rows: readonly ReferenceRow[]): ZoteroIndexEntry[] {
+	const seen = new Set<string>();
+	const entries: ZoteroIndexEntry[] = [];
+	for (const row of rows) {
+		if (row.status !== "resolved" || !row.entry || seen.has(row.entry.id)) continue;
+		seen.add(row.entry.id);
+		entries.push(row.entry);
+	}
+	return entries;
+}
+
 /** Header count, with "index not loaded" when no snapshot is published and the snapshot age when it is stale. */
 export function referenceHeader(count: number, state: SnapshotState): string {
 	const label = `${count} reference${count === 1 ? "" : "s"}`;

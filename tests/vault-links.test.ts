@@ -127,10 +127,10 @@ test('find() links every peer path with a Hookmark-native address and orders hub
   await fs.rm(root,{recursive:true,force:true});
 });
 
-const file=(path:string,frontmatter?:Record<string,unknown>)=>({path,basename:path.split('/').pop()!.replace(/\.md$/,''),frontmatter});
+const file=(path:string,frontmatter?:Record<string,unknown>)=>({path,basename:path.split('/').pop()!.replace(/\.md$/,''),extension:'md',frontmatter});
 type Fake=ReturnType<typeof file>;
 
-test('0.5 F06: localFilesByEntry groups every note in one vault pass and shares that pass with publishNow',async()=>{
+test('0.5 F06 + 0.6 OPT-05: localFilesByEntry groups every note in one vault pass per generation and shares it with publishNow',async()=>{
   const VaultLinks=await loadVaultLinks();
   const entries=Array.from({length:40},(_,i)=>entry(`1:ENTRY${String(i).padStart(4,'0')}`,`key${i}`));
   const files:Fake[]=[];
@@ -139,7 +139,7 @@ test('0.5 F06: localFilesByEntry groups every note in one vault pass and shares 
     files.push(owner<entries.length?file(`Notes/folder${i%7}/@key${owner}${i%3===0?' copy':''}.md`,i%2===0?{citekey:`key${owner}`}:undefined):file(`Misc/plain-${i}.md`));
   }
   let listings=0;let lookups=0;
-  const app={boundary:async()=>{},vault:{getName:()=>'Research',getMarkdownFiles:()=>{listings++;return files;},adapter:{write:async()=>{},exists:async()=>false,read:async()=>''}},metadataCache:{getFileCache:(f:Fake)=>{lookups++;return f.frontmatter?{frontmatter:f.frontmatter}:undefined;}}};
+  const app={boundary:async()=>{},vault:{getName:()=>'Research',getMarkdownFiles:()=>{listings++;return files;},getFileByPath:(p:string)=>files.find(f=>f.path===p)??null,adapter:{write:async()=>{},exists:async()=>false,read:async()=>''}},metadataCache:{getFileCache:(f:Fake)=>{lookups++;return f.frontmatter?{frontmatter:f.frontmatter}:undefined;}}};
   const links=new VaultLinks(app,()=>({peerVaults:[]}));
   const index={entries,generatedAt:'g1'};
   const byEntry:Map<string,Fake[]>=links.localFilesByEntry(index);
@@ -149,14 +149,33 @@ test('0.5 F06: localFilesByEntry groups every note in one vault pass and shares 
   const lookup=buildAliasIndex(entries);
   assert.equal([...byEntry.values()].reduce((n,list)=>n+list.length,0),files.filter(f=>noteIdentity(f.basename,f.frontmatter,lookup)!==null).length);
   for(const list of byEntry.values()) assert.deepEqual(list.map(f=>f.path),[...list.map(f=>f.path)].sort((a,b)=>a.localeCompare(b)),'paths within an entry are sorted');
-  // localFiles(entry) is one pass, not one pass per entry per file; a plain entry lookup costs the same single pass.
+  // 0.6 OPT-05: later lookups of the same generation reuse the pass; nothing was reported changed, so nothing is read.
   listings=0;lookups=0;
   const forOne=links.localFiles(entries[3],index);
-  assert.equal(listings,1);assert.equal(lookups,files.length);
+  assert.equal(listings,0);assert.equal(lookups,0);
   assert.deepEqual(forOne.map(f=>f.path),byEntry.get(entries[3].id)!.map(f=>f.path));
-  // publishNow uses the same grouping pass.
-  listings=0;lookups=0;
   await links.publish(index);
+  assert.equal(listings,0,'publishNow uses the same pass');assert.equal(lookups,0);
+  // A reported change costs one metadata-cache lookup for that note only.
+  links.noteChanged(files[10].path);
+  links.localFilesByEntry(index);
+  assert.equal(listings,0);assert.equal(lookups,1);
+  // A change not pinned to note paths (a folder moved) costs one full pass, after which single reports are cheap again.
+  lookups=0;
+  links.allNotesChanged();links.noteChanged(files[11].path);
+  links.localFilesByEntry(index);
+  assert.equal(listings,1);assert.equal(lookups,files.length);
+  lookups=0;
+  links.noteChanged(files[12].path);
+  links.localFilesByEntry(index);
+  assert.equal(listings,1);assert.equal(lookups,1);
+  // A note deleted and created again at the same path is answered with the new file object.
+  const recreated={...files[0]};files[0]=recreated;
+  links.noteChanged(recreated.path);
+  assert.ok(links.localFilesByEntry(index).get(entries[0].id)!.includes(recreated));
+  // A new generation (a new entries array) resolves every note again.
+  listings=0;lookups=0;
+  links.localFilesByEntry({entries:[...entries],generatedAt:'g2'});
   assert.equal(listings,1);assert.equal(lookups,files.length);
 });
 
@@ -184,20 +203,138 @@ test('0.5 F07: the published map is deterministic across file order and a new in
   assert.deepEqual(JSON.parse(writes[1]).notes,first.notes);
 });
 
-test('0.6 PERF-05: the alias index is cached per entries array; vault notes are still read live and a new generation re-resolves them',async()=>{
+test('0.6 PERF-05/OPT-05: the alias index is cached per entries array; reported notes are read again and a new generation re-resolves them',async()=>{
   const VaultLinks=await loadVaultLinks();
   const files:Fake[]=[file('Lit/@a.md'),file('Lit/hub.md',{type:'paper-hub',citekey:'b'}),file('Lit/plain.md')];
-  const app={boundary:async()=>{},vault:{getName:()=>'Research',getMarkdownFiles:()=>files,adapter:{write:async()=>{},exists:async()=>false,read:async()=>''}},metadataCache:{getFileCache:(f:Fake)=>f.frontmatter?{frontmatter:f.frontmatter}:undefined}};
+  const app={boundary:async()=>{},vault:{getName:()=>'Research',getMarkdownFiles:()=>files,getFileByPath:(p:string)=>files.find(f=>f.path===p)??null,adapter:{write:async()=>{},exists:async()=>false,read:async()=>''}},metadataCache:{getFileCache:(f:Fake)=>f.frontmatter?{frontmatter:f.frontmatter}:undefined}};
   const links=new VaultLinks(app,()=>({peerVaults:[]}));
   const paths=(index:{entries:ZoteroIndexEntry[]})=>Object.fromEntries([...(links.localFilesByEntry(index) as Map<string,Fake[]>)].map(([id,list])=>[id,list.map(f=>f.path)]));
   const g1={entries:[entry('1:AAAA0001','a'),entry('1:BBBB0001','b')],generatedAt:'g1'};
   assert.deepEqual(paths(g1),{'1:AAAA0001':['Lit/@a.md'],'1:BBBB0001':['Lit/hub.md']});
-  // An edit that gives a note an identity is seen on the same generation: only the index side is cached.
+  // An edit that gives a note an identity is seen on the same generation once the host reports the note (metadata-cache
+  // 'changed'); an unreported edit is not (the host reports every change, see main.ts).
   files[2].frontmatter={type:'paper-hub',citekey:'a'};
+  assert.deepEqual(paths(g1),{'1:AAAA0001':['Lit/@a.md'],'1:BBBB0001':['Lit/hub.md']});
+  links.noteChanged('Lit/plain.md');
   assert.deepEqual(paths(g1),{'1:AAAA0001':['Lit/@a.md','Lit/plain.md'],'1:BBBB0001':['Lit/hub.md']});
   // A new generation (new array): a renamed to a2 keeps a in its history, b left the index.
   const g2={entries:[entry('1:AAAA0001','a2',['a'])],generatedAt:'g2'};
   assert.deepEqual(paths(g2),{'1:AAAA0001':['Lit/@a.md','Lit/plain.md']});
   assert.deepEqual(links.localFiles(g2.entries[0],g2).map((f:Fake)=>f.path),['Lit/@a.md','Lit/plain.md']);
   assert.deepEqual(paths(g1),{'1:AAAA0001':['Lit/@a.md','Lit/plain.md'],'1:BBBB0001':['Lit/hub.md']},'an older generation still answers for its own entries');
+});
+
+/** A synthetic vault whose files carry their frontmatter; renames mutate the file object in place, as Obsidian does. */
+function fakeVault(files:Fake[]){
+  const counts={listings:0,lookups:0,boundary:0,exists:0,reads:0};
+  const writes:string[]=[];let onDisk:string|null=null;
+  const app={boundary:async()=>{counts.boundary++;},vault:{getName:()=>'Research',getMarkdownFiles:()=>{counts.listings++;return files.filter(f=>f.extension==='md');},getFileByPath:(p:string)=>files.find(f=>f.path===p)??null,
+    adapter:{write:async(_p:string,v:string)=>{writes.push(v);onDisk=v;},exists:async()=>{counts.exists++;return onDisk!==null;},read:async()=>{counts.reads++;return onDisk??'';}}},
+    metadataCache:{getFileCache:(f:Fake)=>{counts.lookups++;return f.frontmatter?{frontmatter:f.frontmatter}:undefined;}}};
+  return {app,counts,writes};
+}
+
+/** What a fresh instance (one full pass) answers: the reference the incremental answers must equal. */
+async function fullPass(files:Fake[],index:{entries:ZoteroIndexEntry[];generatedAt:string}){
+  const VaultLinks=await loadVaultLinks();
+  const links=new VaultLinks(fakeVault(files).app,()=>({peerVaults:[]}));
+  return Object.fromEntries([...(links.localFilesByEntry(index) as Map<string,Fake[]>)].map(([id,list])=>[id,list.map(f=>f.path)]));
+}
+
+test('0.6 OPT-05: incremental answers equal a full pass after creates, edits, renames, deletes and folder moves',async()=>{
+  const VaultLinks=await loadVaultLinks();
+  const entries=Array.from({length:12},(_,i)=>entry(`1:ITEM${String(i).padStart(4,'0')}`,`key${i}`,i%4===0?[`old${i}`]:[]));
+  const index={entries,generatedAt:'g1'};
+  const files:Fake[]=Array.from({length:30},(_,i)=>i%3===0?file(`Lit/@key${i/3}.md`):i%3===1?file(`Notes/n${i}.md`,{zoteroID:entries[i%12].id}):file(`Misc/m${i}.md`));
+  const {app}=fakeVault(files);
+  const links=new VaultLinks(app,()=>({peerVaults:[]}));
+  const answer=()=>Object.fromEntries([...(links.localFilesByEntry(index) as Map<string,Fake[]>)].map(([id,list])=>[id,list.map(f=>f.path)]));
+  assert.deepEqual(answer(),await fullPass(files,index));
+  // Deterministic pseudo-random edits (synthetic data only); after each one the host reports exactly what Obsidian would.
+  // Paths stay unique, as in a real vault.
+  let seed=7;const next=(n:number)=>{seed=(seed*1103515245+12345)%2147483648;return Math.floor(seed/65536)%n;};
+  const ran=[0,0,0,0,0,0];let changedAnswers=0;let previous=JSON.stringify(answer());
+  for(let step=0;step<300;step++){
+    const roll=next(41);const kind=roll===40?5:roll%5;
+    if(kind===0){ // create
+      const created=next(2)===0?file(`New/@key${next(12)}.md`):file(`New/c${step}.md`,{citekey:`old${next(3)*4}`,type:'paper-hub'});
+      if(files.some(f=>f.path===created.path)) continue;
+      files.push(created);links.noteChanged(created.path);
+    }else if(kind===1&&files.length){ // frontmatter edit
+      const target=files[next(files.length)];
+      target.frontmatter=next(3)===0?undefined:next(2)===0?{zoteroID:entries[next(12)].id}:{type:'paper-hub',citekey:`key${next(14)}`};
+      links.noteChanged(target.path);
+    }else if(kind===2&&files.length){ // rename in place (the TFile keeps its identity)
+      const target=files[next(files.length)];const oldPath=target.path;
+      const renamed=next(2)===0?`Lit/@key${next(12)}.md`:`Moved/r${step}.md`;
+      if(files.some(f=>f.path===renamed)) continue;
+      target.path=renamed;target.basename=renamed.split('/').pop()!.replace(/\.md$/,'');
+      links.noteChanged(renamed);links.noteChanged(oldPath);
+    }else if(kind===3&&files.length){ // delete
+      const [removed]=files.splice(next(files.length),1);links.noteChanged(removed.path);
+    }else if(kind===4&&files.length){ // a note renamed away from Markdown is reported through its old path
+      const target=files[next(files.length)];const oldPath=target.path;
+      target.path=oldPath.replace(/\.md$/,'.txt');target.extension='txt';
+      links.noteChanged(target.path);links.noteChanged(oldPath);
+      files.splice(files.indexOf(target),1);
+    }else if(kind===5){ // a folder moved: not pinned to note paths
+      for(const f of files) if(f.path.startsWith('New/')){const moved=f.path.replace(/^New\//,'Archive/');if(!files.some(o=>o.path===moved)) f.path=moved;}
+      links.allNotesChanged();
+    }else continue;
+    ran[kind]++;
+    const now=answer();
+    assert.deepEqual(now,await fullPass(files,index),`step ${step} (kind ${kind})`);
+    if(JSON.stringify(now)!==previous) changedAnswers++;
+    previous=JSON.stringify(now);
+  }
+  assert.ok(ran.every(count=>count>0),`every kind of change ran: ${ran.join(',')}`);
+  assert.ok(changedAnswers>40,`the edits changed the answer often enough to matter: ${changedAnswers}`);
+});
+
+test('0.6 OPT-05: publishIfChanged touches the disk only when an identity or path changed; publish still compares',async()=>{
+  const VaultLinks=await loadVaultLinks();
+  const entries=[entry('1:AAAA0001','a'),entry('1:BBBB0001','b')];
+  const index={entries,generatedAt:'g1'};
+  const files:Fake[]=[file('Lit/@a.md'),file('Lit/hub.md',{type:'paper-hub',citekey:'b'}),file('Lit/plain.md')];
+  const {app,counts,writes}=fakeVault(files);
+  const links=new VaultLinks(app,()=>({peerVaults:[]}));
+  await links.publish(index);
+  assert.equal(writes.length,1);
+  assert.deepEqual(JSON.parse(writes[0]).notes,{'1:AAAA0001':['Lit/@a.md'],'1:BBBB0001':['Lit/hub.md']});
+  // An edit that changes no identity: one lookup, no boundary walk, no disk access, no write.
+  const before={...counts};
+  files[2].frontmatter={tags:['reading']};
+  links.noteChanged('Lit/plain.md');
+  await links.publishIfChanged(index);
+  assert.equal(counts.lookups-before.lookups,1);
+  assert.deepEqual([counts.listings,counts.boundary,counts.exists,counts.reads],[before.listings,before.boundary,before.exists,before.reads],'the edit-time path never touches the disk');
+  assert.equal(writes.length,1);
+  // An edit that gives the note an identity is published.
+  files[2].frontmatter={zoteroID:'1:AAAA0001'};
+  links.noteChanged('Lit/plain.md');
+  await links.publishIfChanged(index);
+  assert.equal(writes.length,2);
+  assert.deepEqual(JSON.parse(writes[1]).notes['1:AAAA0001'],['Lit/@a.md','Lit/plain.md']);
+  // A rename moves the path; a delete removes it.
+  files[1].path='Hubs/hub.md';
+  links.noteChanged('Hubs/hub.md');links.noteChanged('Lit/hub.md');
+  await links.publishIfChanged(index);
+  assert.equal(writes.length,3);
+  assert.deepEqual(JSON.parse(writes[2]).notes['1:BBBB0001'],['Hubs/hub.md']);
+  files.splice(2,1);
+  links.noteChanged('Lit/plain.md');
+  await links.publishIfChanged(index);
+  assert.equal(writes.length,4);
+  assert.deepEqual(JSON.parse(writes[3]).notes['1:AAAA0001'],['Lit/@a.md']);
+  // A reported change that comes back to the same identity, then nothing at all: no write.
+  links.noteChanged('Lit/@a.md');
+  await links.publishIfChanged(index);
+  await links.publishIfChanged(index);
+  assert.equal(writes.length,4);
+  // Another generation is published even when no note changed; an explicit publish of an unchanged map writes nothing.
+  await links.publishIfChanged({entries,generatedAt:'g2'});
+  assert.equal(writes.length,5);
+  assert.equal(JSON.parse(writes[4]).indexGeneratedAt,'g2');
+  await links.publish({entries,generatedAt:'g2'});
+  assert.equal(writes.length,5);
 });
