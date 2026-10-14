@@ -4,6 +4,8 @@ export interface PeerVault {
 }
 
 export type CitationTrigger = "bracket" | "at" | "off";
+/** 0.6.1: how annotation tags are written: as Zotero has them, or as Obsidian tags (`#slug`). */
+export type AnnotationTagStyle = "plain" | "hashtag";
 
 export interface CmdsZoteroSettings {
 	bbtEndpoint: string;
@@ -59,6 +61,8 @@ export interface CmdsZoteroSettings {
 	noteItemTypeFields: boolean;
 	/** 0.6.1: a highlight whose comment starts with `+` renders inside the block of the highlight it continues (annotations/join.ts). */
 	joinContinuations: boolean;
+	/** 0.6.1: annotation tags as written by Zotero (`Tags: a, b`), or as Obsidian tags (`Tags: #a #b`) with the frontmatter slug rules. */
+	annotationTagStyle: AnnotationTagStyle;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -91,6 +95,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	annotationsHeading: "Annotations",
 	noteItemTypeFields: false,
 	joinContinuations: false,
+	annotationTagStyle: "plain",
 };
 
 export interface ItemIdentity {

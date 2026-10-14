@@ -1,5 +1,5 @@
 import type { SectionDefinition } from "../model";
-import { splitLines, toggleField, type Field, type SettingKey } from "../fields";
+import { choiceField, splitLines, toggleField, type Field, type SettingKey } from "../fields";
 import { annotationsHeadingProblem, calloutTypeProblem, DEFAULT_CALLOUTS, DEFAULT_SYNTHESIS_LINES, synthesisLineProblem } from "../../layout";
 
 type CalloutKey = Extract<SettingKey, "calloutAbstract" | "calloutCite" | "calloutMetadata" | "calloutLinks" | "calloutSynthesis">;
@@ -43,6 +43,9 @@ export const layoutSection: SectionDefinition = {
 		section.toggle(toggleField("noteLinks")).setName("Links").setDesc("Show the links to the item in Zotero and to its attachments.");
 		section.toggle(toggleField("joinContinuations")).setName("Join continued highlights")
 			.setDesc("A highlight whose Zotero comment starts with + is added to the highlight before it in the same attachment: one block with both texts, the page span and the comments without the +. Off keeps every highlight separate.");
+		section.dropdown(choiceField("annotationTagStyle", ["plain", "hashtag"])).setName("Annotation tags")
+			.setDesc("Write the Zotero tags of an annotation as Zotero has them, or as Obsidian tags (#method, spaces become -) that show up in the tag pane and in search. Excluded tags are left out either way.")
+			.addOption("plain", "As in Zotero").addOption("hashtag", "Obsidian tags");
 		section.toggle(toggleField("noteZoteroNotes")).setName("Zotero notes").setDesc("Show the item's child notes from Zotero.");
 		section.toggle(toggleField("noteSynthesis")).setName("Synthesis scaffold").setDesc("Add the synthesis heading and callout to new notes. It belongs to you and is never updated.");
 		section.textArea(synthesisLinesField).setName("Synthesis lines").setDesc("Lines of the synthesis callout in new notes, one per line. An empty list keeps the default.")

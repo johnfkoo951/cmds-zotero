@@ -419,7 +419,7 @@ export function creatorNames(entry: ZoteroIndexEntry): CreatorName[] {
 	});
 }
 
-export function filteredTags(tags: string[], settings: CmdsZoteroSettings): string[] {
+export function filteredTags(tags: string[], settings: Pick<CmdsZoteroSettings, "excludedTags">): string[] {
 	const excluded = new Set(settings.excludedTags.map(tag => tag.toLowerCase()));
 	return tags.filter(tag => tag.trim() && !excluded.has(tag.trim().toLowerCase()));
 }
@@ -429,6 +429,27 @@ export function annotationURI(a: Annotation, entry: ZoteroIndexEntry): string {
 	if (entry.libraryType === "group" && (!entry.groupID || !Number.isSafeInteger(entry.groupID))) throw new Error("Missing verified group ID");
 	const page = Number.isSafeInteger(a.page) && a.page > 0 ? a.page : 1;
 	return `zotero://open-pdf/${scope}/items/${key(a.attachmentKey)}?page=${page}&annotation=${encodeURIComponent(key(a.key))}`;
+}
+
+/**
+ * 0.6.1: the `Tags:` line of an annotation, or "" without tags. Excluded tags (settings) are left out. `plain` keeps
+ * Zotero's text, comma-separated (the 0.6.0 line); `hashtag` writes Obsidian tags with the frontmatter slug rules
+ * (`normalizeTag`: spaces become `-`, letters in any script are kept), deduplicated case-insensitively; a tag without a
+ * valid slug (empty or all digits) stays as escaped text.
+ */
+export function annotationTagsLine(tags: readonly string[], settings: Pick<CmdsZoteroSettings, "excludedTags" | "annotationTagStyle">): string {
+	const kept = filteredTags([...tags], settings);
+	if (!kept.length) return "";
+	if (settings.annotationTagStyle !== "hashtag") return `Tags: ${kept.map(inline).join(", ")}`;
+	const seen = new Set<string>();
+	const parts = kept.flatMap(tag => {
+		const slug = normalizeTag(tag);
+		const id = (slug ?? tag.trim()).toLowerCase();
+		if (seen.has(id)) return [];
+		seen.add(id);
+		return [slug ? `#${slug}` : inline(tag)];
+	});
+	return `Tags: ${parts.join(" ")}`;
 }
 
 /** 0.6.1 G21: the body of an image annotation whose image was not copied (no cached image, or the sidebar). */
@@ -442,7 +463,7 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 	const color = colorName(a.color);
 	const link = `[p. ${label}](${uri})`;
 	const comment = a.comment ? `**Comment**: *${richInline(a.comment, true)}*` : "";
-	const tags = a.tags.length ? `Tags: ${a.tags.map(inline).join(", ")}` : "";
+	const tags = annotationTagsLine(a.tags, settings);
 	const type = (a.type || "highlight").toLowerCase();
 	if (image) {
 		const title = `[!Image] ${color ? `${color} · ` : ""}p. ${label}`;

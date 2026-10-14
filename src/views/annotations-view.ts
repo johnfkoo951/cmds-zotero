@@ -3,7 +3,7 @@ import type CMDSZoteroPlugin from "../main";
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../types";
 import { noteIdentity } from "../note-aliases";
 import { indexDerived } from "../index-derived";
-import { annotationBody, annotationURI, IMAGE_NOT_CACHED, readingOrder } from "../note-writer";
+import { annotationBody, annotationURI, filteredTags, IMAGE_NOT_CACHED, readingOrder } from "../note-writer";
 import { joinContinuations } from "../annotations/join";
 import { richTextPlain } from "../annotations/rich-text";
 import { colorName } from "../annotations/colors";
@@ -128,7 +128,9 @@ export class AnnotationsView extends ItemView {
 		if (annotation.text) card.createDiv({ cls: "cmds-zotero-annotation-text", text: richTextPlain(annotation.text) });
 		else if ((annotation.type || "").toLowerCase() === "image" && !annotation.imagePath) card.createDiv({ cls: "cmds-zotero-annotation-text", text: IMAGE_NOT_CACHED });
 		if (annotation.comment) card.createDiv({ cls: "cmds-zotero-annotation-comment", text: richTextPlain(annotation.comment) });
-		if (annotation.tags.length) card.createDiv({ cls: "setting-item-description", text: annotation.tags.join(", ") });
+		// 0.6.1: excluded tags are left out here as in the note.
+		const tags = filteredTags(annotation.tags, this.plugin.settings);
+		if (tags.length) card.createDiv({ cls: "setting-item-description", text: tags.join(", ") });
 		const actions = card.createDiv({ cls: "cmds-zotero-reference-actions" });
 		const uri = annotationURI(annotation, entry);
 		this.action(actions, "external-link", "Open in Zotero PDF reader", () => { window.open(uri); });
