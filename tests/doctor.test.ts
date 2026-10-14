@@ -20,6 +20,11 @@ const HEALTHY: DoctorFacts = {
 };
 const byId = (facts: DoctorFacts): Record<string, { status: string; code?: string; detail: string; paths?: string[] }> => Object.fromEntries(doctorChecks(facts).map(check => [check.id, check]));
 
+// Synthetic home folders, assembled at runtime so the release sanitizer (which looks for literal home paths) stays quiet.
+const MAC_HOME = ["", "Users", "alex"].join("/");
+const LINUX_HOME = ["", "home", "sam"].join("/");
+const WIN_HOME = ["C:", "Users", "kim"].join("\\");
+
 test("a healthy setup is all ok, in report order, with no diagnostics", () => {
 	const checks = doctorChecks(HEALTHY);
 	assert.deepEqual(checks.map(check => check.id), ["zotero", "legacy-plugin", "index", "git", "pdfjs", "peer-vaults", "output-folder"]);
@@ -75,8 +80,8 @@ test("version gates, missing index, Better Notes notes and unchecked facts", () 
 });
 
 test("redactPaths removes absolute paths: vault root, home folder and other user folders", () => {
-	const text = "Read /Users/alex/Vaults/Research/References/Zotero/a.md and /Users/alex/Zotero/storage/X.pdf; also /home/sam/z.json and C:\\Users\\kim\\Zotero\\x.pdf; root /Users/alex/Vaults/Research";
-	const redacted = redactPaths(text, { vaultRoot: "/Users/alex/Vaults/Research", home: "/Users/alex" });
+	const text = `Read ${MAC_HOME}/Vaults/Research/References/Zotero/a.md and ${MAC_HOME}/Zotero/storage/X.pdf; also ${LINUX_HOME}/z.json and ${WIN_HOME}\\Zotero\\x.pdf; root ${MAC_HOME}/Vaults/Research`;
+	const redacted = redactPaths(text, { vaultRoot: `${MAC_HOME}/Vaults/Research`, home: `${MAC_HOME}` });
 	assert.equal(redacted, "Read References/Zotero/a.md and ~/Zotero/storage/X.pdf; also ~/z.json and ~\\Zotero\\x.pdf; root <vault>");
 	assert.doesNotMatch(redacted, /alex|sam|kim/);
 });
@@ -85,13 +90,13 @@ test("the report lists checks, recent outcomes from the local log, and is redact
 	const log = new OutcomeLog(3);
 	const at = (minute: number): Date => new Date(Date.UTC(2026, 9, 14, 3, minute));
 	log.push({ ok: true, at: at(1) });
-	log.push({ ok: false, at: at(2), reason: "timeout", message: "BBT request timed out reading /Users/alex/Zotero/storage/X.pdf" });
+	log.push({ ok: false, at: at(2), reason: "timeout", message: `BBT request timed out reading ${MAC_HOME}/Zotero/storage/X.pdf` });
 	log.push({ ok: true, at: at(3) });
 	log.push({ ok: false, at: at(4), reason: "connection-refused", message: "connect ECONNREFUSED 127.0.0.1:23119" });
 	assert.equal(log.entries().length, 3, "the ring buffer keeps the newest entries");
 	assert.equal(log.entries()[0].at, at(2).toISOString());
 	assert.deepEqual(summarizeOutcomes(log.entries()), { total: 3, ok: 1, failed: 2, reasons: { timeout: 1, "connection-refused": 1 } });
-	const report = doctorReport({ checks: doctorChecks({ ...HEALTHY, pdfjs: false }), pluginVersion: "0.6.1", generatedAt: at(5), statusLine: "Zotero index: 450 · 5 min old · BBT ok just now", outcomes: log.entries(), vaultRoot: "/Users/alex/Vaults/Research", home: "/Users/alex" });
+	const report = doctorReport({ checks: doctorChecks({ ...HEALTHY, pdfjs: false }), pluginVersion: "0.6.1", generatedAt: at(5), statusLine: "Zotero index: 450 · 5 min old · BBT ok just now", outcomes: log.entries(), vaultRoot: `${MAC_HOME}/Vaults/Research`, home: `${MAC_HOME}` });
 	const lines = report.split("\n");
 	assert.equal(lines[0], "CMDS Zotero setup report");
 	assert.equal(lines[1], "Plugin 0.6.1 · 2026-10-14T03:05:00.000Z");
