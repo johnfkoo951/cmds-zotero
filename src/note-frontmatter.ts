@@ -28,8 +28,11 @@ export type EditOutcome =
 
 /** Keys the opt-in refresh may rewrite: the plugin's metadata keys. Never `zoteroID` (relink does that) or `tags` (yours). */
 export const REFRESH_KEYS: readonly LiteratureIdentityKey[] = LITERATURE_IDENTITY_KEYS.filter(key => key !== "zoteroID" && key !== "tags");
-/** Keys 0.3/0.4 wrote (derivable from `zoteroID`) and the old cmds-link-zotero `zotero_citekey`. */
-export const LEGACY_FRONTMATTER_KEYS: readonly string[] = [...LEGACY_LITERATURE_KEYS, "zotero_citekey"];
+/**
+ * Keys 0.3/0.4 wrote (derivable from `zoteroID`). Only keys this project is known to have written count: a key some other
+ * convention uses (for example a `zotero_citekey` that Dataview queries read) is never removed on a guess.
+ */
+export const LEGACY_FRONTMATTER_KEYS: readonly string[] = [...LEGACY_LITERATURE_KEYS];
 
 /** The line just past the value of the key at `index`: indented lines, and `- ` items when the value is empty. Blank lines inside a block count. */
 function valueEnd(lines: readonly string[], index: number, emptyValue: boolean): number {

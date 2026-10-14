@@ -123,7 +123,7 @@ test("frontmatter-refresh, legacy-key-cleanup and merged-item-relink plans", () 
 	const item = entry({ title: "New title", year: "2025" });
 	const fm = { type: "zotero", zoteroID: item.id, title: "Old", year: 2025, authors: ["Doe, Jane"], tags: ["mine"], zotero_title: "Old", "zotero-id": 1, zotero_citekey: "doe2024" };
 	assert.deepEqual(frontmatterRefreshChanges(fm, item, DEFAULT_SETTINGS), { title: "New title", zotero_title: "New title" }, "year 2025 equals \"2025\"; missing keys are not added; tags never");
-	assert.deepEqual(legacyKeysIn(fm), ["zotero-id", "zotero_citekey"]);
+	assert.deepEqual(legacyKeysIn(fm), ["zotero-id"], "only keys this project wrote; zotero_citekey is left alone");
 	const survivor = entry({ id: "1:ITEMBBB2", itemKey: "ITEMBBB2", citekey: "doe2024a", citekeyHistory: ["doe2024"], zoteroSelectURI: "zotero://select/library/items/ITEMBBB2" });
 	const other = entry({ id: "1:ITEMCCC3", itemKey: "ITEMCCC3", citekey: "roe2020", doi: "10.1234/other", zoteroSelectURI: "zotero://select/library/items/ITEMCCC3" });
 	const note = { basename: "@doe2024", frontmatter: { zoteroID: "1:GONEGON1", zoteroSelectURI: "zotero://select/library/items/GONEGON1", citekey: "doe2024", "zotero-id": 9 } };
