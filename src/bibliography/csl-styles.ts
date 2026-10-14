@@ -71,7 +71,7 @@ function attribute(tag: string, name: string): string | undefined {
  * only the first `<info>` block is read, so a malformed rest of the file never matters.
  */
 export function parseCslInfo(xml: string): CslStyleInfo | null {
-	const text = xml.replace(/^﻿/, "").replace(/<!--[\s\S]*?-->/g, "");
+	const text = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
 	const info = /<info(?:\s[^>]*)?>([\s\S]*?)<\/info>/.exec(text);
 	if (!info) return null;
 	const element = (name: string): string | undefined => {

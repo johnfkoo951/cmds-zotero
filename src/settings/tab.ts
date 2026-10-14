@@ -5,6 +5,7 @@ import { describeBbtError } from "../api/transport";
 import { draftOf, type Problem, type SettingsDraft } from "./fields";
 import { buildSections, saveBlocker, type RowSpec, type SectionSpec, type SettingsActions } from "./model";
 import { SETTINGS_SECTIONS } from "./registry";
+import { chooseInstalledStyle } from "../plugin/style-picker";
 
 /**
  * The settings tab: the area sections of `registry.ts`, edited in a draft and stored only by Save (inline problems
@@ -32,7 +33,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			refreshIndex: async () => { await this.plugin.refreshIndex(); return ""; },
 			// 0.6.2 installed-csl-style-picker: a style Better BibTeX renders goes into the draft; Save stores it.
 			chooseStyle: async () => {
-				await this.plugin.bibliography.chooseStyle(style => {
+				await chooseInstalledStyle(this.plugin, style => {
 					this.draft.bibliographyStyle = style.key;
 					// Obsidian 1.13+ renders the rows from definitions; the older tab is re-rendered here to show the new value.
 					if (!requireApiVersion("1.13.0")) this.render();

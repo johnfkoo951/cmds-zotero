@@ -7,18 +7,17 @@ export const bibliographySection: SectionDefinition = {
 	define(section) {
 		section.setName("Bibliography and references");
 		section.text(textField("bibliographyStyle")).setName("Bibliography style")
-			.setDesc("Installed Zotero CSL style identifier, for example apa. A note's csl frontmatter overrides it for that note. Saving a new style first checks once that Better BibTeX renders it.");
+			.setDesc("Installed Zotero CSL style identifier, for example apa. A style named in a note's frontmatter overrides it for that note. Saving a new style first checks once that Better BibTeX renders it.");
 		section.button(actions => actions.chooseStyle()).setName("Choose an installed style")
 			.setDesc("Lists the styles in the Zotero data directory's styles folder (read-only) and checks the one you pick with Better BibTeX before it goes into the style field.")
 			.setButtonText("Choose style");
 		section.text(localeField).setName("Bibliography locale")
-			.setDesc("Locale for bibliography terms and dates, for example en-US or ko-KR. Leave empty for the style's default. A note's lang frontmatter overrides it for that note.")
-			.setPlaceholder("Style default");
+			.setDesc("Language and region code for bibliography terms and dates. Leave empty for the style's default. A language named in a note's frontmatter overrides it for that note.");
 		section.dropdown(choiceField("bibliographyOrder", ["style", "citation", "alphabetical"])).setName("Bibliography order")
 			.setDesc("Order of a copied bibliography and of the references section. Style order asks Better BibTeX for the whole list, so the style sorts (and disambiguates); citation order and alphabetical are for styles that do not sort.")
 			.addOption("style", "As the style orders it").addOption("citation", "Order of first citation").addOption("alphabetical", "Alphabetical");
 		section.text(dataDirectoryField).setName("Zotero data directory")
-			.setDesc("Folder that holds Zotero's styles folder, read-only (Zotero → Settings → Advanced → Files and folders). Absolute, or starting with ~/.")
+			.setDesc("Folder that holds Zotero's styles folder, read only; Zotero shows it among its advanced settings under files and folders. Absolute, or starting with ~/.")
 			.setPlaceholder("~/Zotero");
 		section.text(vaultPathField("exportFolder")).setName("Export kit folder")
 			.setDesc("Vault folder the pandoc export kit writes into, one subfolder per note. The source note is never changed.");

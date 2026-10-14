@@ -25,7 +25,8 @@ export const sha256 = (text: string): string => createHash("sha256").update(text
 
 /** A note's base name made safe as a folder and file name (no path separators, control characters or leading dots). */
 export function kitName(basename: string): string {
-	const name = basename.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-").replace(/^\.+/, "").trim().slice(0, 120);
+	const safe = [...basename].map(char => char.charCodeAt(0) < 0x20 || "\\/:*?\"<>|".includes(char) ? "-" : char).join("");
+	const name = safe.replace(/^\.+/, "").trim().slice(0, 120);
 	return name || "note";
 }
 

@@ -5,7 +5,6 @@ import { BibliographyStore, type BibliographyDetail } from "../bibliography-stor
 import { resolveReferenceRows, resolvedEntries, countBibliographySources, fallbackCitation, type BibliographySourceCounts } from "../citations/reference-rows"; // 0.5 R10
 import { listInstalledStyles, type InstalledStyle, type StyleListing } from "../bibliography/csl-styles"; // 0.6.2
 import { entriesHtml, formatKey, noteFormat, orderEntries, probeProblem, splitTextBibliography, type BibliographyFormat, type BibliographyOrder, type NoteFormat } from "../bibliography/format"; // 0.6.2
-import { PickerModal } from "../modals/picker";
 import { markdownLink } from "../uris";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
@@ -276,31 +275,6 @@ export class BibliographyController {
 		catch (error) { problem = probeProblem(format, { error }); }
 		if (!problem) this.verified = key;
 		return problem;
-	}
-
-	/**
-	 * The installed-style picker: lists the styles folder, then probes the chosen style once with the current locale and
-	 * hands it to `use` only when Better BibTeX renders it. Problems are Notices; nothing is saved here.
-	 */
-	async chooseStyle(use: (style: InstalledStyle) => Promise<void> | void, locale = this.defaultLocale()): Promise<void> {
-		const listing = await this.installedStyles(true);
-		if (!listing.styles.length) throw new Error(`No usable CSL styles in ${listing.directory}.`);
-		const label = (style: InstalledStyle): string => `${style.title} · ${style.key}${style.parent ? " (dependent)" : ""}`;
-		new PickerModal(this.plugin.app, listing.styles, label, style => {
-			void this.plugin.run(async () => {
-				const problem = await this.probeFormat({ style: style.key, locale });
-				if (problem) { new Notice(problem, 12000); return; }
-				await use(style);
-			});
-		}, listing.truncated ? "Choose a style… (only the first 2000 files were read)" : "Choose a style…").open();
-	}
-
-	/** Command: choose an installed style and save it as the bibliography style. */
-	async chooseAndSaveStyle(): Promise<void> {
-		await this.chooseStyle(async style => {
-			await this.plugin.saveSettings({ ...this.plugin.settings, bibliographyStyle: style.key });
-			new Notice(`Bibliography style set to ${style.title} (${style.key}).`);
-		});
 	}
 
 	/** Aborts the current render generation's flights and writes any pending sidecar records. */

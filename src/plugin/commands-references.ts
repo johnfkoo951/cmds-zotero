@@ -4,6 +4,7 @@ import { citedKeySet } from "../citations/cited-keys";
 import { referenceRowsFromSet } from "../citations/check";
 import { resolvedEntries } from "../citations/reference-rows";
 import { withoutReferencesBlock } from "../citations/references-block";
+import { chooseAndSaveStyle } from "./style-picker";
 
 /** 0.6.2 WP6 commands (references, bibliography and export kit), registered after the 0.6.1 commands. No default hotkeys. */
 export function registerReferenceCommands(plugin: CMDSZoteroPlugin): void {
@@ -13,7 +14,7 @@ export function registerReferenceCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.addCommand({ id: "copy-bibliography", name: "Copy bibliography for current note", callback: () => { void plugin.run(() => copyBibliographyOfActiveNote(plugin)); } });
 	plugin.addCommand({ id: "insert-references-section", name: "Insert or update references section", callback: () => { void plugin.run(() => plugin.references.insertReferencesSection()); } });
 	plugin.addCommand({ id: "export-pandoc-kit", name: "Export pandoc kit for current note", callback: () => { void plugin.run(() => plugin.references.exportKit()); } });
-	plugin.addCommand({ id: "choose-bibliography-style", name: "Choose bibliography style from installed styles", callback: () => { void plugin.run(() => plugin.bibliography.chooseAndSaveStyle()); } });
+	plugin.addCommand({ id: "choose-bibliography-style", name: "Choose bibliography style from installed styles", callback: () => { void plugin.run(() => chooseAndSaveStyle(plugin)); } });
 }
 
 /** The References sidebar's Copy bibliography for the active note: the saved index resolves, the note's style and locale apply. */

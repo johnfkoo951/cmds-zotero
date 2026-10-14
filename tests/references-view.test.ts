@@ -80,6 +80,8 @@ async function setup() {
 			return Promise.resolve(items.map(item => ({ text: `Live ${item.citekey}.`, source: "live" })));
 		},
 		copyCslJson: async () => undefined, run: async (action: () => Promise<void>) => { await action(); },
+		// 0.6.2: the note's style and locale (no csl/lang frontmatter here).
+		bibliography: { noteFormat: async () => ({ style: "apa", locale: "", styleFrom: "settings", localeFrom: "settings", problems: [] }) },
 		openNote: async () => undefined, openPdf: async () => undefined, copyLink: async () => undefined,
 	};
 	const app = { workspace: { getActiveViewOfType: () => null, getActiveFile: () => file, on: () => ({}) }, vault: { cachedRead: async () => "Cites [@doe2020] and @roe2021." } };
