@@ -430,6 +430,9 @@ export function annotationURI(a: Annotation, entry: ZoteroIndexEntry): string {
 	return `zotero://open-pdf/${scope}/items/${key(a.attachmentKey)}?page=${page}&annotation=${encodeURIComponent(key(a.key))}`;
 }
 
+/** 0.6.1 G21: the body of an image annotation whose image was not copied (no cached image, or the sidebar). */
+export const IMAGE_NOT_CACHED = "Image not available in Zotero's cache; open it in Zotero.";
+
 /** Renders one annotation as CMDS callout Markdown; reused by the import and the annotation sidebar. */
 export function annotationBody(a: Annotation, image: string | undefined, entry: ZoteroIndexEntry, settings: CmdsZoteroSettings): string {
 	const uri = annotationURI(a, entry);
@@ -444,6 +447,10 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 	if (image) {
 		const title = `[!Image] ${color ? `${color} · ` : ""}p. ${label}`;
 		return quoted([title, `![Annotation image](${encodedPath(image)}) ${link}`, comment, tags].filter(Boolean).join("\n"));
+	}
+	if (type === "image") {
+		// 0.6.1 G21: no cached image to copy — name it and link to it instead of an empty highlight.
+		return quoted([`[!Image] ${color ? `${color} · ` : ""}p. ${label}`, `*${IMAGE_NOT_CACHED}* ${link}`, comment, tags].filter(Boolean).join("\n"));
 	}
 	if (type === "ink") {
 		// A freehand drawing has no text and BBT renders no image for it: name it and link to it.

@@ -3,7 +3,7 @@ import type CMDSZoteroPlugin from "../main";
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../types";
 import { noteIdentity } from "../note-aliases";
 import { indexDerived } from "../index-derived";
-import { annotationBody, annotationURI } from "../note-writer";
+import { annotationBody, annotationURI, IMAGE_NOT_CACHED } from "../note-writer";
 import { richTextPlain } from "../annotations/rich-text";
 import { colorName } from "../annotations/colors";
 import { annotationHaystack, annotationQuery, annotationsByPage, annotationVisibility, emptyAnnotationsText } from "../annotations/filter";
@@ -121,6 +121,7 @@ export class AnnotationsView extends ItemView {
 		if (annotation.imagePath) head.createSpan({ cls: "cmds-zotero-annotation-image", text: "image" });
 		// 0.6.1 RICH-TEXT: Zotero's rich-text tags are read, not shown (their text stays; the DOM gets text only).
 		if (annotation.text) card.createDiv({ cls: "cmds-zotero-annotation-text", text: richTextPlain(annotation.text) });
+		else if ((annotation.type || "").toLowerCase() === "image" && !annotation.imagePath) card.createDiv({ cls: "cmds-zotero-annotation-text", text: IMAGE_NOT_CACHED });
 		if (annotation.comment) card.createDiv({ cls: "cmds-zotero-annotation-comment", text: richTextPlain(annotation.comment) });
 		if (annotation.tags.length) card.createDiv({ cls: "setting-item-description", text: annotation.tags.join(", ") });
 		const actions = card.createDiv({ cls: "cmds-zotero-reference-actions" });
