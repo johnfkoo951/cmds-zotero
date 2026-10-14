@@ -149,6 +149,10 @@
 .cmds-zotero-annotation-facets .cmds-zotero-filtered-out {
   display: none;
 }
+/* 0.6.1 annotation-card-actions: the card the palette's card commands act on */
+.cmds-zotero-annotation.is-focused {
+  outline: 1px solid var(--interactive-accent);
+}
 /* Cards, attachment headings and the message the annotation filter does not show; typing toggles this class only. */
 .cmds-zotero-annotation-list .cmds-zotero-filtered-out {
   display: none;

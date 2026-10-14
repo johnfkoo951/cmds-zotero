@@ -17,6 +17,8 @@ import {
 	type AnnotationsViewState, type CursorTarget, type ItemRef, type SidebarMode,
 } from "../annotations/view-state";
 import { LiveOverlay, sourceLabel } from "../annotations/overlay";
+import { CARD_ACTIONS, annotationDataText, citationFor, identityLinkFor, scopedKey, type CardActionId } from "../annotations/card-actions";
+import { ReportModal } from "../modals/report";
 
 export const VIEW_TYPE_ANNOTATIONS = "cmds-zotero-annotations";
 /** Hides a card, section heading or message the filter does not show (0.6 PERF-15). */
@@ -51,6 +53,8 @@ export class AnnotationsView extends ItemView {
 	// 0.6.1 annotation-sidebar-live-read: fresh reads live here, in memory; the saved index is never rewritten.
 	private readonly overlay = new LiveOverlay();
 	private fetching = false;
+	/** The card last clicked or focused (attachment and annotation keys), for the palette's card commands. */
+	private focused: { attachmentKey: string; annotationKey: string } | null = null;
 	// 0.6.1 annotation-sidebar-facets: the filter box text is `facets.query`.
 	private facets: AnnotationFacets = noFacets();
 	private sort: AnnotationSort = "page";
@@ -383,13 +387,73 @@ export class AnnotationsView extends ItemView {
 		if (annotation.text) card.createDiv({ cls: "cmds-zotero-annotation-text", text: annotation.text });
 		if (annotation.comment) card.createDiv({ cls: "cmds-zotero-annotation-comment", text: annotation.comment });
 		if (annotation.tags.length) card.createDiv({ cls: "setting-item-description", text: annotation.tags.join(", ") });
+		card.setAttribute("tabindex", "0");
+		if (this.focused?.attachmentKey === attachment.key && this.focused.annotationKey === annotation.key) card.addClass("is-focused");
+		const focus = (): void => {
+			this.focused = { attachmentKey: attachment.key, annotationKey: annotation.key };
+			for (const other of this.groups.flatMap(group => group.cards)) other.toggleClass("is-focused", other === card);
+			card.toggleClass("is-focused", true);
+		};
+		card.addEventListener("focusin", focus);
+		card.addEventListener("click", focus);
+		card.addEventListener("contextmenu", (event: MouseEvent) => { event.preventDefault(); focus(); this.cardMenu(entry, attachment, annotation).showAtMouseEvent(event); });
 		const actions = card.createDiv({ cls: "cmds-zotero-reference-actions" });
 		const uri = annotationURI(annotation, entry);
 		this.action(actions, "external-link", "Open in Zotero PDF reader", () => { window.open(uri); });
 		this.action(actions, "text-cursor-input", "Insert at cursor", () => this.insert(entry, attachment, annotation));
 		this.action(actions, "link", "Copy annotation link", () => this.plugin.copyLink(`${entry.title} — p. ${annotation.pageLabel || annotation.page}`, uri));
 		this.action(actions, "clipboard-copy", "Copy annotation text", async () => { await navigator.clipboard.writeText(annotation.text || annotation.comment); new Notice("Annotation text copied."); });
+		const more = actions.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "More actions" } });
+		setIcon(more, "more-horizontal");
+		more.addEventListener("click", (event: MouseEvent) => { focus(); this.cardMenu(entry, attachment, annotation).showAtMouseEvent(event); });
 		return card;
+	}
+
+	/** 0.6.1 annotation-card-actions: citation, callout, bibliography, keys, identity link and the annotation's data. */
+	private cardMenu(entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation): Menu {
+		const menu = new Menu();
+		for (const action of CARD_ACTIONS) menu.addItem(item => item.setTitle(action.name).onClick(() => { void this.plugin.run(() => this.runCardAction(action.id, entry, attachment, annotation)); }));
+		return menu;
+	}
+
+	/** The focused card, if it is still shown. */
+	focusedCard(): { entry: ZoteroIndexEntry; attachment: Attachment; annotation: Annotation } | null {
+		const entry = this.entry;
+		const focused = this.focused;
+		if (!entry || !focused) return null;
+		const attachment = entry.attachments.find(item => item.key === focused.attachmentKey);
+		const annotation = attachment?.annotations.find(item => item.key === focused.annotationKey);
+		return attachment && annotation ? { entry, attachment, annotation } : null;
+	}
+
+	/** Runs a card action on the focused card (the palette's card commands). */
+	async runFocusedAction(id: CardActionId): Promise<void> {
+		const card = this.focusedCard();
+		if (!card) throw new Error("Click an annotation card in the annotations sidebar first.");
+		await this.runCardAction(id, card.entry, card.attachment, card.annotation);
+	}
+
+	private async runCardAction(id: CardActionId, entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation): Promise<void> {
+		const copy = async (text: string, what: string): Promise<void> => { await navigator.clipboard.writeText(text); new Notice(`${what} copied.`); };
+		switch (id) {
+			case "copy-citation": return copy(citationFor(annotation, entry), "Citation");
+			case "copy-citation-link": return copy(citationFor(annotation, entry, { link: true }), "Citation");
+			case "copy-callout": return copy(this.callout(entry, annotation), "Callout");
+			case "copy-bibliography": {
+				const text = await this.plugin.bibliographyFor(entry);
+				if (!text.trim()) throw new Error("No bibliography entry is available for this item.");
+				return copy(text, "Bibliography entry");
+			}
+			case "copy-annotation-key": return copy(scopedKey(annotation.key, entry), "Annotation key");
+			case "copy-item-key": return copy(scopedKey(entry.itemKey, entry), "Item key");
+			case "copy-identity-link": return this.plugin.copyLink(`${entry.title} — p. ${annotation.pageLabel || annotation.page}`, identityLinkFor(this.app.vault.getName(), annotation, entry));
+			case "show-data": new ReportModal(this.app, "Annotation data", annotationDataText(annotation, attachment, entry)).open(); return;
+		}
+	}
+
+	/** The callout Insert at cursor writes; image annotations are linked, not copied (the import copies images). */
+	private callout(entry: ZoteroIndexEntry, annotation: Annotation): string {
+		return annotation.imagePath ? markdownLink(`Image annotation, p. ${annotation.pageLabel || annotation.page}`, annotationURI(annotation, entry)) : annotationBody(annotation, undefined, entry, this.plugin.settings);
 	}
 
 	private action(parent: HTMLElement, icon: string, label: string, run: () => Promise<void> | void): void {
@@ -402,8 +466,7 @@ export class AnnotationsView extends ItemView {
 		const view = this.plugin.lastMarkdownView();
 		if (!view) throw new Error("Open a Markdown note in edit mode to insert an annotation.");
 		// Images are not copied by the sidebar; the import command performs validated image copies. Link the PDF location instead.
-		const body = annotation.imagePath ? `${markdownLink(`Image annotation, p. ${annotation.pageLabel || annotation.page}`, annotationURI(annotation, entry))}` : annotationBody(annotation, undefined, entry, this.plugin.settings);
-		view.editor.replaceSelection(`${body}\n`);
+		view.editor.replaceSelection(`${this.callout(entry, annotation)}\n`);
 		void this.app.workspace.revealLeaf(view.leaf);
 	}
 

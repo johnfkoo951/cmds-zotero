@@ -44,6 +44,7 @@ export class WorkspaceLeaf {}
 export class Menu { addItem() { return this; } addSeparator() { return this; } showAtMouseEvent() { return this; } }
 export class FuzzySuggestModal { constructor(app) { this.app = app; } setPlaceholder() {} open() { FuzzySuggestModal.opened.push(this); } }
 FuzzySuggestModal.opened = [];
+export class Setting { setName() { return this; } setHeading() { return this; } addButton() { return this; } }
 export class Modal { constructor(app) { this.app = app; this.contentEl = new FakeEl("div"); } open() {} close() {} }
 export class ItemView {
 	constructor(leaf) { this.leaf = leaf; this.app = leaf.app; this.contentEl = new FakeEl("div"); }
@@ -235,4 +236,24 @@ test("Fetch latest shows a fresh read in memory until the index changes; failure
 	await view.fetchLatest();
 	assert.match(mod.obs.notices.at(-1) ?? "", /index changed/);
 	assert.deepEqual(cards(), ["Synthetic ANNO0002", "Synthetic ANNO0001"], "a read that outlived its generation is dropped");
+});
+
+test("card actions run on the card last clicked; a re-render keeps the focus while the card is shown", async () => {
+	const copied: string[] = [];
+	Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: (text: string) => { copied.push(text); return Promise.resolve(); } } }, configurable: true });
+	const { view, find } = await sidebar();
+	view.pin(one);
+	const v = view as unknown as { focusedCard(): unknown; runFocusedAction(id: string): Promise<void> };
+	assert.equal(v.focusedCard(), null);
+	await assert.rejects(v.runFocusedAction("copy-citation"), /Click an annotation card/);
+	const card = find(el => el.classes.has("cmds-zotero-annotation"))[1];
+	card.dispatch("click");
+	assert.ok(card.classes.has("is-focused"));
+	await v.runFocusedAction("copy-citation");
+	await v.runFocusedAction("copy-annotation-key");
+	assert.deepEqual(copied, ["[@synthetic2026item1, p. 2]", "ANNO0001"]);
+	view.render();
+	assert.ok(v.focusedCard(), "still shown after a render");
+	view.pin(two);
+	assert.equal(v.focusedCard(), null, "another item has no such card");
 });
