@@ -10464,6 +10464,8 @@ function outputCheck(output) {
   if (output === null) return { id: "output-folder", status: "unknown", title, detail: "Not checked here." };
   if (output.betterNotes.length) return flagged("output-folder", title, "better-notes-in-output", `${plural(output.betterNotes.length, "note")} in ${output.folder} ${output.betterNotes.length === 1 ? "carries" : "carry"} Better Notes sync frontmatter; keep Better Notes exports in another folder so the two plugins never write the same note.`, output.betterNotes);
   if (output.unmatched.length) return flagged("output-folder", title, "foreign-notes-in-output", `${plural(output.unmatched.length, "note")} in ${output.folder} ${output.unmatched.length === 1 ? "belongs" : "belong"} to no index entry. They are never changed; move them if they are not literature notes.`, output.unmatched);
+  const moved = output.moved ?? [];
+  if (moved.length) return { id: "output-folder", status: "ok", title, detail: `${plural(output.notes, "note")} in ${output.folder}, each linked to an index entry; ${plural(moved.length, "literature note")} ${moved.length === 1 ? "lives" : "live"} elsewhere in the vault and ${moved.length === 1 ? "is" : "are"} updated where ${moved.length === 1 ? "it is" : "they are"}.`, paths: moved.slice(0, MAX_PATHS) };
   return { id: "output-folder", status: "ok", title, detail: `${plural(output.notes, "note")} in ${output.folder}, each linked to an index entry.` };
 }
 function doctorChecks(facts) {
