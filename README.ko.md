@@ -4,7 +4,7 @@
 
 검증된 Zotero 원문·인용·주석·문헌노트를 로컬 중심 연구 볼트에 연결합니다. By CMDSPACE.
 
-**0.6.0(2026-10-14).** [0.6.0 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0)에서 `main.js`, `manifest.json`, `styles.css`를 받거나 BRAT로 `johnfkoo951/cmds-zotero`를 설치합니다. Community Plugins에는 아직 등록하지 않았습니다. 0.6은 인덱스 새로 고침·시작·편집·일괄 갱신을 빠르게 하고, 문제 있는 항목·피드·EPUB·스냅숏 주석이 있어도 새로 고침이 멈추지 않게 하며, 인용 선택기가 취소 버튼과 함께 기다리게 하고, 다시 정리한 설정 탭에서 모든 설정을 바꿀 수 있게 합니다. 에이전트 액션 `annotations`·`citing`, `resolve --stdin`, 줄 단위 `reconcile --apply`도 추가합니다. 0.5는 **Send recently read papers to notes**를 추가했습니다. [변경 기록](CHANGELOG.md)을 참고하세요. 사용설명서: [docs/guide.ko.md](docs/guide.ko.md) · [웹](https://apps.cmdspace.work/plugins/cmds-zotero/?lang=ko) · [English](docs/guide.md). Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71(macOS)에서 검증했으며 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
+**0.6.1(2026-10-14).** [0.6.1 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.1)에서 `main.js`, `manifest.json`, `styles.css`를 받거나 BRAT로 `johnfkoo951/cmds-zotero`를 설치합니다. Community Plugins에는 아직 등록하지 않았습니다. 0.6.1은 노트 레이아웃 설정(구역 켜고 끄기, 콜아웃 이름, 항목 유형별 필드, Zotero 서식 텍스트, `+`로 이어진 하이라이트 합치기, 주석 태그를 Obsidian 태그로), 항목 내용 삽입, 필터·따라가기 모드·최신 가져오기·카드 동작·검색·드래그를 갖춘 주석 사이드바, 자료 선택 창의 필드 검색(`author:`, `col:`, `tag:` 등), Zotero 선택 항목 열기·가져오기·인용, 상태 표시줄 메뉴, 보고 전용 설정 진단(Diagnose setup)을 추가합니다. 0.6.0은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고 에이전트 액션 `annotations`·`citing`을 추가했습니다. [변경 기록](CHANGELOG.md)을 참고하세요. 사용설명서: [docs/guide.ko.md](docs/guide.ko.md) · [웹](https://apps.cmdspace.work/plugins/cmds-zotero/?lang=ko) · [English](docs/guide.md). Zotero 쪽 설정: [docs/zotero-side.ko.md](docs/zotero-side.ko.md). Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71(macOS)에서 검증했으며 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
 
 ## 범위
 
@@ -128,7 +128,7 @@ Paper ingest 서비스·CLI 계약은 [`src/ingest-api.ts`](src/ingest-api.ts), 
 | identity | 허브 YAML/S01 제안, 참고문헌, PIN 대기 상태 | 가능 |
 | cites | 본문·프론트매터 인용 검사 및 References 생성; `--format csl-json|bibtex|biblatex`·`--out` 사이드카(0.5) | 가능(구조화 형식·`--out`은 라이브 전용) |
 | reconcile | 허브 감사, 명시적 `--apply`만 5개 키를 줄 단위로 기록(0.6) | dry-run만 |
-| diagnostics | 인덱스·identity·인용·개인정보 진단 | 가능 |
+| diagnostics | 인덱스·identity·인용·개인정보 진단; `--env`는 설정 점검 추가(0.6.1) | 가능 |
 | pdf-text | 내장 pdf.js로 비공개 텍스트 캐시 생성 | 불가 |
 | locate | 캐시에서 인용 페이지와 검증 상태 반환 | 가능 |
 | recent | Zotero에서 최근 읽은 논문과 각 문헌노트 상태(0.5) | 불가 |
@@ -204,8 +204,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # 추적 중인 작업 파일 검사
 node scripts/sanitize.mjs --staged  # Git index의 추가·변경 파일 검사
-node scripts/version-bump.mjs 0.6.0 # package/lock/manifest/versions 동기화
-node scripts/verify-release.mjs 0.6.0
+node scripts/version-bump.mjs 0.6.1 # package/lock/manifest/versions 동기화
+node scripts/verify-release.mjs 0.6.1
 ```
 
 테스트는 합성 데이터만 사용합니다. 새니타이저는 비밀값 대신 파일·줄·규칙만 출력하는 휴리스틱이며 staged diff와 private 저장소 링크의 수동 검토를 대체하지 않습니다. CI는 Node 22에서 `npm ci`, lint, typecheck, test, production build를 수행합니다. 준비된 릴리스 workflow는 manifest/package/lock/versions와 일치하는 **v 접두사 없는 정식 semver 태그**를 요구하며 세 플러그인 파일과 provenance bundle을 배포합니다. **해당 태그를 push하면 릴리스가 공개되므로 먼저 승인을 받으세요.** Workflow 준비는 릴리스·CI 성공·커뮤니티 등록을 완료했다는 뜻이 아닙니다.

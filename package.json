@@ -1,6 +1,6 @@
 {
   "name": "cmds-zotero",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Connect citations, annotations, source links and literature notes to your vault. By CMDSPACE.",
   "main": "main.js",
   "private": true,

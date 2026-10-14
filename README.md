@@ -4,7 +4,7 @@
 
 Verified Zotero sources, citations, annotations, and literature notes for a local-first research vault. By CMDSPACE.
 
-**Version 0.6.0 (2026-10-14).** Download `main.js`, `manifest.json` and `styles.css` from the [0.6.0 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0) or install `johnfkoo951/cmds-zotero` with BRAT; it is not yet listed in Community Plugins. 0.6 makes refreshes, startup, editing and batch updates faster; keeps a refresh going past bad items, feeds and EPUB or snapshot annotations; lets the citation picker wait for you with a Cancel button; gives every setting a control in a reorganised settings tab; and adds the agent actions `annotations` and `citing`, `resolve --stdin` and line-by-line `reconcile --apply`. 0.5 added **Send recently read papers to notes**. See the [changelog](CHANGELOG.md). User guide: [docs/guide.md](docs/guide.md) · [web](https://apps.cmdspace.work/plugins/cmds-zotero/) · [한국어](docs/guide.ko.md). Verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS; group libraries and Windows/Linux are not live-tested.
+**Version 0.6.1 (2026-10-14).** Download `main.js`, `manifest.json` and `styles.css` from the [0.6.1 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.1) or install `johnfkoo951/cmds-zotero` with BRAT; it is not yet listed in Community Plugins. 0.6.1 adds note layout settings (switchable parts, callout names, fields by item type, Zotero rich text, joined `+` highlights, annotation tags as Obsidian tags), Insert item content, an annotations sidebar with filters, follow modes, Fetch latest, card actions, search and drag, fielded search (`author:`, `col:`, `tag:` …) in pickers, Open/Import/Cite Zotero selection, a status-bar menu and a report-only Diagnose setup. 0.6.0 made refreshes, startup and batches faster and added the agent actions `annotations` and `citing`. See the [changelog](CHANGELOG.md). User guide: [docs/guide.md](docs/guide.md) · [web](https://apps.cmdspace.work/plugins/cmds-zotero/) · [한국어](docs/guide.ko.md). Zotero-side setup: [docs/zotero-side.md](docs/zotero-side.md). Verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS; group libraries and Windows/Linux are not live-tested.
 
 ## Scope
 
@@ -128,7 +128,7 @@ See [`src/ingest-api.ts`](src/ingest-api.ts) and [`scripts/ingest.mjs`](scripts/
 | identity | Proposed hub YAML/S01, bibliography, current/pending PIN state | Yes |
 | cites | Body/frontmatter citation verdicts and References text; `--format csl-json|bibtex|biblatex` and `--out` sidecar (0.5) | Yes (structured formats and `--out` live only) |
 | reconcile | Hub audit; five-key writes only with explicit `--apply`, patched line by line (0.6) | Dry-run |
-| diagnostics | Index, identity, citation and privacy diagnostics | Yes |
+| diagnostics | Index, identity, citation and privacy diagnostics; `--env` adds setup checks (0.6.1) | Yes |
 | pdf-text | Bundled pdf.js extraction into a private cache | No |
 | locate | Quote locations from that cache, with verification state | Yes |
 | recent | Papers recently read in Zotero with each literature note's state (0.5) | No |
@@ -204,8 +204,8 @@ npm test
 npm run build
 node scripts/sanitize.mjs           # tracked working-tree files
 node scripts/sanitize.mjs --staged  # staged additions/changes, reads index bytes
-node scripts/version-bump.mjs 0.6.0 # synchronizes package, lock, manifest, versions
-node scripts/verify-release.mjs 0.6.0
+node scripts/version-bump.mjs 0.6.1 # synchronizes package, lock, manifest, versions
+node scripts/verify-release.mjs 0.6.1
 ```
 
 Tests use synthetic fixtures. The sanitizer reports matching file/line/rule without printing secrets; it is a heuristic and does not replace manual staged-diff inspection or review of private repository links. CI uses `npm ci`, lint, typecheck, tests, and production build on Node 22. The prepared release workflow requires an exact stable semver tag **without `v`**, matching manifest/package/lock/versions; it builds three plugin assets and publishes their provenance bundle. **Pushing such a tag publishes a release: obtain approval first.** A prepared workflow does not imply a release, successful CI run, or community submission has occurred.

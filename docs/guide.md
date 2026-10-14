@@ -2,8 +2,8 @@
 Send what you read and mark up in Zotero to Obsidian literature notes. Metadata, highlights and comments, Zotero notes, citations and links back to the source end up in one note, and the text you write yourself stays untouched. Zotero is treated as read-only.
 
 ## Version and release status
-This guide covers **CMDS Zotero 0.6.0**, released on **2026-10-14**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. **The plugin is not yet listed in Obsidian Community Plugins**; install it manually or with BRAT.
-0.6 makes refreshes, startup and batch updates faster, keeps refreshes going past bad items, lets the citation picker wait for you, reorganises the settings tab and adds agent actions; the [changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md) lists every change. It was verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS. Checks of 0.5 on a real library covered the recently read list, creating and updating four literature notes, PDF text extraction for four papers (one of them a scan) and quote location. Group libraries and Windows/Linux are outside the verified scope.
+This guide covers **CMDS Zotero 0.6.1**, released on **2026-10-14**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.1) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. **The plugin is not yet listed in Obsidian Community Plugins**; install it manually or with BRAT.
+0.6.1 adds note layout settings, Insert item content, a richer annotations sidebar, fielded search, Zotero selection commands and Diagnose setup. 0.6.0 made refreshes, startup and batch updates faster, keeps refreshes going past bad items, lets the citation picker wait for you, reorganises the settings tab and adds agent actions; the [changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md) lists every change. It was verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS. Checks of 0.5 on a real library covered the recently read list, creating and updating four literature notes, PDF text extraction for four papers (one of them a scan) and quote location. Group libraries and Windows/Linux are outside the verified scope.
 
 ## Requirements and terms
 - **Obsidian desktop 1.7.2 or later**. Mobile is not supported.
@@ -14,7 +14,7 @@ A **citekey** such as `Example2026` is a citation label, not a permanent identif
 
 ## Installation
 **Manual**
-1. Download `main.js`, `manifest.json` and `styles.css` from the [0.6.0 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0).
+1. Download `main.js`, `manifest.json` and `styles.css` from the [0.6.1 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.1).
 2. Put the three files in `<vault>/.obsidian/plugins/cmds-zotero/`.
 3. Reload Obsidian and enable **CMDS Zotero** under **Settings → Community plugins**.
 
@@ -59,8 +59,10 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 ## Citations, bibliographies and sidebars
 - **Insert citation from Zotero** uses BBT's Cite As You Write picker; the default format is `[@citekey]`. A notice with a Cancel button shows while the picker is open, and the command waits up to **Picker wait** (10 minutes). If you switch notes meanwhile, the citation goes to the clipboard instead.
 - Typing part of a citekey, title, author or year after `[@` in the editor opens local completion. It reads the cached index, so Zotero is not called on every keystroke.
+- Pickers and completion understand fields: `author:`, `title:`, `year:2019-2021`, `tag:`, `col:<collection path>`, `lib:`, `type:` and `has:pdf|note|annotations`, each negatable with `-`; quote values with spaces.
+- **Insert item content from Zotero** inserts a source's Zotero notes, bibliography entry, metadata, abstract, links or annotations into the current note as text you own.
 - **Open references sidebar** collects `[@key]`, `@key` and citation wikilinks in the current note and shows their bibliography and unresolved states. With Zotero closed it uses saved bibliography text (`.cmds-zotero/bibliography.json`).
-- **Open annotations sidebar** shows the annotations of the current literature note or a pinned source, to insert at the cursor or copy.
+- **Open annotations sidebar** shows the annotations of the current literature note, the item selected in Zotero, the citekey at the cursor or a pinned source. Filter by colour, type, tag or attachment, sort and group, fetch the latest annotations from Zotero, drag a card into a note, or use a card's More actions menu. **Search annotations** searches every indexed annotation and inserts it as a callout or quote.
 - **Insert bibliography** inserts one source's CSL bibliography text.
 - **Copy CSL-JSON for cited sources** and **Write pandoc bibliography sidecar for current note** copy the current note's cited sources as CSL-JSON, or save them to `.cmds-zotero/bibliography/<note>.json` and show the `bibliography:` line for the frontmatter. The [pandoc/DOCX guide](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/pandoc-docx.md) explains the export.
 
@@ -87,6 +89,12 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 | Copy literature note identity link (rename-safe) | Copies a link that keeps working after the note is renamed |
 | Copy Obsidian file link (Hookmark-native) | Copies the literature note's `obsidian://open` address |
 | Diagnose index and links | Diagnoses connection, index and identities |
+| Diagnose setup | Report-only setup checks with a copyable report |
+| Insert item content from Zotero | Inserts a source's notes, citation, metadata, abstract, links or annotations |
+| Search annotations | Searches every annotation and inserts it |
+| Open / Import / Cite Zotero selection | Acts on the items selected in Zotero, read when you run the command |
+| Copy Zotero action script | Copies an Actions & Tags script that opens notes from Zotero menus ([setup](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/zotero-side.md)) |
+| Annotations sidebar: … | Follow modes, pin, unpin and fetch latest for the annotations sidebar |
 
 PDF page numbers are **one-based file positions**, not printed page labels.
 
@@ -105,8 +113,16 @@ Settings are grouped by area; request limits and the agent-only References headi
 | Citations | Picker wait | 600 s (30–1800); how long inserting a citation waits for your pick |
 | Literature notes | Output folder | `References/Zotero`; where new literature notes go |
 | Literature notes | Image folder | `References/Zotero/images`; copies of image annotations |
-| Literature notes | Excluded tags | `obscite`; Zotero tags left out of notes, one per line |
+| Literature notes | Excluded tags | `obscite`; Zotero tags left out of notes and annotation tags, one per line |
+| Note layout | Abstract, Bibliography entry, Metadata fields, Links, Zotero notes, Synthesis scaffold | On; a switched-off part keeps an empty generated block |
+| Note layout | Fields by item type | Off; metadata fields chosen per Zotero item type |
+| Note layout | Join continued highlights | Off; a highlight whose comment starts with `+` joins the one before it |
+| Note layout | Zotero rich text | Off; italics, bold and line breaks from Zotero as Markdown |
+| Note layout | Annotation tags | Plain; or Obsidian tags (`#tag`) |
+| Note layout | Synthesis lines, Annotations heading, callout types | The 0.6.0 note; rename to fit your theme |
 | Annotations | Heading highlight color | Gray; highlights in this color become headings (None keeps every highlight a callout) |
+| Annotations | Follow the Zotero selection | Off; on window focus, or also every few seconds while the sidebar shows the selection |
+| Annotations | Selection check interval | 10 s (3–30) |
 | Bibliography and references | Bibliography style | `apa`; an installed Zotero CSL style ID |
 | Bibliography and references | References sidebar follows the active note | On; when off the sidebar keeps its note until you press Refresh |
 | Recently read | Recently read window | 30 days (7/30/90/365); the recently read list and picker ordering |
@@ -157,7 +173,7 @@ The Hookmark commands only copy links to the clipboard. They do not change Hookm
 | A note is refused as "not created by CMDS Zotero" | Another plugin created it; it is never overwritten, so check the output folder and file name |
 | Import blocked by damaged markers | Fix the marker at the line shown in the preview, or use Reset |
 | Index refresh refused | Whether the old `cmds-link-zotero` plugin is enabled |
-| Connection fails | Zotero and BBT are running, the localhost endpoint, timeouts |
+| Connection fails | Zotero and BBT are running, the localhost endpoint, timeouts; run **Diagnose setup** |
 | The citation picker reports no pick | The picker was closed or **Picker wait** ran out; run the command again |
 | "Recently read" says Zotero 10 is needed | Reading history needs Zotero 10 or later |
 | A PDF opens on the wrong page | Page numbers are file positions, not printed labels |

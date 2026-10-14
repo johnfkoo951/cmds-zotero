@@ -2,8 +2,8 @@
 Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 메타데이터, 하이라이트와 메모, Zotero 노트, 인용과 원문 링크를 한 노트에 모으고, 사람이 쓴 글은 그대로 둡니다. Zotero는 읽기 전용으로 다룹니다.
 
 ## 버전과 공개 상태
-**2026-10-14**에 공개한 **CMDS Zotero 0.6.0** 기준입니다. [GitHub 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0)에는 CI가 빌드하고 출처를 증명한 `main.js`, `manifest.json`, `styles.css`가 있습니다. **Obsidian Community Plugins 목록에는 아직 등록하지 않았습니다.** 수동 설치나 BRAT로 설치합니다.
-0.6은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고, 문제 있는 항목이 있어도 갱신을 이어 가며, 인용 선택기가 기다리게 하고, 설정 탭을 다시 정리하고, 에이전트 액션을 추가합니다. 모든 변경은 [변경 기록](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md)에 있습니다. 검증 환경은 Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71, macOS입니다. 0.5 때 실제 서재로 최근 읽은 논문 목록, 문헌 노트 생성·갱신 4건, PDF 텍스트 추출 4건(스캔본 1건 포함), 인용문 위치 찾기를 확인했습니다. 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
+**2026-10-14**에 공개한 **CMDS Zotero 0.6.1** 기준입니다. [GitHub 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.1)에는 CI가 빌드하고 출처를 증명한 `main.js`, `manifest.json`, `styles.css`가 있습니다. **Obsidian Community Plugins 목록에는 아직 등록하지 않았습니다.** 수동 설치나 BRAT로 설치합니다.
+0.6.1은 노트 레이아웃 설정, 항목 내용 삽입, 더 풍부한 주석 사이드바, 필드 검색, Zotero 선택 항목 명령, 설정 진단을 추가합니다. 0.6.0은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고, 문제 있는 항목이 있어도 갱신을 이어 가며, 인용 선택기가 기다리게 하고, 설정 탭을 다시 정리하고, 에이전트 액션을 추가합니다. 모든 변경은 [변경 기록](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md)에 있습니다. 검증 환경은 Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71, macOS입니다. 0.5 때 실제 서재로 최근 읽은 논문 목록, 문헌 노트 생성·갱신 4건, PDF 텍스트 추출 4건(스캔본 1건 포함), 인용문 위치 찾기를 확인했습니다. 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
 
 ## 준비물과 용어
 - **Obsidian 데스크톱 1.7.2 이상**. 모바일은 지원하지 않습니다.
@@ -14,7 +14,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 
 ## 설치
 **수동 설치**
-1. [0.6.0 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0)에서 `main.js`, `manifest.json`, `styles.css`를 받습니다.
+1. [0.6.1 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.1)에서 `main.js`, `manifest.json`, `styles.css`를 받습니다.
 2. `<vault>/.obsidian/plugins/cmds-zotero/` 폴더에 세 파일을 넣습니다.
 3. Obsidian을 다시 로드하고 **설정 → 커뮤니티 플러그인**에서 **CMDS Zotero**를 켭니다.
 
@@ -58,9 +58,11 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 
 ## 인용, 참고문헌, 사이드바
 - **Insert citation from Zotero**: BBT의 Cite As You Write 선택기로 인용을 넣습니다. 기본 형식은 `[@citekey]`입니다. 선택기가 열려 있는 동안 취소 버튼이 있는 알림이 뜨고, **Picker wait**(10분)까지 기다립니다. 그사이 다른 노트로 옮기면 인용을 노트 대신 클립보드에 넣습니다.
+- 자료 선택 창과 자동완성은 필드를 이해합니다: `author:`, `title:`, `year:2019-2021`, `tag:`, `col:<컬렉션 경로>`, `lib:`, `type:`, `has:pdf|note|annotations`(앞에 `-`를 붙이면 제외, 공백이 있는 값은 따옴표).
+- **Insert item content from Zotero**는 자료의 Zotero 노트·참고문헌·메타데이터·초록·링크·주석을 사용자 소유 텍스트로 현재 노트에 넣습니다.
 - 편집기에서 `[@` 뒤에 citekey·제목·저자·연도 일부를 입력하면 로컬 자동완성이 나옵니다. 캐시된 인덱스를 읽으므로 키 입력마다 Zotero를 부르지 않습니다.
 - **Open references sidebar**: 현재 노트의 `[@key]`, `@key`, 인용 위키링크를 모아 참고문헌과 미해결 상태를 보여 줍니다. Zotero가 꺼져 있어도 저장된 참고문헌(`.cmds-zotero/bibliography.json`)으로 표시합니다.
-- **Open annotations sidebar**: 현재 문헌 노트나 고정한 자료의 주석을 보고 커서 위치에 넣거나 복사합니다.
+- **Open annotations sidebar**: 현재 문헌 노트, Zotero에서 선택한 항목, 커서의 citekey, 고정한 자료의 주석을 보여 줍니다. 색·유형·태그·첨부로 거르고 정렬·묶기, Zotero에서 최신 주석 가져오기, 카드를 노트로 끌어 넣기, 카드의 More actions 메뉴를 쓸 수 있습니다. **Search annotations**는 색인된 모든 주석을 검색해 콜아웃이나 인용문으로 넣습니다.
 - **Insert bibliography**: 자료 하나의 CSL 참고문헌을 편집기에 넣습니다.
 - **Copy CSL-JSON for cited sources**와 **Write pandoc bibliography sidecar for current note**: 현재 노트가 인용한 자료를 CSL-JSON으로 복사하거나 `.cmds-zotero/bibliography/<노트>.json`에 저장하고, frontmatter에 넣을 `bibliography:` 줄을 알려 줍니다. pandoc으로 DOCX를 만드는 방법은 [pandoc/DOCX 가이드](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/pandoc-docx.md)에 있습니다.
 
@@ -74,6 +76,12 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 | Refresh citekey index | BBT에서 인덱스 전체 갱신 |
 | Search literature | 자료를 고르고 동작(열기, 가져오기, 링크 복사 등) 선택 |
 | Insert citation from Zotero | Zotero 선택기로 인용 삽입, 취소 가능 |
+| Insert item content from Zotero | 자료의 Zotero 노트·인용·메타데이터·초록·링크·주석을 현재 노트에 삽입(사용자 소유 텍스트) |
+| Search annotations | 색인된 모든 주석을 검색해 콜아웃이나 인용문으로 삽입 |
+| Open / Import / Cite Zotero selection | 명령을 실행할 때 Zotero에서 선택한 항목을 읽어 열기·가져오기·인용 |
+| Copy Zotero action script | Zotero 메뉴에서 노트를 여는 Actions & Tags 스크립트 복사([설정](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/zotero-side.ko.md)) |
+| Diagnose setup | 보고 전용 설정 점검과 복사 가능한 보고서 |
+| Annotations sidebar: … | 주석 사이드바의 따라가기 모드·고정·해제·최신 가져오기 |
 | Insert bibliography | 자료 하나의 참고문헌 삽입 |
 | Copy CSL-JSON for cited sources | 현재 노트 인용의 CSL-JSON 복사 |
 | Write pandoc bibliography sidecar for current note | pandoc용 참고문헌 파일 저장 |
@@ -105,8 +113,16 @@ PDF 쪽 번호는 **1부터 시작하는 파일 위치**이지 인쇄된 쪽 번
 | Citations | Picker wait | 600초(30–1800); 인용 선택을 기다리는 시간 |
 | Literature notes | Output folder | `References/Zotero`; 새 문헌 노트 위치 |
 | Literature notes | Image folder | `References/Zotero/images`; 이미지 주석 사본 위치 |
-| Literature notes | Excluded tags | `obscite`; 노트에 넣지 않을 Zotero 태그, 한 줄에 하나 |
+| Literature notes | Excluded tags | `obscite`; 노트와 주석 태그에 넣지 않을 Zotero 태그, 한 줄에 하나 |
+| Note layout | Abstract, Bibliography entry, Metadata fields, Links, Zotero notes, Synthesis scaffold | 켬; 끄면 빈 생성 블록으로 자리만 유지 |
+| Note layout | Fields by item type | 끔; Zotero 항목 유형에 맞는 메타데이터 필드 |
+| Note layout | Join continued highlights | 끔; 코멘트가 `+`로 시작하는 하이라이트를 앞의 것에 합침 |
+| Note layout | Zotero rich text | 끔; Zotero의 기울임·굵게·줄바꿈을 Markdown으로 |
+| Note layout | Annotation tags | Plain; 또는 Obsidian 태그(`#tag`) |
+| Note layout | Synthesis lines, Annotations heading, callout types | 0.6.0 노트 그대로; 테마에 맞게 이름 변경 |
 | Annotations | Heading highlight color | Gray; 이 색 하이라이트는 제목이 됨(None이면 모두 콜아웃) |
+| Annotations | Follow the Zotero selection | 끔; 창에 초점이 올 때, 또는 사이드바가 선택 항목을 보여 주는 동안 몇 초마다 |
+| Annotations | Selection check interval | 10초(3–30) |
 | Bibliography and references | Bibliography style | `apa`; Zotero에 설치된 CSL 스타일 ID |
 | Bibliography and references | References sidebar follows the active note | 켬; 끄면 Refresh를 누를 때까지 보던 노트를 유지 |
 | Recently read | Recently read window | 30일(7/30/90/365); 최근 읽은 논문 목록과 자료 선택 창 정렬 |
@@ -157,7 +173,7 @@ Hookmark 관련 명령은 링크를 클립보드에 복사할 뿐입니다. Hook
 | 노트가 "not created by CMDS Zotero"로 거절됨 | 다른 플러그인이 만든 노트; 덮어쓰지 않으므로 출력 폴더나 파일명을 확인 |
 | 가져오기 차단(손상된 마커) | 미리보기의 줄 번호에서 마커를 고치거나 Reset 사용 |
 | 인덱스 갱신이 거부됨 | 옛 플러그인 `cmds-link-zotero`가 켜져 있는지 |
-| 연결 실패 | Zotero·BBT 실행과 localhost 주소, 시간 제한 |
+| 연결 실패 | Zotero·BBT 실행과 localhost 주소, 시간 제한; **Diagnose setup** 실행 |
 | 인용 선택기가 "No citation was picked"를 알림 | 선택기를 닫았거나 **Picker wait**가 지남; 명령을 다시 실행 |
 | 최근 읽은 논문에서 Zotero 10이 필요하다고 함 | 읽기 기록은 Zotero 10 이상에서만 제공됨 |
 | PDF가 다른 쪽으로 열림 | 인쇄 쪽 번호가 아닌 파일 위치 기준인지 |
