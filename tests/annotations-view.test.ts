@@ -1,6 +1,7 @@
 // 0.6.1 annotations sidebar: the real view, bundled with an `obsidian` mock and a small fake DOM. Rendering never touches
 // Better BibTeX (its stub throws on any use), modes and facets are view state, and the selection is read only on demand.
 import { test } from "node:test";
+import { DEFAULT_SETTINGS } from "../src/types";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../src/types";
@@ -108,7 +109,7 @@ async function sidebar(options: { entries?: ZoteroIndexEntry[]; active?: { path:
 	const plugin = {
 		cachedEntries: () => entries, statusLine: () => "Index: synthetic", indexLoaded: () => true, warmBackoffActive: () => false,
 		warmIndex: () => { throw new Error("render warmed the index"); }, pick: () => Promise.resolve(), run: async (action: () => Promise<void>) => { await action(); }, copyLink: () => Promise.resolve(),
-		lastMarkdownView: () => (options.line !== undefined ? { editor } : null), settings: {}, bbt: options.bbt ?? forbidden("bbt"), literature: options.literature ?? forbidden("literature"),
+		lastMarkdownView: () => (options.line !== undefined ? { editor } : null), settings: { ...DEFAULT_SETTINGS }, bbt: options.bbt ?? forbidden("bbt"), literature: options.literature ?? forbidden("literature"),
 		cachedIndexAgeMinutes: () => 12, lastIndex: { generatedAt: "G1" }, index: forbidden("index"), publish: () => { throw new Error("the saved index was rewritten"); },
 	};
 	const view = new mod.AnnotationsView({ app }, plugin);
@@ -281,7 +282,7 @@ test("following the Zotero selection: opt-in polls, quiet reads, unchanged does 
 	view.follow("selection");
 	await follow.followSelection("focus");
 	assert.equal(reads.length, 0, "off by default: nothing is read");
-	(plugin as { settings: unknown }).settings = { followZoteroSelection: "focus", followZoteroSelectionSeconds: 10 };
+	(plugin as { settings: unknown }).settings = { ...DEFAULT_SETTINGS, followZoteroSelection: "focus", followZoteroSelectionSeconds: 10 };
 	await follow.followSelection("tick");
 	assert.equal(reads.length, 0, "focus mode ignores ticks");
 	await follow.followSelection("focus");
@@ -303,7 +304,7 @@ test("following the Zotero selection: opt-in polls, quiet reads, unchanged does 
 	assert.equal(reads.length, 4, "paused: no read");
 	view.follow("note");
 	follow.containerEl = { isShown: () => true };
-	(plugin as { settings: unknown }).settings = { followZoteroSelection: "interval", followZoteroSelectionSeconds: 3 };
+	(plugin as { settings: unknown }).settings = { ...DEFAULT_SETTINGS, followZoteroSelection: "interval", followZoteroSelectionSeconds: 3 };
 	await follow.followSelection("tick");
 	assert.equal(reads.length, 4, "only while the sidebar follows the selection");
 });
@@ -339,7 +340,7 @@ test("a selection read before the index loads is resolved when it loads; not-ind
 	entries = [];
 	const follow = view as unknown as View & { followSelection(trigger: string): Promise<void>; containerEl: unknown };
 	follow.containerEl = { isShown: () => true };
-	p.settings = { followZoteroSelection: "focus", followZoteroSelectionSeconds: 10 };
+	p.settings = { ...DEFAULT_SETTINGS, followZoteroSelection: "focus", followZoteroSelectionSeconds: 10 };
 	answer = [{ libraryID: 1, itemKey: "ITEM0001" }];
 	await follow.followSelection("focus");
 	assert.equal(message(), "The index is not loaded yet.");
