@@ -1,0 +1,1 @@
+- Annotations sidebar: colour chips with counts, a filter menu (type, tag, attachment, with or without comment), Clear, and sort (page, reading order, last modified, colour) and grouping (attachment, page, colour) controls. Filters only show or hide cards that are already built; Korean text matches in composed and decomposed forms.

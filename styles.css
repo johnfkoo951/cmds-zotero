@@ -127,6 +127,28 @@
   font-style: italic;
   overflow-wrap: anywhere;
 }
+/* 0.6.1 annotation-sidebar-facets: colour chips with counts, the filter menu, Clear, sort and group */
+.cmds-zotero-annotation-facets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-2-2);
+  margin-bottom: var(--size-4-2);
+  font-size: var(--font-smaller);
+}
+.cmds-zotero-facet-chip {
+  --cmds-zotero-color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-2-1);
+  padding: 0 var(--size-2-3);
+}
+.cmds-zotero-facet-chip.is-active {
+  box-shadow: inset 0 0 0 2px var(--cmds-zotero-color);
+}
+.cmds-zotero-annotation-facets .cmds-zotero-filtered-out {
+  display: none;
+}
 /* Cards, attachment headings and the message the annotation filter does not show; typing toggles this class only. */
 .cmds-zotero-annotation-list .cmds-zotero-filtered-out {
   display: none;
