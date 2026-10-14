@@ -92,7 +92,7 @@ const two = item(2, [note("ANNO0003", 4)]);
 /** Throws on any use: rendering must not touch Better BibTeX or a fresh read. */
 const forbidden = (name: string): unknown => new Proxy({}, { get: (_target, key) => { throw new Error(`render touched ${name}.${String(key)}`); } });
 
-async function sidebar(options: { entries?: ZoteroIndexEntry[]; active?: { path: string; frontmatter?: Record<string, unknown> } | null; line?: string; ch?: number; bbt?: unknown } = {}) {
+async function sidebar(options: { entries?: ZoteroIndexEntry[]; active?: { path: string; frontmatter?: Record<string, unknown> } | null; line?: string; ch?: number; bbt?: unknown; literature?: unknown } = {}) {
 	const mod = await loadView();
 	mod.obs.flushDebounced();
 	mod.obs.notices.length = 0;
@@ -107,7 +107,8 @@ async function sidebar(options: { entries?: ZoteroIndexEntry[]; active?: { path:
 	const plugin = {
 		cachedEntries: () => entries, statusLine: () => "Index: synthetic", indexLoaded: () => true, warmBackoffActive: () => false,
 		warmIndex: () => { throw new Error("render warmed the index"); }, pick: () => Promise.resolve(), run: async (action: () => Promise<void>) => { await action(); }, copyLink: () => Promise.resolve(),
-		lastMarkdownView: () => (options.line !== undefined ? { editor } : null), settings: {}, bbt: options.bbt ?? forbidden("bbt"), literature: forbidden("literature"),
+		lastMarkdownView: () => (options.line !== undefined ? { editor } : null), settings: {}, bbt: options.bbt ?? forbidden("bbt"), literature: options.literature ?? forbidden("literature"),
+		cachedIndexAgeMinutes: () => 12, lastIndex: { generatedAt: "G1" }, index: forbidden("index"), publish: () => { throw new Error("the saved index was rewritten"); },
 	};
 	const view = new mod.AnnotationsView({ app }, plugin);
 	await view.onOpen();
@@ -115,7 +116,8 @@ async function sidebar(options: { entries?: ZoteroIndexEntry[]; active?: { path:
 	const cards = (): string[] => find(el => el.classes.has("cmds-zotero-annotation") && !el.classes.has("cmds-zotero-filtered-out")).map(el => el.children[1]?.text ?? "");
 	const message = (): string => find(el => el.tag === "p").filter(el => !el.classes.has("cmds-zotero-filtered-out")).map(el => el.text).join(" | ");
 	const title = (): string => find(el => el.classes.has("cmds-zotero-sidebar-title"))[0]?.text ?? "";
-	return { view, mod, cards, message, title, find, saves: () => saves };
+	const source = (): string => find(el => el.classes.has("cmds-zotero-annotation-source"))[0]?.text ?? "";
+	return { view, mod, plugin, cards, message, title, find, source, saves: () => saves };
 }
 
 test("rendering in every mode never touches Better BibTeX and returns synchronously", async () => {
@@ -198,4 +200,39 @@ test("colour chips and the filter box toggle cards without rebuilding them", asy
 	(await loadView()).obs.flushDebounced();
 	assert.deepEqual(cards(), ["Synthetic ANNO0002", "Synthetic ANNO0001"]);
 	assert.deepEqual(find(el => el.classes.has("cmds-zotero-annotation")), before, "the same card elements");
+});
+
+test("Fetch latest shows a fresh read in memory until the index changes; failures keep the snapshot", async () => {
+	const fresh = item(1, [note("ANNO0001", 2, { color: "#ff6666" }), note("ANNO0002", 1), note("ANNO0009", 7, { text: "Synthetic new" })]);
+	let reply: () => Promise<unknown> = () => Promise.resolve({ entry: fresh, fresh: true });
+	const requested: string[] = [];
+	const literature = { freshEntry: (entry: ZoteroIndexEntry) => { requested.push(entry.id); return reply(); } };
+	const entries = [one, two];
+	const { view, plugin, cards, source, mod } = await sidebar({ entries, literature });
+	view.pin(one);
+	assert.equal(source(), "Saved snapshot · 12 min old");
+	assert.deepEqual(requested, [], "rendering does not read");
+	await view.fetchLatest();
+	assert.deepEqual(requested, ["1:ITEM0001"]);
+	assert.deepEqual(cards(), ["Synthetic ANNO0002", "Synthetic ANNO0001", "Synthetic new"]);
+	assert.match(source(), /^Live from Zotero · \d\d:\d\d$/);
+	assert.equal(entries[0], one, "the saved index keeps its entry");
+	assert.equal(one.attachments[0].annotations.length, 2, "and the entry its annotations");
+	view.render();
+	assert.deepEqual(cards(), ["Synthetic ANNO0002", "Synthetic ANNO0001", "Synthetic new"], "a re-render keeps the live entry");
+	plugin.lastIndex = { generatedAt: "G2" };
+	view.render();
+	assert.deepEqual(cards(), ["Synthetic ANNO0002", "Synthetic ANNO0001"], "a new index generation drops it");
+	reply = () => Promise.resolve({ entry: one, fresh: false, error: new Error("connection refused") });
+	await view.fetchLatest();
+	assert.deepEqual(cards(), ["Synthetic ANNO0002", "Synthetic ANNO0001"]);
+	assert.match(mod.obs.notices.at(-1) ?? "", /keeps the saved snapshot: connection refused/);
+	reply = () => Promise.resolve({ entry: two, fresh: true });
+	await view.fetchLatest();
+	assert.match(mod.obs.notices.at(-1) ?? "", /another item/);
+	assert.equal(source(), "Saved snapshot · 12 min old");
+	reply = () => { plugin.lastIndex = { generatedAt: "G3" }; return Promise.resolve({ entry: fresh, fresh: true }); };
+	await view.fetchLatest();
+	assert.match(mod.obs.notices.at(-1) ?? "", /index changed/);
+	assert.deepEqual(cards(), ["Synthetic ANNO0002", "Synthetic ANNO0001"], "a read that outlived its generation is dropped");
 });

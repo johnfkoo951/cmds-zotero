@@ -16,6 +16,7 @@ import {
 	cursorTarget, emptySourceText, entryForRef, itemRef, parseViewState, selectionTarget, serializeViewState,
 	type AnnotationsViewState, type CursorTarget, type ItemRef, type SidebarMode,
 } from "../annotations/view-state";
+import { LiveOverlay, sourceLabel } from "../annotations/overlay";
 
 export const VIEW_TYPE_ANNOTATIONS = "cmds-zotero-annotations";
 /** Hides a card, section heading or message the filter does not show (0.6 PERF-15). */
@@ -43,7 +44,13 @@ export class AnnotationsView extends ItemView {
 	private reading = false;
 	/** The citekey under the cursor the last render resolved (cursor mode only). */
 	private shownCursorKey = "";
+	/** The shown item: the live entry when one was fetched for this index generation, else the indexed one. */
 	private entry: ZoteroIndexEntry | null = null;
+	/** The indexed entry the mode names (fresh reads start from it). */
+	private baseEntry: ZoteroIndexEntry | null = null;
+	// 0.6.1 annotation-sidebar-live-read: fresh reads live here, in memory; the saved index is never rewritten.
+	private readonly overlay = new LiveOverlay();
+	private fetching = false;
 	// 0.6.1 annotation-sidebar-facets: the filter box text is `facets.query`.
 	private facets: AnnotationFacets = noFacets();
 	private sort: AnnotationSort = "page";
@@ -155,6 +162,33 @@ export class AnnotationsView extends ItemView {
 		this.render();
 	}
 
+	/** The index generation the sidebar shows (the saved snapshot's timestamp). */
+	private generation(): string { return this.plugin.lastIndex?.generatedAt ?? ""; }
+
+	/**
+	 * Reads the shown item from Zotero now (one identity-pinned export plus its attachments) and shows that until the
+	 * index changes. Never rewrites the saved index; on failure the snapshot stays and a Notice says why.
+	 */
+	async fetchLatest(): Promise<void> {
+		const base = this.baseEntry;
+		if (!base) { new Notice("The annotations sidebar shows no item to fetch."); return; }
+		if (this.fetching) return;
+		const generation = this.generation();
+		this.fetching = true;
+		this.render();
+		try {
+			const result = await this.plugin.literature.freshEntry(base);
+			if (!result.fresh) new Notice(`Zotero did not answer, so the sidebar keeps the saved snapshot: ${result.error instanceof Error ? result.error.message : "unknown error"}`);
+			else if (generation !== this.generation()) new Notice("The index changed while Zotero answered; fetch again to see the latest annotations.");
+			else if (!this.overlay.put(generation, base, result.entry, Date.now())) new Notice("Zotero answered with another item, so the sidebar keeps the saved snapshot.");
+		} catch (error) {
+			new Notice(`Could not fetch the latest annotations: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			this.fetching = false;
+		}
+		this.render();
+	}
+
 	/** The citekey under the cursor of the last Markdown editor, or "". */
 	private cursorKey(): string {
 		const editor = this.plugin.lastMarkdownView()?.editor;
@@ -198,7 +232,10 @@ export class AnnotationsView extends ItemView {
 		container.addClass("cmds-zotero-sidebar");
 		const previous = this.entry;
 		const followed = this.followedEntry();
-		this.entry = followed.entry;
+		this.baseEntry = followed.entry;
+		// The first render uses the cached snapshot (and any live entry already fetched); it never waits for Zotero.
+		const live = followed.entry ? this.overlay.get(this.generation(), followed.entry.id) : null;
+		this.entry = live?.entry ?? followed.entry;
 		// Attachment keys belong to one item: another item starts without an attachment facet.
 		if (previous?.id !== this.entry?.id) this.facets.attachments = [];
 		const header = container.createDiv({ cls: "cmds-zotero-sidebar-header" });
@@ -210,6 +247,12 @@ export class AnnotationsView extends ItemView {
 		mode.addEventListener("change", () => { const next = mode.value as SidebarMode; if (next === "selection") void this.readSelection(); else this.follow(next); });
 		const choose = toolbar.createEl("button", { text: "Choose item…", attr: { "aria-label": "Pin the sidebar to a Zotero item" } });
 		choose.addEventListener("click", () => { void this.plugin.pick(entry => this.pin(entry)); });
+		if (this.baseEntry) {
+			const fetch = toolbar.createEl("button", { cls: "clickable-icon", attr: { "aria-label": this.fetching ? "Fetching the latest annotations from Zotero…" : "Fetch the latest annotations from Zotero" } });
+			setIcon(fetch, "refresh-cw");
+			fetch.disabled = this.fetching;
+			fetch.addEventListener("click", () => { void this.fetchLatest(); });
+		}
 		if (this.mode === "selection") {
 			const read = toolbar.createEl("button", { text: "Read selection", attr: { "aria-label": "Read the item selected in Zotero now" } });
 			read.disabled = this.reading;
@@ -225,6 +268,7 @@ export class AnnotationsView extends ItemView {
 		if (!this.entry) { list.createEl("p", { cls: "setting-item-description", text: followed.empty }); return; }
 		header.createDiv({ cls: "cmds-zotero-sidebar-title", text: this.entry.title });
 		header.createDiv({ cls: "setting-item-description", text: `@${this.entry.citekey} · ${this.entry.attachments.reduce((n, a) => n + a.annotations.length, 0)} annotations` });
+		header.createDiv({ cls: "setting-item-description cmds-zotero-annotation-source", text: sourceLabel(live?.at ?? null, this.plugin.cachedIndexAgeMinutes()) });
 		const rows = annotationRows(this.entry);
 		if (rows.length) this.renderFacetBar(header, rows, search);
 		this.renderList(list, rows);

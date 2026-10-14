@@ -10,7 +10,7 @@ async function annotationsView(plugin: CMDSZoteroPlugin): Promise<AnnotationsVie
 	return view;
 }
 
-/** 0.6.1 annotations-pdf: the Annotations sidebar's follow, pin and unpin commands. No default hotkeys. */
+/** 0.6.1 annotations-pdf: the Annotations sidebar's follow, pin, unpin and fetch-latest commands. No default hotkeys. */
 export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 	const withView = (run: (view: AnnotationsView) => Promise<void> | void): void => { void plugin.run(async () => { await run(await annotationsView(plugin)); }); };
 	plugin.addCommand({ id: "annotations-follow-note", name: "Annotations sidebar: follow the active note", callback: () => withView(view => view.follow("note")) });
@@ -22,5 +22,6 @@ export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 		view.pin(entry);
 	}) });
 	plugin.addCommand({ id: "annotations-pin-item", name: "Annotations sidebar: pin an item…", callback: () => { void plugin.pick(entry => withView(view => view.pin(entry))); } });
+	plugin.addCommand({ id: "annotations-fetch-latest", name: "Annotations sidebar: fetch the latest annotations from Zotero", callback: () => withView(view => view.fetchLatest()) });
 	plugin.addCommand({ id: "annotations-unpin", name: "Annotations sidebar: unpin and follow the active note", callback: () => withView(view => view.pin(null)) });
 }
