@@ -119,6 +119,16 @@ export function markdownEntry(entry: string): string {
 	return entry.replace(/\s*\n\s*/g, " ").replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;").replace(/%%/g, "%​%").trim();
 }
 
+/** The copy Notice: how many entries, in which order, as formatted or plain text, and whether some came from cache or as fallbacks. */
+export function copyListNotice(list: { text: readonly string[]; order: BibliographyOrder; counts: { live: number; cached: number; fallback: number }; libraries: number; error?: unknown }, rich: boolean): string {
+	const total = list.text.length;
+	const parts = [`Copied ${total} entr${total === 1 ? "y" : "ies"}${rich ? " as formatted text" : " as plain text"}`];
+	if (list.order === "style") parts.push(list.libraries > 1 ? `in style order, library by library (${list.libraries} libraries)` : "in style order");
+	else parts.push(list.order === "alphabetical" ? "alphabetically" : "in citation order");
+	const offline = [list.counts.cached ? `${list.counts.cached} from cache` : "", list.counts.fallback ? `${list.counts.fallback} fallback` : ""].filter(Boolean).join(", ");
+	return `${parts.join(" ")}${offline ? ` (${offline}; Zotero offline)` : ""}${list.error !== undefined ? ". Better BibTeX could not render the list in style order" : ""}.`;
+}
+
 /**
  * 0.6.2 probe-validated-style-picker: why a style (with its locale) must not be saved, from the one probe rendering, or
  * null when Better BibTeX rendered text. A Better BibTeX error reply means it cannot render the style; any other fault

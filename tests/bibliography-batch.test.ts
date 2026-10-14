@@ -46,8 +46,10 @@ function host(sidecar: Record<string, ReturnType<typeof record>>) {
 			bbt.lastOutcome = { ok: true, at: new Date() };
 			return { zotero: "7", betterbibtex: "7.0.1" };
 		},
-		bibliography: async (item: ZoteroIndexEntry): Promise<string> => {
+		formats: [] as [string, string | undefined, string | undefined][],
+		bibliography: async (item: ZoteroIndexEntry, style?: string, _signal?: unknown, options?: { locale?: string }): Promise<string> => {
 			bbt.renders.push(item.id);
+			bbt.formats.push([item.id, style, options?.locale]); // 0.6.2
 			if (bbt.down) bbt.fail();
 			bbt.lastOutcome = { ok: true, at: new Date() };
 			return `Live ${item.id}.`;
@@ -154,4 +156,24 @@ test("0.6 OPT-13: Refresh probes despite a recent failure and reads texts again 
 	await controller.bibliographyBatch([live, older], undefined, { refresh: true });
 	assert.equal(bbt.probes, probesBefore + 1);
 	assert.equal(bbt.renders.length, 2);
+});
+
+test("0.6.2 per-note-style-locale: the cache key carries style and locale; without a locale the 0.6.1 key still serves", async () => {
+	const BibliographyController = await loadController();
+	const item = entry("1:LOCALE01");
+	const { plugin, bbt } = host({ [item.id]: record("Doe (2020). English.", item.contentHash, "7.0.1") });
+	const controller = new BibliographyController(plugin);
+	controller.configure();
+	const plain = await controller.bibliographyBatch([item]);
+	assert.deepEqual(plain.map(detail => [detail.source, detail.text]), [["cached", "Doe (2020). English."]], "a 0.6.1 sidecar record (style key only) serves the no-locale rendering");
+	const korean = await controller.bibliographyBatch([item], "apa", { locale: "ko-KR" });
+	assert.deepEqual(korean.map(detail => detail.source), ["live"]);
+	assert.deepEqual(bbt.formats, [[item.id, "apa", "ko-KR"]], "the locale reaches Better BibTeX");
+	await controller.bibliographyBatch([item], "apa", { locale: "ko-KR" });
+	assert.equal(bbt.renders.length, 1, "the same style and locale is served from memory");
+	(plugin.settings as Record<string, unknown>).bibliographyLocale = "ko-KR";
+	await controller.bibliographyBatch([item]);
+	assert.equal(bbt.renders.length, 1, "the configured locale is the default and shares the key");
+	await controller.bibliographyBatch([item], "chicago-author-date");
+	assert.deepEqual(bbt.formats.at(-1), [item.id, "chicago-author-date", "ko-KR"]);
 });

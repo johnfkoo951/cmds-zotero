@@ -5,7 +5,28 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dataDirectoryProblem, decodeXmlText, expandDataDirectory, findStyle, homeRelative, independentStyle, listInstalledStyles, parseCslInfo, sameStyle, styleKey } from "../src/bibliography/csl-styles";
-import { canonicalLocale, entriesHtml, formatKey, formatLabel, localeProblem, markdownEntry, noteFormat, orderEntries, splitTextBibliography, styleFromCsl } from "../src/bibliography/format";
+import { canonicalLocale, copyListNotice, entriesHtml, formatKey, formatLabel, localeProblem, markdownEntry, noteFormat, orderEntries, probeProblem, splitTextBibliography, styleFromCsl } from "../src/bibliography/format";
+import { BbtTransportError } from "../src/api/transport";
+import { bibliographyFormat } from "../src/bbt";
+import { normalizeSettings } from "../src/settings-data";
+import { dataDirectoryField, localeField, draftOf } from "../src/settings/fields";
+import { DEFAULT_SETTINGS } from "../src/types";
+
+test("item.bibliography format, settings normalisation and the locale and data directory fields", () => {
+	assert.deepEqual(bibliographyFormat("apa"), { id: "apa", contentType: "text" });
+	assert.deepEqual(bibliographyFormat("apa", { locale: "ko-KR", contentType: "html" }), { id: "apa", contentType: "html", locale: "ko-KR" });
+	const settings = normalizeSettings({ bibliographyLocale: "ko_kr", bibliographyOrder: "alphabetical", zoteroDataDirectory: "relative/path", exportFolder: " Exports " });
+	assert.deepEqual([settings.bibliographyLocale, settings.bibliographyOrder, settings.zoteroDataDirectory, settings.exportFolder], ["ko-KR", "alphabetical", "~/Zotero", "Exports"]);
+	const defaults = normalizeSettings({ bibliographyLocale: "korean", bibliographyOrder: "random" });
+	assert.deepEqual([defaults.bibliographyLocale, defaults.bibliographyOrder], ["", "style"]);
+	const draft = draftOf(DEFAULT_SETTINGS);
+	assert.equal(localeField.write(draft, "en_us"), null);
+	assert.equal(draft.bibliographyLocale, "en-US");
+	assert.match(localeField.write(draft, "english") ?? "", /locale such as/);
+	assert.equal(draft.bibliographyLocale, "en-US");
+	assert.match(dataDirectoryField.write(draft, "Zotero") ?? "", /absolute/);
+	assert.equal(dataDirectoryField.write(draft, "/Volumes/Data/Zotero"), null);
+});
 
 const csl = (id: string, title: string, extra = ""): string => `<?xml version="1.0" encoding="utf-8"?>
 <!-- <info><id>commented</id></info> -->
@@ -85,6 +106,19 @@ test("locale validation, the cache key and per-note csl/lang overrides", () => {
 	assert.equal(fallback.problems.length, 1);
 	assert.equal(formatLabel(noteFormat(null, { bibliographyStyle: "apa" })), "apa");
 	assert.equal(formatLabel(noteFormat({ lang: "de-DE" }, settings)), "apa · de-DE (from note)");
+});
+
+test("the style probe refuses an error reply, an unreachable Zotero and an empty rendering; the copy Notice names order and sources", () => {
+	const format = { style: "sample-a", locale: "ko-KR" };
+	assert.equal(probeProblem(format, { text: "Doe (2020)." }), null);
+	assert.match(probeProblem(format, { text: "  " }) ?? "", /rendered nothing with the style "sample-a" \(ko-KR\)/);
+	const rpc = new BbtTransportError("rpc", "http://127.0.0.1:23119/better-bibtex", "BBT RPC error for item.bibliography", { rpcCode: -32603, rpcMessage: "style not installed" });
+	assert.match(probeProblem(format, { error: rpc }) ?? "", /cannot render the style "sample-a" \(ko-KR\): style not installed/);
+	const down = new BbtTransportError("connection-refused", "http://127.0.0.1:23119/better-bibtex", "connect ECONNREFUSED");
+	assert.match(probeProblem({ style: "apa", locale: "" }, { error: down }) ?? "", /could not be checked, so it was not saved\. .*Start Zotero/);
+	assert.equal(copyListNotice({ text: ["a", "b"], order: "style", counts: { live: 2, cached: 0, fallback: 0 }, libraries: 1 }, true), "Copied 2 entries as formatted text in style order.");
+	assert.equal(copyListNotice({ text: ["a"], order: "citation", counts: { live: 0, cached: 1, fallback: 0 }, libraries: 2, error: new Error("x") }, false), "Copied 1 entry as plain text in citation order (1 from cache; Zotero offline). Better BibTeX could not render the list in style order.");
+	assert.match(copyListNotice({ text: ["a", "b"], order: "style", counts: { live: 2, cached: 0, fallback: 0 }, libraries: 2 }, true), /library by library \(2 libraries\)/);
 });
 
 test("bibliography order, text splitting, clipboard HTML and Markdown entries", () => {

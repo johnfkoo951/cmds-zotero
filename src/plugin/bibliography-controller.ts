@@ -4,7 +4,7 @@ import { describeBbtError, mapBounded } from "../api/transport";
 import { BibliographyStore, type BibliographyDetail } from "../bibliography-store"; // 0.5 R12
 import { resolveReferenceRows, resolvedEntries, countBibliographySources, fallbackCitation, type BibliographySourceCounts } from "../citations/reference-rows"; // 0.5 R10
 import { listInstalledStyles, type InstalledStyle, type StyleListing } from "../bibliography/csl-styles"; // 0.6.2
-import { entriesHtml, formatKey, noteFormat, orderEntries, probeProblem, splitTextBibliography, type BibliographyFormat, type BibliographyOrder, type NoteFormat } from "../bibliography/format"; // 0.6.2
+import { copyListNotice, entriesHtml, formatKey, noteFormat, orderEntries, probeProblem, splitTextBibliography, type BibliographyFormat, type BibliographyOrder, type NoteFormat } from "../bibliography/format"; // 0.6.2
 import { markdownLink } from "../uris";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndexEntry } from "../types";
@@ -13,16 +13,6 @@ import { unreachableRecently } from "./warm-state";
 
 // 0.5 R12: a sidebar render probes `api.ready` once with this bound before any live bibliography call of that generation.
 const BIBLIOGRAPHY_PROBE_MS = 2500;
-
-/** 0.6.2: the copy Notice: how many entries, in which order, and whether they came live, from cache or as fallbacks. */
-export function copyListNotice(list: { text: string[]; order: BibliographyOrder; counts: BibliographySourceCounts; libraries: number; error?: unknown }, rich: boolean): string {
-	const total = list.text.length;
-	const parts = [`Copied ${total} entr${total === 1 ? "y" : "ies"}${rich ? " as formatted text" : " as plain text"}`];
-	if (list.order === "style") parts.push(list.libraries > 1 ? `in style order, library by library (${list.libraries} libraries)` : "in style order");
-	else parts.push(list.order === "alphabetical" ? "alphabetically" : "in citation order");
-	const offline = [list.counts.cached ? `${list.counts.cached} from cache` : "", list.counts.fallback ? `${list.counts.fallback} fallback` : ""].filter(Boolean).join(", ");
-	return `${parts.join(" ")}${offline ? ` (${offline}; Zotero offline)` : ""}${list.error !== undefined ? ". Better BibTeX could not render the list in style order" : ""}.`;
-}
 
 /** Bibliography text (memory, sidecar, BBT) for the sidebars, the importer and agents, and the pandoc CSL-JSON exports. */
 export class BibliographyController {
