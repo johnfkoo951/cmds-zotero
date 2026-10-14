@@ -30,7 +30,7 @@ export async function insertCitationFromPicker(plugin: CMDSZoteroPlugin, editor:
 }
 
 /** True when the range still exists and holds the text it held when the command ran. */
-function unchanged(editor: Editor, from: EditorPosition, to: EditorPosition, selected: string): boolean {
+export function unchanged(editor: Editor, from: EditorPosition, to: EditorPosition, selected: string): boolean {
 	const last = editor.lastLine();
 	if (from.line > last || to.line > last) return false;
 	try { return editor.getRange(from, to) === selected; } catch { return false; }
@@ -40,12 +40,12 @@ function unchanged(editor: Editor, from: EditorPosition, to: EditorPosition, sel
  * Copies the citation; Electron refuses the clipboard while another app (Zotero, just after the pick) has focus, so a
  * refusal shows the citation in a notice with a Copy button instead of losing it.
  */
-async function copyOrShow(text: string, copied: string): Promise<void> {
+export async function copyOrShow(text: string, copied: string, shown = "The note changed while the picker was open. Copy the citation from here:"): Promise<void> {
 	try { await navigator.clipboard.writeText(text); new Notice(copied); return; }
 	catch { /* not focused: shown below */ }
 	const fragment = createFragment();
 	const body = fragment.createDiv({ cls: "cmds-zotero-batch-progress" });
-	body.createDiv({ text: "The note changed while the picker was open. Copy the citation from here:" });
+	body.createDiv({ text: shown });
 	body.createEl("code", { text });
 	const button = body.createEl("button", { text: "Copy" });
 	body.addEventListener("click", event => { event.stopPropagation(); });
@@ -56,7 +56,7 @@ async function copyOrShow(text: string, copied: string): Promise<void> {
 }
 
 /** True when `context` still shows `file` (and, for a Markdown view, is still open in the workspace). */
-function stillOpen(plugin: CMDSZoteroPlugin, context: MarkdownView | MarkdownFileInfo, file: TFile | null): boolean {
+export function stillOpen(plugin: CMDSZoteroPlugin, context: MarkdownView | MarkdownFileInfo, file: TFile | null): boolean {
 	if (!file || context.file !== file) return false;
 	return !(context instanceof MarkdownView) || plugin.app.workspace.getLeavesOfType("markdown").some(leaf => leaf.view === context);
 }

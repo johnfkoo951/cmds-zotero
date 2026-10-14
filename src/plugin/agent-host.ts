@@ -10,6 +10,7 @@ import { indexDerived } from "../index-derived";
 import { refreshRefusal, type IndexService } from "../index-service";
 import { readLocalFile } from "../local-file";
 import type CMDSZoteroPlugin from "../main";
+import { environmentFacts } from "./doctor";
 import { ObsidianVaultReader } from "../obsidian-vault";
 import type { PdfTextService } from "../pdf/extract";
 import { hashLocalPdf } from "../pdf/file-hash";
@@ -30,7 +31,9 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 	// 0.5 R13/F11: the guarded local reader requires realpath === path, so a vault opened through a symlink must join
 	// vault-relative paths onto the resolved base, not the path Obsidian was given.
 	const root = adapter instanceof FileSystemAdapter ? await fs.realpath(adapter.getBasePath()).catch(() => adapter.getBasePath()) : null;
-	const bbtInfo = action === "connection" ? await plugin.bbt.capabilities().then(value => ({ reachable: true, zotero: value.zotero, betterbibtex: value.betterbibtex }), (error: unknown) => { const reason = transportReasonOf(error); return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable", ...(reason ? { reason } : {}) }; }) : { reachable: null };
+	// 0.6.1: `diagnostics --env` reports Zotero and Better BibTeX versions, so it probes readiness like `connection`.
+	const probe = action === "connection" || (action === "diagnostics" && (request as { env?: unknown } | null)?.env === true);
+	const bbtInfo = probe ? await plugin.bbt.capabilities().then(value => ({ reachable: true, zotero: value.zotero, betterbibtex: value.betterbibtex }), (error: unknown) => { const reason = transportReasonOf(error); return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable", ...(reason ? { reason } : {}) }; }) : { reachable: null };
 	const connection = buildConnection({
 		mode: "live", obsidian: "ok", pluginVersion: plugin.manifest.version, pluginApiVersions: [1, 2], pluginEnabled: true, bbt: bbtInfo,
 		index: { source: index ? "plugin" : "none", path: plugin.settings.zoteroIndexPath, generatedAt: index?.generatedAt ?? null, count: index?.count ?? null, complete: index?.complete ?? null, schemaVersion: index?.schemaVersion ?? null },
@@ -138,5 +141,6 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		yaml: { parse: parseYaml, stringify: stringifyYaml },
 	}, result);
 	host.yaml = { parse: parseYaml, stringify: stringifyYaml }; // 0.5 R8: informational yamlNormalisable on reconcile rows
+	host.environmentFacts = () => environmentFacts(plugin, index); // 0.6.1 diagnostics --env: the peeked snapshot, never a publication
 	return host;
 }

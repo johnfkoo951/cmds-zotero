@@ -3,7 +3,7 @@ import type { BbtService } from "./bbt";
 import { IndexRefusalError, refreshRefusal, resolveInIndex, type IndexService, type RefreshOutcome } from "./index-service";
 import type { ZoteroIndex } from "./types";
 import type { VaultLinks } from "./vault-links";
-import { ACTION_API_VERSION, AGENT_ACTIONS, runAction, validateActionRequest, type ActionHost, type AgentAction, type ResolveRequest } from "./agent/actions";
+import { ACTION_API_VERSION, AGENT_ACTIONS, AGENT_FEATURES, runAction, validateActionRequest, type ActionHost, type AgentAction, type ResolveRequest } from "./agent/actions";
 import { buildEnvelope } from "./agent/connection";
 import type { FailureReason } from "./agent/types";
 import { LocalFileError } from "./local-file";
@@ -60,6 +60,8 @@ export class IngestAPI {
 	readonly apiVersions = [1, 2] as const;
 	/** Actions this host accepts; the CLI refuses a newer action with plugin-too-old instead of submitting it to an older host. */
 	readonly actions: readonly IngestAction[] = AGENT_ACTIONS;
+	/** 0.6.1: request features added to existing actions (`diagnostics-env`); the CLI refuses an unlisted one with plugin-too-old. */
+	readonly features: readonly string[] = AGENT_FEATURES;
 	private jobs = new Map<string, IngestJob>();
 	private sequence = 0;
 	private activeRequests = 0;

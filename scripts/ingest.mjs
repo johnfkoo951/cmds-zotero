@@ -33,6 +33,10 @@ const ACTION_API_VERSION = { connection: 1, info: 2, refresh: 1, resolve: 1, ide
 // them and is refused before submission (plugin-too-old).
 const ACTION_SINCE = { recent: '0.5', import: '0.5', annotations: '0.6', citing: '0.6' };
 const LATER_ACTIONS = new Set(Object.keys(ACTION_SINCE));
+// Request features added to an existing action later (0.6.1): an older host does not list them in service.features and is
+// refused before submission (plugin-too-old), so a new flag is never silently dropped or rejected as an invalid request.
+const FEATURE_SINCE = { 'diagnostics-env': '0.6.1' };
+const requestedFeature = () => (action === 'diagnostics' && request.env === true ? 'diagnostics-env' : null);
 const V1_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 1);
 const V2_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 2);
 const OFFLINE_CAPABLE = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'locate', 'annotations', 'citing']);
@@ -82,6 +86,8 @@ const FLAGS = {
 	'--color': { type: 'string', actions: ['annotations'], help: 'Only this color: yellow|red|green|blue|purple|magenta|orange|gray, or hex like #ffd400' },
 	'--type': { type: 'string', actions: ['annotations'], help: 'Only this annotation type: highlight|underline|note|text|image|ink' },
 	'--tag': { type: 'string', actions: ['annotations'], help: 'Only annotations carrying this tag (case-insensitive)' },
+	// 0.6.1
+	'--env': { type: 'boolean', actions: ['diagnostics'], help: 'Add report-only setup checks (Zotero/BBT versions, legacy plugin, index, Git, pdf.js, other vaults, output folder, Obsidian bridge) as environment.checks' },
 	'--if-older-than': { type: 'integer', actions: ['refresh'], min: 1, max: 10080, help: 'Refresh only when the index is older than N minutes' },
 };
 
@@ -178,7 +184,7 @@ if (action === 'cites' && '--format' in parsed.values && !BIBLIOGRAPHY_FORMATS.i
 if (action === 'cites' && ('--format' in parsed.values || '--out' in parsed.values || '--force' in parsed.values) && !('--bibliography' in parsed.values)) fail('--format, --out and --force need --bibliography.');
 
 let request = {};
-const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict', '--today': 'today', '--fresh': 'fresh', '--color': 'color', '--type': 'type', '--tag': 'tag' };
+const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict', '--today': 'today', '--fresh': 'fresh', '--color': 'color', '--type': 'type', '--tag': 'tag', '--env': 'env' };
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
 const pollOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
@@ -232,7 +238,7 @@ async function evaluateBeforeSubmission(expression) {
 }
 
 async function runLive() {
-	const versions = await evaluateBeforeSubmission(`{apiVersion:p.service.apiVersion,apiVersions:p.service.apiVersions||[p.service.apiVersion],actions:Array.isArray(p.service.actions)?p.service.actions:null}`);
+	const versions = await evaluateBeforeSubmission(`{apiVersion:p.service.apiVersion,apiVersions:p.service.apiVersions||[p.service.apiVersion],actions:Array.isArray(p.service.actions)?p.service.actions:null,features:Array.isArray(p.service.features)?p.service.features:null}`);
 	if (versions.kind !== 'result') return { bridge: versions, phase: 'discovery' };
 	const apiVersions = Array.isArray(versions.value.apiVersions) ? versions.value.apiVersions : [versions.value.apiVersion];
 	// A host that predates an action (no action list, or one without it) would reject it as unsupported: say why instead.
@@ -243,6 +249,8 @@ async function runLive() {
 		if (action === 'refresh' && Object.keys(request).length) return { bridge: { kind: 'too-old', apiVersions }, phase: 'discovery' };
 		// Old-host connection and an unflagged explicit refresh preserve their v1 behavior and are wrapped below.
 	}
+	const feature = requestedFeature();
+	if (feature && !(Array.isArray(versions.value.features) && versions.value.features.includes(feature))) return { bridge: { kind: 'too-old-feature', feature, apiVersions }, phase: 'discovery' };
 	let id = null;
 	for (let attempt = 0; attempt < 4; attempt++) {
 		// The submission itself is never retried on a bridge failure: an empty reply may still have started the job.
@@ -336,6 +344,7 @@ async function produce() {
 		}
 		if (bridge.kind === 'invalid-request') return structuredFailure('invalid-request', bridge.message, true, presentPluginConnection(bridge.apiVersions));
 		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') return structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message);
+		if (bridge.kind === 'too-old-feature') return structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not accept ${bridge.feature === 'diagnostics-env' ? '--env' : bridge.feature} for ${action}; install CMDS Zotero ${FEATURE_SINCE[bridge.feature]} or later and reload it. Add --offline to answer from the saved index file instead.`, true, presentPluginConnection(bridge.apiVersions));
 		if (bridge.kind === 'too-old-action') return structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not provide the ${action} action; install CMDS Zotero ${ACTION_SINCE[action]} or later and reload it.${OFFLINE_CAPABLE.has(action) && !liveWrite ? ' Add --offline to answer from the saved index file instead.' : ''}`, true, presentPluginConnection(bridge.apiVersions));
 		if (bridge.kind === 'too-old' || bridge.kind === 'too-old-read') {
 			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !liveWrite) { fellBackOffline = true; lastBridgeMessage = `Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`; return runOffline(lastBridgeMessage); }

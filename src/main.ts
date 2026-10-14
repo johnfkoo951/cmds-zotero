@@ -22,6 +22,7 @@ import { NavigationController } from "./plugin/navigation";
 import type { NoteBatch } from "./plugin/note-batch";
 import { StatusController } from "./plugin/status";
 import { cachedGitProbe, type GitProbe } from "./git-probe";
+import { OutcomeLog } from "./doctor/outcome-log";
 
 const LEGACY_PLUGIN_ID = "cmds-link-zotero";
 const LEGACY_PLUGIN_MESSAGE = "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing.";
@@ -49,6 +50,8 @@ export default class CMDSZoteroPlugin extends Plugin {
 	readonly literature = new LiteratureController(this);
 	readonly navigation = new NavigationController(this);
 	readonly status = new StatusController(this);
+	/** 0.6.1 doctor: the last 50 Better BibTeX outcomes of this session, in memory only (kept across reconfiguration). */
+	readonly outcomes = new OutcomeLog();
 
 	async onload(): Promise<void> {
 		const stored: unknown = await this.loadData();
@@ -68,10 +71,10 @@ export default class CMDSZoteroPlugin extends Plugin {
 		// 0.5 R13/F07: only Markdown notes and folders (which may contain notes) can change the note map; attachments never do.
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { if (this.indexing.affectsNoteMap(file) || oldPath.endsWith(".md")) this.indexing.noteMoved(file, oldPath); }));
 		this.registerEvent(this.app.vault.on("delete", file => { if (this.indexing.affectsNoteMap(file)) this.indexing.noteMoved(file); }));
-		// 0.5 R4: status-bar item; click probes BBT once (no refresh); the minute tick only re-renders the age text.
+		// 0.5 R4: status-bar item; the minute tick only re-renders the age text. 0.6.1: a click opens the actions menu (no BBT call until an action is picked).
 		this.status.statusBar = this.addStatusBarItem();
 		this.status.statusBar.addClass("cmds-zotero-status-bar", "mod-clickable");
-		this.registerDomEvent(this.status.statusBar, "click", () => { void this.status.testConnection(); });
+		this.registerDomEvent(this.status.statusBar, "click", event => { this.status.openMenu(event); });
 		this.registerInterval(window.setInterval(() => this.status.renderStatus(), 60_000));
 		this.status.renderStatus();
 		this.indexing.startWarmUp(); // 0.6 OPT-03: after the layout is ready, at an idle moment
@@ -105,7 +108,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 			this.status.renderStatus(); // 0.5 R4
 		};
 		const bbt = this.bbt; // 0.5 R4: every real BBT outcome re-renders the status line
-		bbt.onOutcome(() => { if (this.active && this.bbt === bbt) this.status.renderStatus(); });
+		bbt.onOutcome(outcome => { if (this.active && this.bbt === bbt) { this.outcomes.push(outcome); this.status.renderStatus(); } });
 		this.publish = onIndex;
 		this.service = new IngestAPI(this.app, this.bbt, this.index, this.links, onIndex, (action, request, now) => agentHost(this, action, request, now, onIndex, indexService, pdfText));
 	}

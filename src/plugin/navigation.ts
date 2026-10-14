@@ -3,9 +3,11 @@ import { findCitingNotes } from "../citations/citing-notes";
 import type CMDSZoteroPlugin from "../main";
 import { ActionsModal } from "../modals/actions";
 import { PageJumpModal } from "../modals/page-jump";
+import { LiteraturePickerModal } from "../modals/literature-picker";
 import { PickerModal } from "../modals/picker";
 import { classifyLink, pdfTargets, resolveOpenPdfTarget, type PdfTarget } from "../protocol";
 import { localDay, readLabel, recentFirst } from "../recent/recent-reads";
+import { queryContext, type QueryContext } from "../search/query";
 import type { ZoteroIndexEntry } from "../types";
 import { noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "../uris";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
@@ -22,7 +24,10 @@ export class NavigationController {
 			// 0.6 PERF-12: ordered through the generation's item-key and id maps instead of a scan per read.
 			const { ordered, readOn } = recentFirst(index.entries, this.plugin.literature.recentForPicker());
 			const today = localDay(new Date());
-			new PickerModal(this.plugin.app, ordered, entry => `${entry.title} — @${entry.citekey} · ${entry.year} · library ${entry.libraryID}${readOn.has(entry.id) ? ` · ${readLabel(readOn.get(entry.id) ?? null, today)}` : ""}`, choose).open();
+			// 0.6.1 R18: fielded terms narrow the list; `has:note` builds the note map only when a query asks for it.
+			let notes: Map<string, unknown[]> | null = null;
+			const context = (withNotes: boolean): QueryContext => queryContext(index, withNotes ? entry => (notes ??= this.plugin.links.localFilesByEntry(index)).has(entry.id) : undefined);
+			new LiteraturePickerModal(this.plugin.app, ordered, entry => `${entry.title} — @${entry.citekey} · ${entry.year} · library ${entry.libraryID}${readOn.has(entry.id) ? ` · ${readLabel(readOn.get(entry.id) ?? null, today)}` : ""}`, choose, context).open();
 		});
 	}
 

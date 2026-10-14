@@ -46,3 +46,48 @@ export function parseSelection(status: number, body: string, endpoint: string): 
 
 /** The index id (`libraryID:itemKey`) of a selected item, as index entries carry it. */
 export function selectedId(item: Pick<SelectedItem, "libraryID" | "itemKey">): string { return `${item.libraryID}:${item.itemKey}`; }
+
+// 0.6.1 zotero-selection-commands: what Open, Import and Cite do with one selection answer.
+
+/**
+ * A selection matched to the saved index by exact id (`libraryID:itemKey`), never by citekey or title and never by a
+ * first match: `empty` when nothing regular is selected, `unindexed` when none of the selected items is in the index,
+ * otherwise the indexed entries in Zotero's order (`one` or `several`) plus the selected items the index lacks. An id the
+ * index holds twice counts as not indexed.
+ */
+export type SelectionPlan<E> =
+	| { kind: "empty" }
+	| { kind: "unindexed"; unindexed: SelectedItem[] }
+	| { kind: "one"; entry: E; unindexed: SelectedItem[] }
+	| { kind: "several"; entries: E[]; unindexed: SelectedItem[] };
+
+export function planSelection<E extends { id: string }>(entries: readonly E[], items: readonly SelectedItem[]): SelectionPlan<E> {
+	if (!items.length) return { kind: "empty" };
+	const byId = new Map<string, E | null>();
+	for (const entry of entries) byId.set(entry.id, byId.has(entry.id) ? null : entry);
+	const found: E[] = [];
+	const unindexed: SelectedItem[] = [];
+	for (const item of items) {
+		const entry = byId.get(selectedId(item));
+		if (entry) found.push(entry);
+		else unindexed.push(item);
+	}
+	if (!found.length) return { kind: "unindexed", unindexed };
+	return found.length === 1 ? { kind: "one", entry: found[0], unindexed } : { kind: "several", entries: found, unindexed };
+}
+
+/** What a person reads when Zotero has nothing selected. */
+export const EMPTY_SELECTION_MESSAGE = "Nothing is selected in Zotero. Select one or more items in Zotero's library pane, then retry.";
+
+/** What a person reads about selected items the saved index does not have yet (named by citekey, at most three). */
+export function unindexedMessage(items: readonly Pick<SelectedItem, "citekey">[]): string {
+	if (!items.length) return "";
+	const named = items.slice(0, 3).map(item => `@${item.citekey}`).join(", ") + (items.length > 3 ? ` and ${items.length - 3} more` : "");
+	return `${items.length === 1 ? "1 selected item is" : `${items.length} selected items are`} not in the saved index yet (${named}). Refresh the citekey index, then retry.`;
+}
+
+/** A Pandoc citation for the selected items, in Zotero's order, each citekey once: `[@a]` or `[@a; @b]`. */
+export function selectionCitation(items: readonly Pick<SelectedItem, "citekey">[]): string {
+	const keys = [...new Set(items.map(item => item.citekey).filter(Boolean))];
+	return keys.length ? `[${keys.map(key => `@${key}`).join("; ")}]` : "";
+}
