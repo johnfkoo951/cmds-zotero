@@ -4,10 +4,10 @@ import type CMDSZoteroPlugin from "../main";
 import { ActionsModal } from "../modals/actions";
 import { PageJumpModal } from "../modals/page-jump";
 import { PickerModal } from "../modals/picker";
-import { classifyLink, resolveOpenPdfTarget } from "../protocol";
+import { classifyLink, pdfTargets, resolveOpenPdfTarget, type PdfTarget } from "../protocol";
 import { localDay, readLabel, recentFirst } from "../recent/recent-reads";
 import type { ZoteroIndexEntry } from "../types";
-import { pdfURI, noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "../uris";
+import { noteDeepLink, markdownLink, obsidianOpenURI, type ParsedZoteroURI } from "../uris";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 
 /** The literature picker and actions modal, opening PDFs and notes, citing-note and cross-vault lookups, and link copies. */
@@ -37,7 +37,7 @@ export class NavigationController {
 			{ name: "Open in Zotero", action: () => { window.open(entry.zoteroSelectURI); } },
 			{ name: "Open literature note", action: () => this.openNote(entry) },
 			{ name: "Preview literature import", action: () => this.plugin.literature.previewImport(entry) },
-			{ name: "Open PDF page", action: () => this.openPdf(entry, 1) },
+			{ name: "Open PDF", action: () => this.openPdf(entry) },
 			{ name: "Show annotations in sidebar", action: async () => { await this.plugin.activateView(VIEW_TYPE_ANNOTATIONS); for (const leaf of this.plugin.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS)) if (leaf.view instanceof AnnotationsView) leaf.view.pin(entry); } },
 			{ name: "Find notes citing this source", action: () => this.showCitingNotes(entry) },
 			{ name: "Copy Zotero item link (Hookmark-compatible)", action: () => this.copyLink(entry.title, entry.zoteroSelectURI, true) },
@@ -57,18 +57,16 @@ export class NavigationController {
 		})) : [{ name: "No citing notes", description: "No [@citekey], @citekey, or [[@citekey]] occurrences were found in this vault.", action: () => {} }]).open();
 	}
 
-	async openPdf(entry: ZoteroIndexEntry, page: number, annotationKey?: string, copy = false, attachmentKey?: string): Promise<void> {
-		let attachments = entry.attachments.filter(a => a.path?.toLowerCase().endsWith(".pdf") || a.annotations.length > 0);
-		if (attachmentKey) attachments = attachments.filter(a => a.key === attachmentKey); // 0.5 R15
-		if (annotationKey) attachments = attachments.filter(a => a.annotations.some(annotation => annotation.key === annotationKey));
-		if (!attachments.length) throw new Error(entry.attachmentStatus === "unavailable" ? "Attachment lookup failed. Refresh the index before opening this PDF." : "No matching PDF attachment is indexed.");
-		const open = (attachment: typeof attachments[number]): void => {
-			const uri = pdfURI(attachment.openURI, page, annotationKey);
-			if (copy) void this.copyLink(`${entry.title} — page ${page}`, uri);
-			else window.open(uri);
+	/** Without `page`, the PDF opens where the person stopped reading in Zotero (0.6.1 resume-reading-position). */
+	async openPdf(entry: ZoteroIndexEntry, page?: number, annotationKey?: string, copy = false, attachmentKey?: string): Promise<void> {
+		const targets = pdfTargets(entry, page, annotationKey, attachmentKey);
+		if (!targets.length) throw new Error(entry.attachmentStatus === "unavailable" ? "Attachment lookup failed. Refresh the index before opening this PDF." : "No matching PDF attachment is indexed.");
+		const open = (target: PdfTarget): void => {
+			if (copy) void this.copyLink(page === undefined ? entry.title : `${entry.title} — page ${page}`, target.uri);
+			else window.open(target.uri);
 		};
-		if (attachments.length === 1) open(attachments[0]);
-		else new PickerModal(this.plugin.app, attachments, a => a.title || a.key, open, "Choose a PDF attachment…").open();
+		if (targets.length === 1) open(targets[0]);
+		else new PickerModal(this.plugin.app, targets, target => target.attachment.title || target.attachment.key, open, "Choose a PDF attachment…").open();
 	}
 
 	async openNote(entry: ZoteroIndexEntry): Promise<void> {
@@ -131,6 +129,6 @@ export class NavigationController {
 		const target = resolveOpenPdfTarget(await this.plugin.indexing.loadIndexForRead(), parsed);
 		if (target.kind === "not-found") throw new Error("This PDF link is not in the index. Refresh the index; the link may also belong to another library.");
 		if (target.kind === "ambiguous") throw new Error("More than one entry owns this item key. Use Search literature to select a library.");
-		await this.openPdf(target.entry, parsed.page ?? 1, parsed.annotationKey, false, target.kind === "attachment" ? target.attachmentKey : undefined);
+		await this.openPdf(target.entry, parsed.page, parsed.annotationKey, false, target.kind === "attachment" ? target.attachmentKey : undefined);
 	}
 }

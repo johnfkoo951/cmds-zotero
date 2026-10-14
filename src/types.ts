@@ -65,6 +65,13 @@ export interface CmdsZoteroSettings {
 	noteRichText: boolean;
 	/** 0.6.1: annotation tags as written by Zotero (`Tags: a, b`), or as Obsidian tags (`Tags: #a #b`) with the frontmatter slug rules. */
 	annotationTagStyle: AnnotationTagStyle;
+	/**
+	 * 0.6.1 follow-zotero-selection: while the annotations sidebar follows the Zotero selection, read it again on window
+	 * focus, or also every `followZoteroSelectionSeconds` while the sidebar is visible. Off reads it only when asked.
+	 */
+	followZoteroSelection: "off" | "focus" | "interval";
+	/** 0.6.1: seconds between selection reads in the interval mode (3–30). */
+	followZoteroSelectionSeconds: number;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -99,6 +106,8 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	joinContinuations: false,
 	noteRichText: false,
 	annotationTagStyle: "plain",
+	followZoteroSelection: "off", // 0.6.1 follow-zotero-selection: opt-in
+	followZoteroSelectionSeconds: 10,
 };
 
 export interface ItemIdentity {

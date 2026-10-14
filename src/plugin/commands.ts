@@ -5,6 +5,7 @@ import { PageJumpModal } from "../modals/page-jump";
 import { citekeyAtCursor, parseProtocolRequest } from "../protocol";
 import { insertCitationFromPicker } from "./picker";
 import { registerLiteratureCommands } from "./commands-literature";
+import { registerAnnotationCommands } from "./commands-annotations";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
 
@@ -48,6 +49,7 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.addCommand({ id: "copy-csl-json", name: "Copy CSL-JSON for cited sources", callback: () => { void plugin.run(() => plugin.bibliography.copyCslJsonForActiveNote()); } });
 	plugin.addCommand({ id: "write-bibliography-sidecar", name: "Write pandoc bibliography sidecar for current note", callback: () => { void plugin.run(() => plugin.bibliography.writeBibliographySidecar()); } });
 	registerLiteratureCommands(plugin); // 0.6.1 WP7
+	registerAnnotationCommands(plugin); // 0.6.1 annotations sidebar: follow, pin, live read and card actions
 	plugin.addRibbonIcon("library", "Search literature", () => { void plugin.navigation.pick(entry => plugin.navigation.showActions(entry)); });
 	plugin.addRibbonIcon("highlighter", "Zotero annotations", () => { void plugin.activateView(VIEW_TYPE_ANNOTATIONS); });
 	plugin.addRibbonIcon("book-open", "Send recently read papers to notes", () => { plugin.literature.openRecentReads(); });
@@ -57,7 +59,7 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 			const request = parseProtocolRequest(params, plugin.app.vault.getName());
 			const result = await plugin.service.resolve({ itemKey: request.itemKey, libraryID: request.libraryID });
 			if (result.status !== "resolved") throw new Error(`Could not resolve this source: ${result.status}. Refresh the index and retry.`);
-			if (request.target === "pdf") await plugin.navigation.openPdf(result.entry, request.page ?? 1, request.annotation);
+			if (request.target === "pdf") await plugin.navigation.openPdf(result.entry, request.page, request.annotation);
 			else if (request.target === "import") await plugin.literature.previewImport(result.entry);
 			else await plugin.navigation.openNote(result.entry);
 		});

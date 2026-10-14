@@ -2,7 +2,7 @@
 // stay what 0.5.0 rebuilt on every keystroke: the same cards in the same order, the same headings and the same message.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { annotationHaystack, annotationMatches, annotationQuery, annotationsByPage, annotationVisibility, emptyAnnotationsText } from "../src/annotations/filter";
+import { annotationHaystack, annotationMatches, annotationQuery, annotationRows, annotationsByPage, annotationVisibility, emptyAnnotationsText, emptyListText, groupAnnotations, noFacets, sectionVisibility, sortAnnotations } from "../src/annotations/filter";
 import type { Annotation, Attachment, ZoteroIndexEntry } from "../src/types";
 
 // Synthetic records only (AGENTS.md).
@@ -41,6 +41,20 @@ function shown06(entry: Pick<ZoteroIndexEntry, "attachments" | "attachmentStatus
 	return out;
 }
 
+/** 0.6.1: the facet pipeline with its defaults (page sort, attachment groups, no facet but the filter text). */
+function shown061(entry: Pick<ZoteroIndexEntry, "attachments" | "attachmentStatus">, filter: string): string[] {
+	const facets = { ...noFacets(), query: filter };
+	const sections = groupAnnotations(sortAnnotations(annotationRows(entry), "page"), "attachment", entry.attachments.length);
+	const visibility = sectionVisibility(sections, facets);
+	const out: string[] = [];
+	sections.forEach((section, index) => {
+		if (section.heading !== null && visibility.headings[index]) out.push(`h6 ${section.heading}`);
+		section.rows.forEach((row, position) => { if (visibility.cards[index][position]) out.push(`card ${row.annotation.key}`); });
+	});
+	if (!visibility.shown) out.push(`p ${emptyListText(facets, entry.attachmentStatus)}`);
+	return out;
+}
+
 const pdf = attachment("ATTA2345", "Main PDF", [
 	note("K5", 5, { text: "Memory consolidation", tags: ["Important"] }), note("K1", 1, { text: "Adaptive Memory", comment: "Check the METHOD" }),
 	note("K3a", 3, { pageLabel: "iii" }), note("K3b", 3, { text: "", comment: "Comment only" }), note("K2", 2, { tags: ["method", "draft"] }),
@@ -58,7 +72,10 @@ test("0.6 PERF-15: the filter shows the same cards, headings and message as the 
 		{ attachments: [], attachmentStatus: "unavailable" },
 		{ attachments: [empty, supplement], attachmentStatus: "unavailable" },
 	];
-	for (const entry of entries) for (const filter of queries) assert.deepEqual(shown06(entry, filter), shown050(entry, filter), `${entry.attachments.map(item => item.key).join(",")} / ${JSON.stringify(filter)}`);
+	for (const entry of entries) for (const filter of queries) {
+		assert.deepEqual(shown06(entry, filter), shown050(entry, filter), `${entry.attachments.map(item => item.key).join(",")} / ${JSON.stringify(filter)}`);
+		assert.deepEqual(shown061(entry, filter), shown050(entry, filter), `0.6.1 defaults: ${entry.attachments.map(item => item.key).join(",")} / ${JSON.stringify(filter)}`);
+	}
 	assert.deepEqual(shown06(entries[1], "memory"), ["h6 Main PDF", "card K1", "card K5", "h6 SUPP2345", "card S2"]);
 	assert.deepEqual(shown06(entries[1], "table"), ["h6 SUPP2345", "card S1"], "a heading shows only while one of its cards does");
 });

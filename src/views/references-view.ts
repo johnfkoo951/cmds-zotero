@@ -107,7 +107,7 @@ export class ReferencesView extends ItemView {
 			const actions = item.createDiv({ cls: "cmds-zotero-reference-actions" });
 			this.action(actions, "file-text", "Open literature note", () => this.plugin.openNote(entry));
 			this.action(actions, "external-link", "Open in Zotero", () => { window.open(entry.zoteroSelectURI); });
-			this.action(actions, "file", "Open PDF", () => this.plugin.openPdf(entry, 1));
+			this.action(actions, "file", "Open PDF", () => this.plugin.openPdf(entry));
 			this.action(actions, "link", "Copy Zotero link", () => this.plugin.copyLink(entry.title, entry.zoteroSelectURI));
 		} else {
 			text.setText(referenceRowText(row, state));

@@ -8740,7 +8740,10 @@ var DEFAULT_SETTINGS = {
   noteItemTypeFields: false,
   joinContinuations: false,
   noteRichText: false,
-  annotationTagStyle: "plain"
+  annotationTagStyle: "plain",
+  followZoteroSelection: "off",
+  // 0.6.1 follow-zotero-selection: opt-in
+  followZoteroSelectionSeconds: 10
 };
 
 // src/citations/scan.ts
@@ -11506,7 +11509,10 @@ function normalizeSettings(raw) {
     noteItemTypeFields: flag2(data.noteItemTypeFields, DEFAULT_SETTINGS.noteItemTypeFields),
     joinContinuations: flag2(data.joinContinuations, DEFAULT_SETTINGS.joinContinuations),
     noteRichText: flag2(data.noteRichText, DEFAULT_SETTINGS.noteRichText),
-    annotationTagStyle: ["plain", "hashtag"].includes(data.annotationTagStyle) ? data.annotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle
+    annotationTagStyle: ["plain", "hashtag"].includes(data.annotationTagStyle) ? data.annotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
+    followZoteroSelection: ["off", "focus", "interval"].find((mode) => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection,
+    // 0.6.1
+    followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30)
   };
 }
 function normalizeTagList(value) {

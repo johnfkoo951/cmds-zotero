@@ -60,6 +60,8 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		joinContinuations: flag(data.joinContinuations, DEFAULT_SETTINGS.joinContinuations),
 		noteRichText: flag(data.noteRichText, DEFAULT_SETTINGS.noteRichText),
 		annotationTagStyle: (["plain", "hashtag"] as const).includes(data.annotationTagStyle as AnnotationTagStyle) ? data.annotationTagStyle as AnnotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
+		followZoteroSelection: (["off", "focus", "interval"] as const).find(mode => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection, // 0.6.1
+		followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30),
 	};
 }
 

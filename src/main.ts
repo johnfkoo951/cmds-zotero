@@ -220,7 +220,7 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	pick(choose: (entry: ZoteroIndexEntry) => void): Promise<void> { return this.navigation.pick(choose); }
 
-	openPdf(entry: ZoteroIndexEntry, page: number, annotationKey?: string, copy?: boolean, attachmentKey?: string): Promise<void> { return this.navigation.openPdf(entry, page, annotationKey, copy, attachmentKey); }
+	openPdf(entry: ZoteroIndexEntry, page?: number, annotationKey?: string, copy?: boolean, attachmentKey?: string): Promise<void> { return this.navigation.openPdf(entry, page, annotationKey, copy, attachmentKey); }
 
 	openNote(entry: ZoteroIndexEntry): Promise<void> { return this.navigation.openNote(entry); }
 
