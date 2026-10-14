@@ -8767,7 +8767,10 @@ var DEFAULT_SETTINGS = {
   annotationTagStyle: "plain",
   followZoteroSelection: "off",
   // 0.6.1 follow-zotero-selection: opt-in
-  followZoteroSelectionSeconds: 10
+  followZoteroSelectionSeconds: 10,
+  noteFilenamePattern: "@{citekey}",
+  // 0.6.3: the 0.6.1 file name
+  noteFolderPattern: ""
 };
 
 // src/citations/scan.ts
@@ -11557,6 +11560,27 @@ async function runAction(host, action, request = {}) {
   }
 }
 
+// src/note-path.ts
+var NOTE_PATH_TOKENS = ["citekey", "title", "shortTitle", "year", "firstAuthor", "itemType", "collection"];
+var TOKEN = /\{([A-Za-z]+)\}/g;
+function notePatternProblem(pattern, folder = false) {
+  const value = pattern.trim();
+  if (!value) return folder ? null : "Enter a file name pattern, for example @{citekey}.";
+  if ([...value].some((char) => char.charCodeAt(0) < 32)) return "Control characters are not allowed.";
+  const unknown = [...value.matchAll(TOKEN)].map((match) => match[1]).filter((token) => !NOTE_PATH_TOKENS.includes(token));
+  if (unknown.length) return `Unknown token {${unknown[0]}}. Use ${NOTE_PATH_TOKENS.map((token) => `{${token}}`).join(", ")}.`;
+  const literal = value.replace(TOKEN, "");
+  if (/[{}]/.test(literal)) return "Braces may only surround a token name.";
+  if (!folder) {
+    if (literal.includes("/")) return "The file name pattern cannot contain /; use the folder pattern for subfolders.";
+    if (!/\{[A-Za-z]+\}/.test(value)) return "Use at least one token, for example {citekey}, so notes get different names.";
+  } else if (value.startsWith("/") || value.split("/").some((part) => part.trim() === "" || part.trim() === "." || part.trim() === "..")) {
+    return "Use folder names separated by /, without empty, . or .. segments.";
+  }
+  if (/[\\:*?"<>|#^[\]]/.test(literal)) return 'Remove characters that cannot be used in file names: \\ : * ? " < > | # ^ [ ]';
+  return null;
+}
+
 // src/settings-data.ts
 function integer(value, fallback, min, max) {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
@@ -11620,7 +11644,10 @@ function normalizeSettings(raw) {
     annotationTagStyle: ["plain", "hashtag"].includes(data.annotationTagStyle) ? data.annotationTagStyle : DEFAULT_SETTINGS.annotationTagStyle,
     followZoteroSelection: ["off", "focus", "interval"].find((mode) => mode === data.followZoteroSelection) ?? DEFAULT_SETTINGS.followZoteroSelection,
     // 0.6.1
-    followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30)
+    followZoteroSelectionSeconds: integer(data.followZoteroSelectionSeconds, DEFAULT_SETTINGS.followZoteroSelectionSeconds, 3, 30),
+    // 0.6.3 filename-folder-pattern: an unusable stored pattern keeps the 0.6.1 naming.
+    noteFilenamePattern: typeof data.noteFilenamePattern === "string" && !notePatternProblem(data.noteFilenamePattern) ? data.noteFilenamePattern.trim() : DEFAULT_SETTINGS.noteFilenamePattern,
+    noteFolderPattern: typeof data.noteFolderPattern === "string" && !notePatternProblem(data.noteFolderPattern, true) ? data.noteFolderPattern.trim() : DEFAULT_SETTINGS.noteFolderPattern
   };
 }
 function normalizeTagList(value) {
