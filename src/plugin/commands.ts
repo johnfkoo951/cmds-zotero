@@ -7,6 +7,7 @@ import { insertCitationFromPicker } from "./picker";
 import { registerLiteratureCommands } from "./commands-literature";
 import { registerAnnotationCommands } from "./commands-annotations";
 import { registerLibraryCommands } from "./commands-library";
+import { registerNoteCommands } from "./commands-notes";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
 
@@ -52,6 +53,7 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 	registerLiteratureCommands(plugin); // 0.6.1 WP7
 	registerAnnotationCommands(plugin); // 0.6.1 annotations sidebar: follow, pin, live read and card actions
 	registerLibraryCommands(plugin); // 0.6.1 WP10
+	registerNoteCommands(plugin); // 0.6.3 WP8 import and update pipeline
 	plugin.addRibbonIcon("library", "Search literature", () => { void plugin.navigation.pick(entry => plugin.navigation.showActions(entry)); });
 	plugin.addRibbonIcon("highlighter", "Zotero annotations", () => { void plugin.activateView(VIEW_TYPE_ANNOTATIONS); });
 	plugin.addRibbonIcon("book-open", "Send recently read papers to notes", () => { plugin.literature.openRecentReads(); });
