@@ -2,6 +2,9 @@ import { Notice } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { CARD_ACTIONS } from "../annotations/card-actions";
+import { annotationInsertText, preparedSearchRows, searchEmptyText, type AnnotationSearchRow } from "../annotations/search";
+import { sourceLabel } from "../annotations/overlay";
+import { AnnotationSearchModal, type AnnotationSearchAction } from "../modals/annotation-search";
 
 /** The open Annotations sidebar, opened and revealed first. */
 async function annotationsView(plugin: CMDSZoteroPlugin): Promise<AnnotationsView> {
@@ -25,6 +28,14 @@ export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.addCommand({ id: "annotations-pin-item", name: "Annotations sidebar: pin an item…", callback: () => { void plugin.pick(entry => withView(view => view.pin(entry))); } });
 	plugin.addCommand({ id: "annotations-fetch-latest", name: "Annotations sidebar: fetch the latest annotations from Zotero", callback: () => withView(view => view.fetchLatest()) });
 	plugin.addCommand({ id: "annotations-unpin", name: "Annotations sidebar: unpin and follow the active note", callback: () => withView(view => view.pin(null)) });
+	// 0.6.1 annotation-search-insert: the saved snapshot's annotations, prepared once per index generation; never calls BBT.
+	plugin.addCommand({ id: "search-annotations", name: "Search annotations", callback: () => {
+		const entries = plugin.cachedEntries();
+		const rows = preparedSearchRows(entries);
+		new AnnotationSearchModal(plugin.app, rows, searchEmptyText(plugin.indexLoaded(), rows.length), sourceLabel(null, plugin.cachedIndexAgeMinutes()), (row, action) => {
+			void plugin.run(() => chooseSearchRow(plugin, row, action));
+		}).open();
+	} });
 	// 0.6.1 annotation-card-actions: the card menu's actions on the card last clicked or focused in the sidebar.
 	const focusedView = (): AnnotationsView | null => plugin.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS).map(leaf => leaf.view).find((view): view is AnnotationsView => view instanceof AnnotationsView && view.focusedCard() !== null) ?? null;
 	for (const action of CARD_ACTIONS) {
@@ -35,4 +46,14 @@ export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 			return true;
 		} });
 	}
+}
+
+/** Inserts the chosen annotation into the last Markdown editor, or pins its item in the annotations sidebar. */
+async function chooseSearchRow(plugin: CMDSZoteroPlugin, row: AnnotationSearchRow, action: AnnotationSearchAction): Promise<void> {
+	if (action === "pin") { (await annotationsView(plugin)).pin(row.entry); return; }
+	const view = plugin.lastMarkdownView();
+	if (!view) throw new Error("Open a Markdown note in edit mode to insert an annotation.");
+	const text = annotationInsertText(action, row.annotation, row.entry, plugin.settings);
+	view.editor.replaceSelection(action === "link" ? text : `${text}\n`);
+	await plugin.app.workspace.revealLeaf(view.leaf);
 }
