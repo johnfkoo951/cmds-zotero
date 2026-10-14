@@ -4,7 +4,7 @@
 
 검증된 Zotero 원문·인용·주석·문헌노트를 로컬 중심 연구 볼트에 연결합니다. By CMDSPACE.
 
-**0.5.0(2026-10-12)은 첫 GitHub 릴리스입니다.** [0.5.0 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.5.0)에서 `main.js`, `manifest.json`, `styles.css`를 받거나 BRAT로 `johnfkoo951/cmds-zotero`를 설치합니다. Community Plugins에는 아직 등록하지 않았습니다. 0.5는 **Send recently read papers to notes**(Zotero 리더로 연 논문을 문헌 노트 상태와 함께 보여 주고 최신 주석과 함께 보내기), 에이전트 액션 `recent`·`import`, 읽기 순서대로 놓이는 주석 블록, 구조를 유지하는 Zotero 자식 노트, 한글(CJK)·스캔 PDF 텍스트 처리를 추가합니다. 사용설명서: [docs/guide.ko.md](docs/guide.ko.md) · [웹](https://apps.cmdspace.work/plugins/cmds-zotero/?lang=ko) · [English](docs/guide.md). Obsidian 1.14.4, Zotero 10.0.5, Better BibTeX 9.0.71(macOS)에서 검증했으며 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
+**0.6.0(2026-10-14).** [0.6.0 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0)에서 `main.js`, `manifest.json`, `styles.css`를 받거나 BRAT로 `johnfkoo951/cmds-zotero`를 설치합니다. Community Plugins에는 아직 등록하지 않았습니다. 0.6은 인덱스 새로 고침·시작·편집·일괄 갱신을 빠르게 하고, 문제 있는 항목·피드·EPUB·스냅숏 주석이 있어도 새로 고침이 멈추지 않게 하며, 인용 선택기가 취소 버튼과 함께 기다리게 하고, 다시 정리한 설정 탭에서 모든 설정을 바꿀 수 있게 합니다. 에이전트 액션 `annotations`·`citing`, `resolve --stdin`, 줄 단위 `reconcile --apply`도 추가합니다. 0.5는 **Send recently read papers to notes**를 추가했습니다. [변경 기록](CHANGELOG.md)을 참고하세요. 사용설명서: [docs/guide.ko.md](docs/guide.ko.md) · [웹](https://apps.cmdspace.work/plugins/cmds-zotero/?lang=ko) · [English](docs/guide.md). Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71(macOS)에서 검증했으며 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
 
 ## 범위
 
@@ -31,6 +31,8 @@ BBT `api.ready`, 필터링된 `item.search`, **BetterBibTeX JSON** 형식의 `it
 **네트워크.** 기본값 `http://127.0.0.1:23119/better-bibtex`인 로컬 BBT 서버로 인용·메타데이터·첨부/주석·참고문헌 요청을 보냅니다. 서지 텍스트와 인용 질의가 해당 서버와 교환됩니다. 엔드포인트는 본인 컴퓨터의 서버를 사용하세요. 문헌·PDF·다른 볼트 링크는 해당 URI를 처리하는 데스크톱 앱으로 전달됩니다. 사용자가 직접 여는 외부 웹사이트는 이 플러그인의 개인정보 경계 밖입니다.
 
 **볼트 외부 파일.** Zotero 첨부 및 주석 이미지 경로는 볼트 밖을 가리킬 수 있습니다. 명시적인 가져오기 작업은 로컬 주석 이미지를 읽어 현재 볼트의 설정된 이미지 폴더에 복사할 수 있습니다. 다른 볼트 경로는 사용자가 선택적으로 등록하며 인덱스·노트의 읽기 전용 탐색에 사용됩니다. 다른 볼트에는 쓰지 않습니다. 인덱스에는 로컬 첨부 경로와 민감한 서지정보가 들어갈 수 있으므로 인덱스와 `data.json`을 공개하지 마세요.
+
+**로컬 프로세스.** 에이전트 요청을 처리할 때 플러그인은 볼트에서 `git`을 읽기 전용으로 실행합니다(`ls-files`, `check-ignore`, optional lock 끔). 인덱스와 비공개 캐시가 추적되는지, 무시되는지를 알리기 위해서이며 그 밖의 프로그램은 실행하지 않습니다.
 
 **쓰기.** Zotero 원본은 읽기 전용입니다. 라이브러리 수정, citekey PIN, 데이터베이스·환경설정 변경을 하지 않습니다. 플러그인은 현재 볼트의 자기 설정·인덱스와 사용자가 요청한 노트·자산을 기록합니다. 기존 문헌노트를 조용히 다시 쓰지 않습니다. 텔레메트리, 자체 업데이트, 자체 HTTP 서버, 유료 서비스 연동은 없습니다. Hookmark는 별도 라이선스를 가진 선택적 소프트웨어이며 일반 Zotero 링크 사용에 필수가 아닙니다.
 
@@ -122,15 +124,17 @@ Paper ingest 서비스·CLI 계약은 [`src/ingest-api.ts`](src/ingest-api.ts), 
 | connection | 로컬 BBT·호스트 연결 검사 | 가능 |
 | info | 인덱스 시각·건수·라이브러리·설정·노출 경고, refresh 없음 | 가능 |
 | refresh | 명시적 갱신, `--if-older-than` 지원 | 불가 |
-| resolve | citekey·item key/library·DOI·arXiv·제목·query 조회 | 가능 |
+| resolve | citekey·item key/library·DOI·arXiv·제목·query 조회, `--stdin`으로 NDJSON 최대 500건 일괄 조회(0.6) | 가능 |
 | identity | 허브 YAML/S01 제안, 참고문헌, PIN 대기 상태 | 가능 |
 | cites | 본문·프론트매터 인용 검사 및 References 생성; `--format csl-json|bibtex|biblatex`·`--out` 사이드카(0.5) | 가능(구조화 형식·`--out`은 라이브 전용) |
-| reconcile | 허브 감사, 명시적 `--apply`만 5개 키 기록 | dry-run만 |
+| reconcile | 허브 감사, 명시적 `--apply`만 5개 키를 줄 단위로 기록(0.6) | dry-run만 |
 | diagnostics | 인덱스·identity·인용·개인정보 진단 | 가능 |
 | pdf-text | 내장 pdf.js로 비공개 텍스트 캐시 생성 | 불가 |
 | locate | 캐시에서 인용 페이지와 검증 상태 반환 | 가능 |
 | recent | Zotero에서 최근 읽은 논문과 각 문헌노트 상태(0.5) | 불가 |
 | import | 최신 Zotero 데이터로 플러그인 소유 문헌노트 생성·갱신, `--apply` 없으면 dry-run(0.5) | 불가 |
+| annotations | 논문의 주석을 첨부별·읽기 순서로, 색·유형·태그·첨부 필터와 함께. `--fresh`는 지금의 Zotero, `--today`는 오늘 연 논문(0.6) | 가능(`--fresh`, `--today`는 불가) |
+| citing | 현재·이전 citekey로 논문을 인용한 노트를 위치·발췌와 함께(0.6) | 가능 |
 
 ```sh
 node scripts/ingest.mjs --vault "Research" --action connection
@@ -195,12 +199,13 @@ Git 진단은 ignore와 이미 추적 중인 상태를 구분합니다. untrack�
 npm ci
 npm run lint
 npm run typecheck
+npm run build:core                  # 오프라인 CLI에 번들되는 모듈을 바꾼 뒤
 npm test
 npm run build
 node scripts/sanitize.mjs           # 추적 중인 작업 파일 검사
 node scripts/sanitize.mjs --staged  # Git index의 추가·변경 파일 검사
-node scripts/version-bump.mjs 0.5.0 # package/lock/manifest/versions 동기화
-node scripts/verify-release.mjs 0.5.0
+node scripts/version-bump.mjs 0.6.0 # package/lock/manifest/versions 동기화
+node scripts/verify-release.mjs 0.6.0
 ```
 
 테스트는 합성 데이터만 사용합니다. 새니타이저는 비밀값 대신 파일·줄·규칙만 출력하는 휴리스틱이며 staged diff와 private 저장소 링크의 수동 검토를 대체하지 않습니다. CI는 Node 22에서 `npm ci`, lint, typecheck, test, production build를 수행합니다. 준비된 릴리스 workflow는 manifest/package/lock/versions와 일치하는 **v 접두사 없는 정식 semver 태그**를 요구하며 세 플러그인 파일과 provenance bundle을 배포합니다. **해당 태그를 push하면 릴리스가 공개되므로 먼저 승인을 받으세요.** Workflow 준비는 릴리스·CI 성공·커뮤니티 등록을 완료했다는 뜻이 아닙니다.

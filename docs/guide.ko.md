@@ -2,8 +2,8 @@
 Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 메타데이터, 하이라이트와 메모, Zotero 노트, 인용과 원문 링크를 한 노트에 모으고, 사람이 쓴 글은 그대로 둡니다. Zotero는 읽기 전용으로 다룹니다.
 
 ## 버전과 공개 상태
-**2026-10-12**에 공개한 **CMDS Zotero 0.5.0** 기준입니다. [GitHub 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.5.0)에는 CI가 빌드하고 출처를 증명한 `main.js`, `manifest.json`, `styles.css`가 있습니다. **Obsidian Community Plugins 목록에는 아직 등록하지 않았습니다.** 수동 설치나 BRAT로 설치합니다.
-검증 환경은 Obsidian 1.14.4, Zotero 10.0.5, Better BibTeX 9.0.71, macOS입니다. 실제 서재로 최근 읽은 논문 목록, 문헌 노트 생성·갱신 4건, PDF 텍스트 추출 4건(스캔본 1건 포함), 인용문 위치 찾기를 확인했습니다. 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
+**2026-10-14**에 공개한 **CMDS Zotero 0.6.0** 기준입니다. [GitHub 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0)에는 CI가 빌드하고 출처를 증명한 `main.js`, `manifest.json`, `styles.css`가 있습니다. **Obsidian Community Plugins 목록에는 아직 등록하지 않았습니다.** 수동 설치나 BRAT로 설치합니다.
+0.6은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고, 문제 있는 항목이 있어도 갱신을 이어 가며, 인용 선택기가 기다리게 하고, 설정 탭을 다시 정리하고, 에이전트 액션을 추가합니다. 모든 변경은 [변경 기록](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md)에 있습니다. 검증 환경은 Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71, macOS입니다. 0.5 때 실제 서재로 최근 읽은 논문 목록, 문헌 노트 생성·갱신 4건, PDF 텍스트 추출 4건(스캔본 1건 포함), 인용문 위치 찾기를 확인했습니다. 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
 
 ## 준비물과 용어
 - **Obsidian 데스크톱 1.7.2 이상**. 모바일은 지원하지 않습니다.
@@ -14,7 +14,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 
 ## 설치
 **수동 설치**
-1. [0.5.0 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.5.0)에서 `main.js`, `manifest.json`, `styles.css`를 받습니다.
+1. [0.6.0 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0)에서 `main.js`, `manifest.json`, `styles.css`를 받습니다.
 2. `<vault>/.obsidian/plugins/cmds-zotero/` 폴더에 세 파일을 넣습니다.
 3. Obsidian을 다시 로드하고 **설정 → 커뮤니티 플러그인**에서 **CMDS Zotero**를 켭니다.
 
@@ -57,7 +57,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 마커가 손상되었거나, 중복되었거나, CMDS Zotero가 만들지 않은 노트이거나, 같은 식별을 가진 노트가 여럿이면 쓰지 않고 이유와 줄 번호를 보여 줍니다. Zotero에서 지운 주석의 블록은 노트에서 지우지 않습니다.
 
 ## 인용, 참고문헌, 사이드바
-- **Insert citation from Zotero**: BBT의 Cite As You Write 선택기로 인용을 넣습니다. 기본 형식은 `[@citekey]`입니다.
+- **Insert citation from Zotero**: BBT의 Cite As You Write 선택기로 인용을 넣습니다. 기본 형식은 `[@citekey]`입니다. 선택기가 열려 있는 동안 취소 버튼이 있는 알림이 뜨고, **Picker wait**(10분)까지 기다립니다. 그사이 다른 노트로 옮기면 인용을 노트 대신 클립보드에 넣습니다.
 - 편집기에서 `[@` 뒤에 citekey·제목·저자·연도 일부를 입력하면 로컬 자동완성이 나옵니다. 캐시된 인덱스를 읽으므로 키 입력마다 Zotero를 부르지 않습니다.
 - **Open references sidebar**: 현재 노트의 `[@key]`, `@key`, 인용 위키링크를 모아 참고문헌과 미해결 상태를 보여 줍니다. Zotero가 꺼져 있어도 저장된 참고문헌(`.cmds-zotero/bibliography.json`)으로 표시합니다.
 - **Open annotations sidebar**: 현재 문헌 노트나 고정한 자료의 주석을 보고 커서 위치에 넣거나 복사합니다.
@@ -73,7 +73,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 | Update all owned literature notes | 플러그인이 만든 노트의 관리 구역 일괄 갱신 |
 | Refresh citekey index | BBT에서 인덱스 전체 갱신 |
 | Search literature | 자료를 고르고 동작(열기, 가져오기, 링크 복사 등) 선택 |
-| Insert citation from Zotero | CAYW 인용 삽입 |
+| Insert citation from Zotero | Zotero 선택기로 인용 삽입, 취소 가능 |
 | Insert bibliography | 자료 하나의 참고문헌 삽입 |
 | Copy CSL-JSON for cited sources | 현재 노트 인용의 CSL-JSON 복사 |
 | Write pandoc bibliography sidecar for current note | pandoc용 참고문헌 파일 저장 |
@@ -91,25 +91,31 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 PDF 쪽 번호는 **1부터 시작하는 파일 위치**이지 인쇄된 쪽 번호가 아닙니다.
 
 ## 설정
-값을 바꾼 뒤 **Save configuration**을 누릅니다. 저장 전에는 이전 값이 쓰입니다.
+설정은 영역별 구역으로 나뉘며, 요청 한도와 에이전트 전용 References headings는 **Advanced** 아래에 있습니다. 입력하는 동안 값을 검사합니다. 값을 바꾼 뒤 **Save configuration**을 누릅니다. 저장 전에는 이전 값이 쓰입니다.
 
-| 설정 | 기본값과 의미 |
-|---|---|
-| Server endpoint | `http://127.0.0.1:23119/better-bibtex`; localhost 주소만 허용 |
-| Test connection | 저장된 주소로 BBT 연결 시험 |
-| Request timeout | 20초(1–180) |
-| Attachment timeout | 60초(1–180); 이미지 렌더링이 필요한 첨부는 더 걸릴 수 있음 |
-| Index path | `80. References/zotero-index.json` |
-| Maximum index age | 60분(1–10080); 지나면 다음 조회 때 백그라운드 갱신 |
-| Parallel requests | 2(1–8) |
-| Refresh saved index | 지금 인덱스 갱신 |
-| Output folder | `References/Zotero`; 새 문헌 노트 위치 |
-| Image folder | `References/Zotero/images`; 이미지 주석 사본 위치 |
-| Bibliography style | `apa`; Zotero에 설치된 CSL 스타일 ID |
-| Citation format | `pandoc`; CAYW 형식 |
-| Recently read window | 30일(7/30/90/365); 최근 읽은 논문 목록과 자료 선택 창 정렬 |
-| Peer vaults | 한 줄에 `볼트 이름 \| 절대 경로`; 다른 볼트 노트 찾기용 |
-| References headings | References 구역으로 볼 제목; 기본 `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료` |
+| 구역 | 설정 | 기본값과 의미 |
+|---|---|---|
+| Connection | Server endpoint | `http://127.0.0.1:23119/better-bibtex`; localhost 주소만 허용 |
+| Connection | Test connection | 저장된 주소로 BBT 연결 시험 |
+| Literature index | Index path | `80. References/zotero-index.json` |
+| Literature index | Maximum index age | 60분(1–10080); 지나면 다음 조회 때 백그라운드 갱신 |
+| Literature index | Refresh saved index | 지금 인덱스 갱신 |
+| Citations | Citation trigger | Bracket: `[@` 뒤에 자동완성; At sign: 단독 `@` 뒤에도; Off |
+| Citations | Citation format | `pandoc`; Zotero 인용 선택기의 형식 |
+| Citations | Picker wait | 600초(30–1800); 인용 선택을 기다리는 시간 |
+| Literature notes | Output folder | `References/Zotero`; 새 문헌 노트 위치 |
+| Literature notes | Image folder | `References/Zotero/images`; 이미지 주석 사본 위치 |
+| Literature notes | Excluded tags | `obscite`; 노트에 넣지 않을 Zotero 태그, 한 줄에 하나 |
+| Annotations | Heading highlight color | Gray; 이 색 하이라이트는 제목이 됨(None이면 모두 콜아웃) |
+| Bibliography and references | Bibliography style | `apa`; Zotero에 설치된 CSL 스타일 ID |
+| Bibliography and references | References sidebar follows the active note | 켬; 끄면 Refresh를 누를 때까지 보던 노트를 유지 |
+| Recently read | Recently read window | 30일(7/30/90/365); 최근 읽은 논문 목록과 자료 선택 창 정렬 |
+| Connected vaults | Peer vaults | 한 줄에 `볼트 이름 \| 절대 경로`; 다른 볼트 노트 찾기용 |
+| Advanced | Request timeout | 20초(1–180) |
+| Advanced | Attachment timeout | 60초(1–180); 이미지 렌더링이 필요한 첨부는 더 걸릴 수 있음 |
+| Advanced | Parallel requests | 2(1–8); 내보내기·참고문헌·읽기 기록 요청을 동시에 보내는 수 |
+| Advanced | Refresh requests | 4(1–8); 인덱스 갱신 중 동시에 보내는 요청 수, Zotero가 느려지면 낮춤 |
+| Advanced | References headings | 에이전트 `cites`가 References 구역으로 볼 제목; 기본 `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료` |
 
 ## PDF 텍스트와 에이전트
 AI 에이전트와 스크립트는 같은 기능을 CLI로 씁니다. CLI는 실행 중인 Obsidian의 플러그인에 작업을 맡기고, 가능한 읽기 작업은 Obsidian 없이 인덱스 파일로 답합니다.
@@ -124,6 +130,9 @@ node scripts/ingest.mjs --vault "Research" --action locate --citekey Example2026
 - `import`는 `--apply`가 없으면 미리보기만 합니다. 하드 충돌은 `note-conflict`로 거절합니다. Zotero에서 실시간으로 읽지 못하면 `--allow-stale` 없이는 쓰지 않습니다.
 - `pdf-text`는 Obsidian에 내장된 pdf.js로 텍스트를 뽑아 비공개 캐시(`.cmds-zotero/pdf-text/`)에 저장합니다. 한·중·일 글꼴용 문자 지도를 함께 씁니다. 텍스트 레이어가 없는 스캔본은 `textLayer: none`과 OCR 권장 경고를 냅니다. 페이지마다 반복되는 워터마크는 본문으로 세지 않습니다.
 - `locate`는 인용문이 있는 쪽을 찾아 Zotero 리더 링크와 함께 돌려줍니다.
+- `annotations`(0.6)는 논문의 주석을 첨부별·읽기 순서로 돌려주며 `--color`, `--type`, `--tag`, `--attachment`로 거릅니다. `--fresh`는 지금의 Zotero를 읽고 `--today`는 오늘 연 논문을 고릅니다.
+- `citing`(0.6)은 이전 citekey까지 포함해 논문을 인용한 노트를 줄 번호·발췌와 함께 보여 줍니다.
+- `resolve --stdin`(0.6)은 한 줄에 JSON 하나씩, 최대 500건을 한 번에 조회합니다.
 - 읽기 전용 환경에서는 `scripts/ingest-ro.mjs`를 씁니다. 쓰기와 `--apply`를 거절합니다.
 에이전트는 관리 구역을 직접 고치지 않고, 자기 요약은 `## Synthesis`나 `## Notes`에 씁니다. 전체 규약은 [에이전트 계약](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/agent-contract-v2/contract.md)에 있습니다.
 
@@ -136,6 +145,7 @@ Hookmark 관련 명령은 링크를 클립보드에 복사할 뿐입니다. Hook
 - 이미지 주석을 가져오면 볼트 밖의 Zotero 캐시 이미지를 읽어 이미지 폴더에 복사합니다.
 - 볼트에 쓰는 것은 설정, 인덱스, 문헌 노트, 이미지 사본, `.cmds-zotero/` 아래의 비공개 파일(참고문헌·노트 지도·백업·PDF 텍스트 캐시)입니다. 플러그인은 `.cmds-zotero/.gitignore`를 먼저 만들어 이 폴더가 git에 올라가지 않게 합니다. PDF 텍스트 캐시는 논문 전문이므로 공유하지 않습니다.
 - 인덱스와 노트 지도에는 서지정보, 개인 경로, 주석이 들어갈 수 있습니다. 공개 저장소에 올리지 않습니다.
+- 에이전트 요청을 처리할 때 비공개 파일이 git에서 무시되는지 알리려고 `git`을 읽기 전용(`ls-files`, `check-ignore`)으로 실행합니다. 그 밖의 프로그램은 실행하지 않습니다.
 - 텔레메트리, 자체 HTTP 서버, 자동 업데이트는 없습니다.
 
 ## 문제 해결
@@ -148,6 +158,8 @@ Hookmark 관련 명령은 링크를 클립보드에 복사할 뿐입니다. Hook
 | 가져오기 차단(손상된 마커) | 미리보기의 줄 번호에서 마커를 고치거나 Reset 사용 |
 | 인덱스 갱신이 거부됨 | 옛 플러그인 `cmds-link-zotero`가 켜져 있는지 |
 | 연결 실패 | Zotero·BBT 실행과 localhost 주소, 시간 제한 |
+| 인용 선택기가 "No citation was picked"를 알림 | 선택기를 닫았거나 **Picker wait**가 지남; 명령을 다시 실행 |
+| 최근 읽은 논문에서 Zotero 10이 필요하다고 함 | 읽기 기록은 Zotero 10 이상에서만 제공됨 |
 | PDF가 다른 쪽으로 열림 | 인쇄 쪽 번호가 아닌 파일 위치 기준인지 |
 | `pdf-text`가 빈 결과 | `textLayer` 값; `none`이면 스캔본이므로 OCR 필요 |
 

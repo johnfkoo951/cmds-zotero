@@ -1,4 +1,0 @@
-- "Insert citation from Zotero" waits for you: the picker has its own wait (*Picker wait*, 10 minutes by default) instead of failing after the 20-second request timeout, a notice with a Cancel button shows while it is open, and a slow or cancelled pick no longer marks Zotero as failed in the status bar. A closed Zotero is reported at once, and a Zotero that is still starting says so.
-- If the note changed while the picker was open, the citation is copied to the clipboard instead of being written into another note.
-- Index backups are always an exact copy of the index they replace; an index swapped or edited during a refresh cancels the refresh and leaves no backup behind.
-- A vault scan that finds a folder replaced while it ran (for example by a symbolic link) reports that folder's notes as skipped instead of using them.

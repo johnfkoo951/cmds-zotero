@@ -2,8 +2,8 @@
 Send what you read and mark up in Zotero to Obsidian literature notes. Metadata, highlights and comments, Zotero notes, citations and links back to the source end up in one note, and the text you write yourself stays untouched. Zotero is treated as read-only.
 
 ## Version and release status
-This guide covers **CMDS Zotero 0.5.0**, released on **2026-10-12**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.5.0) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. **The plugin is not yet listed in Obsidian Community Plugins**; install it manually or with BRAT.
-It was verified with Obsidian 1.14.4, Zotero 10.0.5 and Better BibTeX 9.0.71 on macOS. Checks on a real library covered the recently read list, creating and updating four literature notes, PDF text extraction for four papers (one of them a scan) and quote location. Group libraries and Windows/Linux are outside the verified scope.
+This guide covers **CMDS Zotero 0.6.0**, released on **2026-10-14**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. **The plugin is not yet listed in Obsidian Community Plugins**; install it manually or with BRAT.
+0.6 makes refreshes, startup and batch updates faster, keeps refreshes going past bad items, lets the citation picker wait for you, reorganises the settings tab and adds agent actions; the [changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md) lists every change. It was verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS. Checks of 0.5 on a real library covered the recently read list, creating and updating four literature notes, PDF text extraction for four papers (one of them a scan) and quote location. Group libraries and Windows/Linux are outside the verified scope.
 
 ## Requirements and terms
 - **Obsidian desktop 1.7.2 or later**. Mobile is not supported.
@@ -14,7 +14,7 @@ A **citekey** such as `Example2026` is a citation label, not a permanent identif
 
 ## Installation
 **Manual**
-1. Download `main.js`, `manifest.json` and `styles.css` from the [0.5.0 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.5.0).
+1. Download `main.js`, `manifest.json` and `styles.css` from the [0.6.0 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0).
 2. Put the three files in `<vault>/.obsidian/plugins/cmds-zotero/`.
 3. Reload Obsidian and enable **CMDS Zotero** under **Settings → Community plugins**.
 
@@ -57,7 +57,7 @@ Managed sections sit between `<!-- cmds-zotero:<id>:<hash> -->` and `<!-- /cmds-
 Damaged or duplicate markers, a note CMDS Zotero did not create, or several notes with one identity block the write, with the reason and line number shown. Blocks for annotations deleted in Zotero are never removed from the note.
 
 ## Citations, bibliographies and sidebars
-- **Insert citation from Zotero** uses BBT's Cite As You Write picker; the default format is `[@citekey]`.
+- **Insert citation from Zotero** uses BBT's Cite As You Write picker; the default format is `[@citekey]`. A notice with a Cancel button shows while the picker is open, and the command waits up to **Picker wait** (10 minutes). If you switch notes meanwhile, the citation goes to the clipboard instead.
 - Typing part of a citekey, title, author or year after `[@` in the editor opens local completion. It reads the cached index, so Zotero is not called on every keystroke.
 - **Open references sidebar** collects `[@key]`, `@key` and citation wikilinks in the current note and shows their bibliography and unresolved states. With Zotero closed it uses saved bibliography text (`.cmds-zotero/bibliography.json`).
 - **Open annotations sidebar** shows the annotations of the current literature note or a pinned source, to insert at the cursor or copy.
@@ -73,7 +73,7 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 | Update all owned literature notes | Refreshes managed sections of every note the plugin created |
 | Refresh citekey index | Rebuilds the index from BBT |
 | Search literature | Picks a source and an action (open, import, copy links and more) |
-| Insert citation from Zotero | Inserts a CAYW citation |
+| Insert citation from Zotero | Inserts a citation from Zotero's picker, with Cancel |
 | Insert bibliography | Inserts one source's bibliography |
 | Copy CSL-JSON for cited sources | Copies CSL-JSON for the current note's citations |
 | Write pandoc bibliography sidecar for current note | Saves a bibliography file for pandoc |
@@ -91,25 +91,31 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 PDF page numbers are **one-based file positions**, not printed page labels.
 
 ## Settings
-Press **Save configuration** after changing values; until then the previous values apply.
+Settings are grouped by area; request limits and the agent-only References headings are under **Advanced**. Values are checked as you type. Press **Save configuration** after changing values; until then the previous values apply.
 
-| Setting | Default and meaning |
-|---|---|
-| Server endpoint | `http://127.0.0.1:23119/better-bibtex`; localhost only |
-| Test connection | Tests the saved endpoint |
-| Request timeout | 20 s (1–180) |
-| Attachment timeout | 60 s (1–180); attachments that need image rendering can take longer |
-| Index path | `80. References/zotero-index.json` |
-| Maximum index age | 60 min (1–10080); older indexes refresh in the background on the next read |
-| Parallel requests | 2 (1–8) |
-| Refresh saved index | Refreshes the index now |
-| Output folder | `References/Zotero`; where new literature notes go |
-| Image folder | `References/Zotero/images`; copies of image annotations |
-| Bibliography style | `apa`; an installed Zotero CSL style ID |
-| Citation format | `pandoc`; the CAYW format |
-| Recently read window | 30 days (7/30/90/365); the recently read list and picker ordering |
-| Peer vaults | One `Vault name \| absolute path` per line, for cross-vault lookup |
-| References headings | Headings that mark a References section; defaults `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료` |
+| Section | Setting | Default and meaning |
+|---|---|---|
+| Connection | Server endpoint | `http://127.0.0.1:23119/better-bibtex`; localhost only |
+| Connection | Test connection | Tests the saved endpoint |
+| Literature index | Index path | `80. References/zotero-index.json` |
+| Literature index | Maximum index age | 60 min (1–10080); older indexes refresh in the background on the next read |
+| Literature index | Refresh saved index | Refreshes the index now |
+| Citations | Citation trigger | Bracket: completion opens after `[@`; At sign: also after a bare `@`; Off |
+| Citations | Citation format | `pandoc`; the format of Zotero's citation picker |
+| Citations | Picker wait | 600 s (30–1800); how long inserting a citation waits for your pick |
+| Literature notes | Output folder | `References/Zotero`; where new literature notes go |
+| Literature notes | Image folder | `References/Zotero/images`; copies of image annotations |
+| Literature notes | Excluded tags | `obscite`; Zotero tags left out of notes, one per line |
+| Annotations | Heading highlight color | Gray; highlights in this color become headings (None keeps every highlight a callout) |
+| Bibliography and references | Bibliography style | `apa`; an installed Zotero CSL style ID |
+| Bibliography and references | References sidebar follows the active note | On; when off the sidebar keeps its note until you press Refresh |
+| Recently read | Recently read window | 30 days (7/30/90/365); the recently read list and picker ordering |
+| Connected vaults | Peer vaults | One `Vault name \| absolute path` per line, for cross-vault lookup |
+| Advanced | Request timeout | 20 s (1–180) |
+| Advanced | Attachment timeout | 60 s (1–180); attachments that need image rendering can take longer |
+| Advanced | Parallel requests | 2 (1–8); requests at once for exports, bibliographies and reading history |
+| Advanced | Refresh requests | 4 (1–8); requests at once during an index refresh; lower it if Zotero slows down |
+| Advanced | References headings | Headings that mark a References section for the agent `cites` action; defaults `References`, `Bibliography`, `Works Cited`, `참고 문헌`, `참고 자료` |
 
 ## PDF text and agents
 AI agents and scripts use the same features through the CLI. It hands work to the plugin in the running Obsidian and answers read-only requests from the index file when Obsidian is not available.
@@ -124,6 +130,9 @@ node scripts/ingest.mjs --vault "Research" --action locate --citekey Example2026
 - `import` previews only unless `--apply` is given. Hard conflicts are refused with `note-conflict`. If Zotero cannot be read fresh, nothing is written unless `--allow-stale` is given.
 - `pdf-text` extracts text with Obsidian's bundled pdf.js into a private cache (`.cmds-zotero/pdf-text/`), with the character maps CJK fonts need. A scan without a text layer reports `textLayer: none` and an OCR warning; watermarks repeated on every page are not counted as body text.
 - `locate` finds the page of a quote and returns a link into Zotero's reader.
+- `annotations` (0.6) returns a paper's annotations by attachment in reading order, filtered by `--color`, `--type`, `--tag` or `--attachment`; `--fresh` reads Zotero now and `--today` picks the paper opened today.
+- `citing` (0.6) lists the notes that cite a paper, former citekeys included, with line and excerpt.
+- `resolve --stdin` (0.6) answers up to 500 lookups given one JSON object per line.
 - In read-only contexts use `scripts/ingest-ro.mjs`, which refuses writes and `--apply`.
 Agents never edit managed sections; their own summaries go under `## Synthesis` or `## Notes`. The full rules are in the [agent contract](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/agent-contract-v2/contract.md).
 
@@ -136,6 +145,7 @@ The Hookmark commands only copy links to the clipboard. They do not change Hookm
 - Importing image annotations reads Zotero's cached images outside the vault and copies them into the image folder.
 - In the vault it writes settings, the index, literature notes, image copies and private files under `.cmds-zotero/` (bibliography, note map, backups, PDF text caches). It creates `.cmds-zotero/.gitignore` first so the folder stays out of git. PDF text caches hold full paper text; do not share them.
 - The index and note map can contain bibliographic data, private paths and annotations. Keep them out of public repositories.
+- For agent requests the plugin runs `git` read-only (`ls-files`, `check-ignore`) to report whether private files are ignored. It runs nothing else.
 - No telemetry, own HTTP server or self-updater.
 
 ## Troubleshooting
@@ -148,6 +158,8 @@ The Hookmark commands only copy links to the clipboard. They do not change Hookm
 | Import blocked by damaged markers | Fix the marker at the line shown in the preview, or use Reset |
 | Index refresh refused | Whether the old `cmds-link-zotero` plugin is enabled |
 | Connection fails | Zotero and BBT are running, the localhost endpoint, timeouts |
+| The citation picker reports no pick | The picker was closed or **Picker wait** ran out; run the command again |
+| "Recently read" says Zotero 10 is needed | Reading history needs Zotero 10 or later |
 | A PDF opens on the wrong page | Page numbers are file positions, not printed labels |
 | `pdf-text` returns nothing | The `textLayer` value; `none` means a scan that needs OCR |
 

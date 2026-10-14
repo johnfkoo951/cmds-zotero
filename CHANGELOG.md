@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.6.0 — 2026-10-14
+
+Faster, sturdier and easier to set up, with two new agent actions. Zotero stays read-only, nothing leaves your computer, and managed section IDs are unchanged, so existing notes update in place. Feature decisions against the other Zotero plugins are recorded in `docs/plugin-landscape-2026-10.md`. More absorbed features follow in 0.6.x.
+
+Performance:
+
+- **Refreshes do less work.** Each index entry is checked and hashed once instead of up to eight times, roughly halving refresh time on large libraries. The plugin keeps a fingerprint of the saved index instead of a second copy in memory (about 78–244 MB less for a 20,000-item library). Attachments and annotations are read in batches, under the new *Refresh requests* limit.
+- **Obsidian starts without a pause from CMDS Zotero.** The saved index loads once the workspace is ready, at an idle moment, and large indexes are checked in small steps instead of one long block. A stale index is refreshed about 30 seconds after startup instead of during it; a missing index and the "Refresh citekey index" command are never delayed.
+- **Editing stays light.** Citekey completion, the References and Annotations sidebars and the cross-vault note map reuse per-index lookups instead of rebuilding them after every edit. The note map re-checks only the notes that changed and is written only when a literature note appears, moves, disappears or changes its Zotero identity. The annotation filter no longer rebuilds the sidebar on every keystroke, and long lines no longer slow the citation scanner.
+- **Batches scale.** "Update all owned literature notes" and "Send recently read papers to notes" read the literature folder once per batch instead of once per note, read the next notes from Zotero a few at a time while writing one by one, and show a progress notice with a Cancel button. Cancel stops before the next note, never in the middle of a write, and the report lists the notes that were not run. A second update-all run is refused while one is running.
+- **The References sidebar is quieter.** While Zotero is not answering, editing a note no longer makes the sidebar try to reach Zotero on every change; it shows the saved text until you press Refresh or the retry pause ends. Refresh now renders the list and fetches its text again instead of rebuilding the whole index (the "Refresh citekey index" command still does that). The sidebar has its own icon.
+- "Find notes citing a source" reads up to eight notes at a time; the results and their order are unchanged. The literature picker lists recently read papers first without scanning the whole index for each one.
+- "Recently read" finds the day of each read with a handful of Zotero searches instead of one search per day, and double-checks each day with an exact-day search.
+
+A sturdier Zotero connection:
+
+- **"Insert citation from Zotero" waits for you.** The picker has its own wait (*Picker wait*, 10 minutes by default) instead of failing after the 20-second request timeout. A notice with a Cancel button shows while it is open, and a slow or cancelled pick no longer marks Zotero as failed in the status bar. A closed Zotero is reported at once, and a Zotero that is still starting says so. If the note changed while the picker was open, the citation is copied to the clipboard instead of being written into another note.
+- **Renamed citation keys import again.** Better BibTeX's error replies are now read correctly, so an import follows an item whose citation key changed in Zotero instead of failing.
+- **One bad item no longer stops a refresh.** Duplicate citation keys inside a library, a missing citation key or an item that cannot be exported are skipped with a diagnostic and keep their previous entry; the index is marked incomplete so nothing claims a complete answer. Feeds never enter the index, and two libraries with the same name no longer stop a refresh. *Diagnostics* lists every library with its item counts and reports libraries that are empty or could not be indexed.
+- **EPUB and web-snapshot annotations** are indexed instead of making the whole item's attachments unavailable; their links select the attachment in Zotero, and PDF links stay as they were.
+- **Collections and retractions.** The index records collection membership ("Parent/Child" paths) and Zotero's own retraction flags; a retracted source shows a warning in *Diagnostics*. These are new optional index fields: 0.5 readers ignore them.
+- On a Zotero older than 10, "Recently read" and the agent `recent` action say that Zotero 10 is needed (`zotero-too-old`) instead of reporting Better BibTeX as unreachable.
+
+Settings:
+
+- **Every stored setting has a control.** New: *Citation trigger* (Bracket `[@` / At sign `[@` or a bare `@` / Off), *Excluded tags* (one per line, case-insensitive), *Heading highlight color* (None or a Zotero color) and *References sidebar follows the active note*; before, these four could only be changed in `data.json`. New keys: *Refresh requests* (`collectConcurrency`, 1–8; an older settings file keeps the 0.6 wave-1 value, twice *Parallel requests*) and *Picker wait* (`pickerWaitSeconds`, 30–1800 s). Other keys and defaults are unchanged.
+- **A clearer settings tab.** Areas have their own sections (Connection, Literature index, Citations, Literature notes, Annotations, Bibliography and references, Recently read, Connected vaults); request limits and the agent-only *References headings* sit under a collapsed *Advanced* heading. Values are checked as you type, and *Save* stays blocked until the problems are fixed. On Obsidian 1.13 and later the rows appear in Obsidian's settings search. *Parallel requests* and *References headings* now describe what they actually control.
+- *Test connection* reports a closed Zotero in words instead of a script error.
+
+Agent CLI (contract 2, additive; an older plugin answers `plugin-too-old`):
+
+- **New action `annotations`.** A paper's annotations for digests, grouped by attachment in Zotero's reading order, with color, page and printed label, text, comment, tags and an open-pdf link; filters `--color`, `--type`, `--tag` and `--attachment`. It answers from the saved index (offline too); `--fresh` reads Zotero now and `--today` picks the one paper Zotero opened today.
+- **New action `citing`.** The notes that cite a paper under its current or a former citekey, with line, column and excerpt for every body citation and frontmatter citations listed apart; a citekey another item also carries is reported instead of guessed. Offline-capable.
+- **`resolve --stdin`.** Up to 500 lookups in one call: one JSON selector per input line, one answer per line in the same order; a bad line gets its own `invalid-request` answer without stopping the rest.
+- **`reconcile --apply` patches hand-formatted hubs line by line (R8).** Only the five allowed key lines are replaced or appended; comments, quoting, folded scalars, lists, trailing spaces, CRLF and the body stay byte for byte, so hubs that failed the old round-trip guard are no longer skipped. The patched text must parse back to the intended frontmatter before it is written. A block-scalar, multi-line, duplicated or quoted allowed key is skipped as `frontmatter-not-patchable`; a note that changed since the dry run, even inside the write callback, is `changed-since-plan` with `wrote: false`. `apply.notes[]` add `replacedKeys` and `appendedKeys`.
+- **Scoped scan policy for `reconcile --apply` (R8).** An unparseable note elsewhere in the vault no longer refuses the whole apply: `scan` adds `skippedDetail` (unreadable, parse-error, symlink) and `parseErrors`; a parse-error note inside `--folders`, an unreadable or symlinked entry, or a truncated scan still refuse it with the paths named; a hub whose citekey an unparseable note mentions is withheld individually (`blocked-by-parse-error`).
+- Vault scans read up to eight notes at a time with the same results, `locate --path` reads only the note it needs, job polls start fast and back off, and the Git status probe is cached between jobs. The offline CLI takes `--config-dir` for vaults whose configuration folder is not `.obsidian`. The agent `import` action reads the note state from the notes themselves, through the same identity lookup as the preview.
+- The bundled agent skill explains summaries with page-checked quotes, checking suggested references against Zotero, annotation digests and finding citing notes.
+
+Safety:
+
+- Index backups are always an exact copy of the index they replace; an index swapped or edited during a refresh cancels the refresh and leaves no backup behind.
+- A vault scan that finds a folder replaced while it ran (for example by a symbolic link) reports that folder's notes as skipped instead of using them.
+
+Development: `main.ts` is split into controllers under `src/plugin/`, settings into one file per section under `src/settings/sections/`, modals into `src/modals/`. `npm test` no longer rewrites the committed offline core (run `npm run build:core` after changing a bundled module). Release notes come from this file; CI checks that generated files match the committed ones.
+
 ## 0.5.0 — 2026-10-12
 
 Recently read papers to literature notes (the reading → metadata note flow, centred on what was actually read):

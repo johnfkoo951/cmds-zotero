@@ -4,7 +4,7 @@
 
 Verified Zotero sources, citations, annotations, and literature notes for a local-first research vault. By CMDSPACE.
 
-**Version 0.5.0 (2026-10-12) is the first GitHub release.** Download `main.js`, `manifest.json` and `styles.css` from the [0.5.0 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.5.0) or install `johnfkoo951/cmds-zotero` with BRAT; it is not yet listed in Community Plugins. 0.5 adds **Send recently read papers to notes** (the papers you opened in Zotero's reader, each with the state of its literature note, sent with fresh annotations), the agent actions `recent` and `import`, reading-order annotation blocks, structured Zotero child notes and PDF text for CJK and scanned papers. User guide: [docs/guide.md](docs/guide.md) · [web](https://apps.cmdspace.work/plugins/cmds-zotero/) · [한국어](docs/guide.ko.md). Verified with Obsidian 1.14.4, Zotero 10.0.5 and Better BibTeX 9.0.71 on macOS; group libraries and Windows/Linux are not live-tested.
+**Version 0.6.0 (2026-10-14).** Download `main.js`, `manifest.json` and `styles.css` from the [0.6.0 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.0) or install `johnfkoo951/cmds-zotero` with BRAT; it is not yet listed in Community Plugins. 0.6 makes refreshes, startup, editing and batch updates faster; keeps a refresh going past bad items, feeds and EPUB or snapshot annotations; lets the citation picker wait for you with a Cancel button; gives every setting a control in a reorganised settings tab; and adds the agent actions `annotations` and `citing`, `resolve --stdin` and line-by-line `reconcile --apply`. 0.5 added **Send recently read papers to notes**. See the [changelog](CHANGELOG.md). User guide: [docs/guide.md](docs/guide.md) · [web](https://apps.cmdspace.work/plugins/cmds-zotero/) · [한국어](docs/guide.ko.md). Verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS; group libraries and Windows/Linux are not live-tested.
 
 ## Scope
 
@@ -31,6 +31,8 @@ The implementation uses BBT `api.ready`, filtered `item.search`, `item.export` w
 **Network.** The plugin sends requests to the configured local BBT server, defaulting to `http://127.0.0.1:23119/better-bibtex`, for citations, metadata, attachments/annotations, and bibliography. Bibliographic text and citation queries are exchanged with that server. Keep the endpoint on your own machine. Opening an item, PDF, or peer-vault link delegates the URI to the desktop application responsible for it; websites opened deliberately are outside this plugin's privacy boundary.
 
 **Files outside the vault.** Zotero attachment/annotation image paths may point outside the vault. Explicit imports may read local annotation images and copy them into the configured vault image folder. Peer-vault paths are optional user-provided settings and are used for read-only index/note discovery; no peer-vault writes are intended. Indexes can contain local attachment paths and sensitive bibliographic metadata. Do not publish your index or `data.json`.
+
+**Local processes.** For agent requests the plugin runs `git` read-only in the vault (`ls-files` and `check-ignore`, with optional locks off) to report whether the index and the private cache are tracked or ignored. It runs nothing else.
 
 **Writes.** Zotero remains read-only: no library edits, citation-key pinning, database changes, or preference changes. The plugin writes its own settings/index and user-requested notes/assets in the current vault. It does not silently rewrite existing literature notes. No telemetry, plugin-managed self-updater, own HTTP server, or paid service is included. Hookmark is optional separate software with its own licensing; it is not required for normal Zotero links.
 
@@ -122,15 +124,17 @@ See [`src/ingest-api.ts`](src/ingest-api.ts) and [`scripts/ingest.mjs`](scripts/
 | connection | Probe local BBT readiness and host state | Yes |
 | info | Index age/counts/libraries/settings and privacy warnings; no refresh | Yes |
 | refresh | Explicit index refresh, optionally `--if-older-than` | No |
-| resolve | Citekey, item key/library, DOI, arXiv, title or query | Yes |
+| resolve | Citekey, item key/library, DOI, arXiv, title or query; `--stdin` for up to 500 NDJSON lookups (0.6) | Yes |
 | identity | Proposed hub YAML/S01, bibliography, current/pending PIN state | Yes |
 | cites | Body/frontmatter citation verdicts and References text; `--format csl-json|bibtex|biblatex` and `--out` sidecar (0.5) | Yes (structured formats and `--out` live only) |
-| reconcile | Hub audit; five-key writes only with explicit `--apply` | Dry-run |
+| reconcile | Hub audit; five-key writes only with explicit `--apply`, patched line by line (0.6) | Dry-run |
 | diagnostics | Index, identity, citation and privacy diagnostics | Yes |
 | pdf-text | Bundled pdf.js extraction into a private cache | No |
 | locate | Quote locations from that cache, with verification state | Yes |
 | recent | Papers recently read in Zotero with each literature note's state (0.5) | No |
 | import | Create or update the plugin-owned literature note from fresh Zotero data; dry run unless `--apply` (0.5) | No |
+| annotations | A paper's annotations by attachment in reading order, with color/type/tag/attachment filters; `--fresh` reads Zotero now, `--today` picks the paper opened today (0.6) | Yes (`--fresh`, `--today` live only) |
+| citing | Notes citing a paper under its current or former citekeys, with positions and excerpts (0.6) | Yes |
 
 ```sh
 node scripts/ingest.mjs --vault "Research" --action connection
@@ -195,12 +199,13 @@ Before relying on this version, test offline/partial refresh retention, missing 
 npm ci
 npm run lint
 npm run typecheck
+npm run build:core                  # after changing a module bundled into the offline CLI
 npm test
 npm run build
 node scripts/sanitize.mjs           # tracked working-tree files
 node scripts/sanitize.mjs --staged  # staged additions/changes, reads index bytes
-node scripts/version-bump.mjs 0.5.0 # synchronizes package, lock, manifest, versions
-node scripts/verify-release.mjs 0.5.0
+node scripts/version-bump.mjs 0.6.0 # synchronizes package, lock, manifest, versions
+node scripts/verify-release.mjs 0.6.0
 ```
 
 Tests use synthetic fixtures. The sanitizer reports matching file/line/rule without printing secrets; it is a heuristic and does not replace manual staged-diff inspection or review of private repository links. CI uses `npm ci`, lint, typecheck, tests, and production build on Node 22. The prepared release workflow requires an exact stable semver tag **without `v`**, matching manifest/package/lock/versions; it builds three plugin assets and publishes their provenance bundle. **Pushing such a tag publishes a release: obtain approval first.** A prepared workflow does not imply a release, successful CI run, or community submission has occurred.

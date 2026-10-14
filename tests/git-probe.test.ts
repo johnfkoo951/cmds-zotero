@@ -97,9 +97,9 @@ test("a vault without a .git folder (absent, or a linked worktree's pointer file
 });
 
 test("watched inputs cover the index, every ignore file on the index path, the private cache folder and user configuration", () => {
-	const inputs = gitProbeInputs("/vault", "a/b/index.json", "/home/user", {});
-	for (const path of ["/vault/.git/index", "/vault/.gitignore", "/vault/a/.gitignore", "/vault/a/b/.gitignore", "/vault/.cmds-zotero/.gitignore", "/vault/.git/info/exclude", "/vault/.git/config", "/home/user/.gitconfig", "/home/user/.config/git/config", "/home/user/.config/git/ignore"]) assert.ok(inputs.includes(path), path);
-	assert.ok(gitProbeInputs("/vault", "index.json", "/home/user", { XDG_CONFIG_HOME: "/xdg" }).includes("/xdg/git/ignore"));
+	const inputs = gitProbeInputs("/vault", "a/b/index.json", "/synthetic-home", {});
+	for (const path of ["/vault/.git/index", "/vault/.gitignore", "/vault/a/.gitignore", "/vault/a/b/.gitignore", "/vault/.cmds-zotero/.gitignore", "/vault/.git/info/exclude", "/vault/.git/config", "/synthetic-home/.gitconfig", "/synthetic-home/.config/git/config", "/synthetic-home/.config/git/ignore"]) assert.ok(inputs.includes(path), path);
+	assert.ok(gitProbeInputs("/vault", "index.json", "/synthetic-home", { XDG_CONFIG_HOME: "/xdg" }).includes("/xdg/git/ignore"));
 });
 
 test("against real git the cached probe follows a change to the index", async t => {
