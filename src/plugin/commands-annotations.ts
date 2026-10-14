@@ -1,10 +1,12 @@
-import { Notice } from "obsidian";
+import { Notice, type Editor, type EditorPosition } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { CARD_ACTIONS } from "../annotations/card-actions";
-import { annotationInsertText, preparedSearchRows, searchEmptyText, type AnnotationSearchRow } from "../annotations/search";
+import { preparedSearchRows, searchEmptyText, type AnnotationSearchRow } from "../annotations/search";
 import { sourceLabel } from "../annotations/overlay";
 import { AnnotationSearchModal, type AnnotationSearchAction } from "../modals/annotation-search";
+import { ANNOTATION_DRAG_TYPE, dropText, parseDragPayload, resolveDragPayload } from "../annotations/drag-payload";
+import { annotationText } from "./annotation-insert";
 
 /** The open Annotations sidebar, opened and revealed first. */
 async function annotationsView(plugin: CMDSZoteroPlugin): Promise<AnnotationsView> {
@@ -36,6 +38,7 @@ export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 			void plugin.run(() => chooseSearchRow(plugin, row, action));
 		}).open();
 	} });
+	registerAnnotationDrop(plugin);
 	// 0.6.1 annotation-card-actions: the card menu's actions on the card last clicked or focused in the sidebar.
 	const focusedView = (): AnnotationsView | null => plugin.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS).map(leaf => leaf.view).find((view): view is AnnotationsView => view instanceof AnnotationsView && view.focusedCard() !== null) ?? null;
 	for (const action of CARD_ACTIONS) {
@@ -53,7 +56,41 @@ async function chooseSearchRow(plugin: CMDSZoteroPlugin, row: AnnotationSearchRo
 	if (action === "pin") { (await annotationsView(plugin)).pin(row.entry); return; }
 	const view = plugin.lastMarkdownView();
 	if (!view) throw new Error("Open a Markdown note in edit mode to insert an annotation.");
-	const text = annotationInsertText(action, row.annotation, row.entry, plugin.settings);
+	const text = await annotationText(plugin, row.entry, row.annotation, action);
 	view.editor.replaceSelection(action === "link" ? text : `${text}\n`);
 	await plugin.app.workspace.revealLeaf(view.leaf);
+}
+
+/** The editor's document position under a drop, or the cursor when the editor cannot map screen coordinates. */
+function dropPosition(editor: Editor, event: DragEvent): EditorPosition {
+	const cm: unknown = (editor as unknown as { cm?: unknown }).cm;
+	if (cm && typeof (cm as { posAtCoords?: unknown }).posAtCoords === "function") {
+		const offset = (cm as { posAtCoords(coords: { x: number; y: number }): number | null }).posAtCoords({ x: event.clientX, y: event.clientY });
+		if (typeof offset === "number") return editor.offsetToPos(offset);
+	}
+	return editor.getCursor();
+}
+
+/**
+ * 0.6.1 annotation-drag-insert: a dropped annotation card is inserted at the drop point as its callout, after copying an
+ * image annotation's image. Drops this plugin did not start, or whose annotation is no longer known, fall through to the
+ * editor's own handling of the card's `text/plain` callout.
+ */
+export function registerAnnotationDrop(plugin: CMDSZoteroPlugin): void {
+	plugin.registerEvent(plugin.app.workspace.on("editor-drop", (event: DragEvent, editor: Editor) => {
+		if (event.defaultPrevented) return;
+		const payload = parseDragPayload(event.dataTransfer?.getData(ANNOTATION_DRAG_TYPE));
+		if (!payload) return;
+		const shown = plugin.app.workspace.getLeavesOfType(VIEW_TYPE_ANNOTATIONS).map(leaf => leaf.view instanceof AnnotationsView ? leaf.view.shownEntry() : null);
+		const found = resolveDragPayload([...shown, ...plugin.cachedEntries()], payload);
+		if (!found) return;
+		event.preventDefault();
+		const dropped = dropPosition(editor, event);
+		void plugin.run(async () => {
+			const text = await annotationText(plugin, found.entry, found.annotation, "callout");
+			// The image copy is awaited: if the note shrank meanwhile, insert at the cursor instead of a stale position.
+			const at = dropped.line <= editor.lastLine() && dropped.ch <= editor.getLine(dropped.line).length ? dropped : editor.getCursor();
+			editor.replaceRange(dropText(text, at.ch), at);
+		});
+	}));
 }

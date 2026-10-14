@@ -257,3 +257,16 @@ test("card actions run on the card last clicked; a re-render keeps the focus whi
 	view.pin(two);
 	assert.equal(v.focusedCard(), null, "another item has no such card");
 });
+
+test("cards are draggable: text/plain is the callout, the custom type names the annotation by identity", async () => {
+	const { view, find } = await sidebar();
+	view.pin(one);
+	const card = find(el => el.classes.has("cmds-zotero-annotation"))[0] as FakeEl & { listeners: Record<string, ((event: unknown) => void)[]> };
+	assert.equal(card.attrs.draggable, "true");
+	const data: Record<string, string> = {};
+	const transfer = { effectAllowed: "", setData: (type: string, value: string) => { data[type] = value; } };
+	for (const listener of card.listeners.dragstart) listener({ dataTransfer: transfer });
+	assert.equal(transfer.effectAllowed, "copy");
+	assert.match(data["text/plain"], /^> \[!Highlight\] yellow · p\. 1\n> <mark class="cmds-zotero-hl-yellow">Synthetic ANNO0002<\/mark> \(\[p\. 1\]\(zotero:\/\/open-pdf\/library\/items\/ATTA2345\?page=1&annotation=ANNO0002\)\)\n$/);
+	assert.deepEqual(JSON.parse(data["application/x-cmds-zotero-annotation"]), { v: 1, id: "1:ITEM0001", attachmentKey: "ATTA2345", key: "ANNO0002" });
+});

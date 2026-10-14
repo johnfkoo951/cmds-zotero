@@ -19,6 +19,8 @@ import {
 import { LiveOverlay, sourceLabel } from "../annotations/overlay";
 import { CARD_ACTIONS, annotationDataText, citationFor, identityLinkFor, scopedKey, type CardActionId } from "../annotations/card-actions";
 import { ReportModal } from "../modals/report";
+import { ANNOTATION_DRAG_TYPE, dragPayload, encodeDragPayload } from "../annotations/drag-payload";
+import { annotationText } from "../plugin/annotation-insert";
 
 export const VIEW_TYPE_ANNOTATIONS = "cmds-zotero-annotations";
 /** Hides a card, section heading or message the filter does not show (0.6 PERF-15). */
@@ -394,6 +396,16 @@ export class AnnotationsView extends ItemView {
 			for (const other of this.groups.flatMap(group => group.cards)) other.toggleClass("is-focused", other === card);
 			card.toggleClass("is-focused", true);
 		};
+		// 0.6.1 annotation-drag-insert: text/plain is the callout, so a plain drop works anywhere; the custom type lets the
+		// plugin's editor drop handler copy an image annotation's image first.
+		card.setAttribute("draggable", "true");
+		card.addEventListener("dragstart", (event: DragEvent) => {
+			const data = event.dataTransfer;
+			if (!data) return;
+			data.effectAllowed = "copy";
+			data.setData("text/plain", `${this.callout(entry, annotation)}\n`);
+			data.setData(ANNOTATION_DRAG_TYPE, encodeDragPayload(dragPayload(entry, attachment.key, annotation.key)));
+		});
 		card.addEventListener("focusin", focus);
 		card.addEventListener("click", focus);
 		card.addEventListener("contextmenu", (event: MouseEvent) => { event.preventDefault(); focus(); this.cardMenu(entry, attachment, annotation).showAtMouseEvent(event); });
@@ -451,7 +463,7 @@ export class AnnotationsView extends ItemView {
 		}
 	}
 
-	/** The callout Insert at cursor writes; image annotations are linked, not copied (the import copies images). */
+	/** The callout a copy or a plain drop carries; image annotations are linked here (Insert at cursor and the plugin's drop copy the image). */
 	private callout(entry: ZoteroIndexEntry, annotation: Annotation): string {
 		return annotation.imagePath ? markdownLink(`Image annotation, p. ${annotation.pageLabel || annotation.page}`, annotationURI(annotation, entry)) : annotationBody(annotation, undefined, entry, this.plugin.settings);
 	}
@@ -462,11 +474,11 @@ export class AnnotationsView extends ItemView {
 		button.addEventListener("click", () => { void this.plugin.run(async () => { await run(); }); });
 	}
 
-	private insert(entry: ZoteroIndexEntry, _attachment: Attachment, annotation: Annotation): void {
+	private async insert(entry: ZoteroIndexEntry, _attachment: Attachment, annotation: Annotation): Promise<void> {
 		const view = this.plugin.lastMarkdownView();
 		if (!view) throw new Error("Open a Markdown note in edit mode to insert an annotation.");
-		// Images are not copied by the sidebar; the import command performs validated image copies. Link the PDF location instead.
-		view.editor.replaceSelection(`${this.callout(entry, annotation)}\n`);
+		// 0.6.1: an image annotation's image is copied to the import's validated, hash-named path first (new file only).
+		view.editor.replaceSelection(`${await annotationText(this.plugin, entry, annotation, "callout")}\n`);
 		void this.app.workspace.revealLeaf(view.leaf);
 	}
 

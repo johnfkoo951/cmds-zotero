@@ -446,6 +446,19 @@ export function annotationBody(a: Annotation, image: string | undefined, entry: 
 }
 
 
+/**
+ * The vault path an annotation image is copied to: `<imageFolder>/<libraryType>-<library>-<attachmentKey>-<annotationKey>-<sha256>.<ext>`,
+ * named by the validated content hash. The import and the annotations sidebar's insert and drag (0.6.1) share it.
+ */
+export function annotationImagePath(imageFolder: string, entry: Pick<ZoteroIndexEntry, "libraryType" | "libraryID" | "groupID">, attachmentKey: string, a: Pick<Annotation, "key" | "imagePath">, digest: string | undefined): string {
+	const extension = /\.(png|jpe?g|gif|webp)$/i.exec(a.imagePath ?? "")?.[1]?.toLowerCase();
+	if (!extension) throw new Error("Unsupported annotation image extension");
+	if (!digest || !/^[a-f0-9]{64}$/.test(digest)) throw new Error("Validated image content hash required before rendering");
+	const library = entry.libraryType === "group" ? entry.groupID : entry.libraryID;
+	if (library === undefined || !Number.isSafeInteger(library) || library < 0) throw new Error("Verified image library identity required");
+	return safeVaultPath(`${imageFolder}/${entry.libraryType}-${library}-${key(attachmentKey)}-${key(a.key)}-${digest}.${extension}`);
+}
+
 /** Frontmatter is initialized once; existing YAML remains entirely user-owned. */
 export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, settings: CmdsZoteroSettings, previous: string | null, imageHashes: ReadonlyMap<string, string> = new Map(), context: RenderContext = {}): RenderedNote {
 	const owner = ownerMarker(entry.id);
@@ -507,13 +520,7 @@ export function renderLiterature(entry: ZoteroIndexEntry, bibliography: string, 
 		seen.add(id);
 		let image: string | undefined;
 		if (a.imagePath) {
-			const extension = /\.(png|jpe?g|gif|webp)$/i.exec(a.imagePath)?.[1]?.toLowerCase();
-			if (!extension) throw new Error("Unsupported annotation image extension");
-			const digest = imageHashes.get(a.imagePath);
-			if (!digest || !/^[a-f0-9]{64}$/.test(digest)) throw new Error("Validated image content hash required before rendering");
-			const library = entry.libraryType === "group" ? entry.groupID : entry.libraryID;
-			if (library === undefined || !Number.isSafeInteger(library) || library < 0) throw new Error("Verified image library identity required");
-			image = safeVaultPath(`${settings.imageFolder}/${entry.libraryType}-${library}-${key(attachment.key)}-${key(a.key)}-${digest}.${extension}`);
+			image = annotationImagePath(settings.imageFolder, entry, attachment.key, a, imageHashes.get(a.imagePath));
 			images.push({ source: a.imagePath, path: image });
 		}
 		sections.set(id, annotationBody(a, image, entry, settings));

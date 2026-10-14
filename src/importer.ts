@@ -1,7 +1,7 @@
 import { App, FileSystemAdapter, parseYaml, TFile, TFolder } from "obsidian";
 import type { BbtService } from "./bbt";
-import type { CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { hashText, renderLiterature, safeVaultPath, type RenderedNote, type SectionInfo } from "./note-writer";
+import type { Annotation, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
+import { annotationImagePath, hashText, renderLiterature, safeVaultPath, type RenderedNote, type SectionInfo } from "./note-writer";
 import { relatedCitekeys } from "./related";
 import { checkVaultDestination, hashBytes, MAX_IMAGE_BYTES, readAnnotationImage } from "./import/images";
 import { assertVaultBoundary, BACKUP_DIR, ensureCmdsIgnore, ensureDirectory, vaultBoundaryScan } from "./vault-storage";
@@ -184,6 +184,28 @@ export class ImportService {
 			this.snapshots.delete(preview);
 			return { path, conflicts: [], changed, preserved, detached, reset };
 		} finally { this.applying = false; }
+	}
+
+	/**
+	 * 0.6.1 annotation-drag-insert: copies one annotation's image to the path the import uses (validated source, content-hash
+	 * name, vault-boundary and symlink checks) and returns that vault path. Creates a new file only: a file already there
+	 * with the same content is reused, any other content is refused.
+	 */
+	async copyAnnotationImage(entry: ZoteroIndexEntry, annotation: Annotation): Promise<string> {
+		if (!annotation.imagePath) throw new Error("This annotation has no image.");
+		const bytes = await readAnnotationImage(annotation.imagePath);
+		const hash = hashBytes(bytes);
+		const path = annotationImagePath(this.settings().imageFolder, entry, annotation.attachmentKey, annotation, hash);
+		await this.checkPath(path);
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		if (existing) {
+			if (!(existing instanceof TFile) || existing.stat.size > MAX_IMAGE_BYTES || hashBytes(new Uint8Array(await this.app.vault.readBinary(existing))) !== hash) throw new Error(`Image destination contains different content: ${path}`);
+			return path;
+		}
+		await this.ensureParent(path);
+		await this.checkPath(path);
+		await this.app.vault.createBinary(path, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+		return path;
 	}
 
 	// 0.5 R5

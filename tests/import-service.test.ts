@@ -240,3 +240,31 @@ test("a batch identity map gives the same previews as fresh scans, reads the fol
 		assert.ok(reads.includes("Elsewhere/@Example2.md") && !reads.some(path => path.startsWith(`${folder}/`)));
 	} finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
+
+test("0.6.1 annotation image copy for insert and drag: import path, new file only, same content reused, other content refused", async () => {
+	const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "cmds-zotero-image-copy-test-")));
+	try {
+		const output = join(directory, "service.cjs");
+		await build({ stdin: { contents: 'export { ImportService } from "./src/importer"; export { TestVault } from "obsidian";', resolveDir: process.cwd() }, bundle: true, platform: "node", format: "cjs", outfile: output, plugins: [{ name: "synthetic-obsidian", setup(b) { b.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "mock" })); b.onLoad({ filter: /.*/, namespace: "mock" }, () => ({ contents: facade, loader: "js" })); } }] });
+		const require = createRequire(resolve(output));
+		const { ImportService, TestVault } = require(output);
+		const vaultRoot = join(directory, "vault");
+		await fs.mkdir(vaultRoot);
+		const source = join(directory, "cache.png");
+		const bytes = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+		await fs.writeFile(source, bytes);
+		const vault = new TestVault(vaultRoot);
+		const service = new ImportService({ vault }, { bibliography: async () => "" }, () => DEFAULT_SETTINGS);
+		const image = { key: "ANNOT001", attachmentKey: "ATTACH01", type: "image", text: "", comment: "", color: "#ffd400", page: 2, pageLabel: "2", version: 1, uri: "", tags: [], dateModified: "", imagePath: source };
+		const path = await service.copyAnnotationImage(entry, image);
+		assert.equal(path, `${DEFAULT_SETTINGS.imageFolder}/user-1-ATTACH01-ANNOT001-${hashBytes(bytes)}.png`);
+		assert.deepEqual(Buffer.from(vault.data.get(path)), bytes);
+		const writes = vault.writes;
+		assert.equal(await service.copyAnnotationImage(entry, image), path, "same content: reused");
+		assert.equal(vault.writes, writes, "nothing written again");
+		vault.data.set(path, new Uint8Array([1, 2, 3]).buffer);
+		await assert.rejects(service.copyAnnotationImage(entry, image), /different content/);
+		await assert.rejects(service.copyAnnotationImage(entry, { ...image, imagePath: undefined }), /no image/);
+		await assert.rejects(service.copyAnnotationImage(entry, { ...image, imagePath: "relative.png" }), /absolute/);
+	} finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
