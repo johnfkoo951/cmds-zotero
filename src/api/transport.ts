@@ -116,7 +116,7 @@ export function bbtObservation(error: BbtTransportError): string {
 		case "http-404": return `Zotero answered at ${at} but the Better BibTeX endpoint was not found (HTTP 404)`;
 		case "http-other": return `Zotero answered at ${at} with HTTP ${error.status ?? "error"}`;
 		case "aborted": return `The request to ${at} was aborted by the plugin before Zotero answered`;
-		case "rpc": return `Better BibTeX at ${at} reported an error (${error.detail})`;
+		case "rpc": return `Better BibTeX at ${at} reported an error (${error.detail}${error.rpcMessage ? `: ${error.rpcMessage.replace(/\s+/g, " ").trim().slice(0, 200)}` : ""})`;
 		default: return `Better BibTeX at ${at} returned an unexpected response (${error.detail})`;
 	}
 }
@@ -133,6 +133,38 @@ export function describeBbtError(error: unknown): string {
 		case "aborted": return `${observed}.`;
 		default: return `${observed}.`;
 	}
+}
+
+/** Major version of a Zotero version string (`10.0.6` → 10, `7.0.0-beta.80+abc` → 7), or null when it does not start with one. */
+export function zoteroMajor(version: string | null | undefined): number | null {
+	const match = /^\s*(\d{1,4})(?:[.\s-]|$)/.exec(version ?? "");
+	return match ? Number(match[1]) : null;
+}
+
+/**
+ * A feature this Zotero cannot provide (0.6 recent-reads-efficiency): reading history needs Zotero 10. Not a transport
+ * fault: Zotero answered, so it is never reported as Better BibTeX being unreachable. `found` is the reported Zotero
+ * version, or null when only the refused search condition told.
+ */
+export class ZoteroVersionError extends Error {
+	readonly name = "ZoteroVersionError";
+	constructor(readonly feature: string, readonly required: number, readonly found: string | null, readonly cause?: unknown) {
+		super(`${feature} needs Zotero ${required} or later${found ? `; this Zotero is ${found}` : "; this Zotero does not support the search it needs"}. Update Zotero, then retry.`);
+	}
+}
+
+export function isZoteroVersionError(error: unknown): error is ZoteroVersionError {
+	return error instanceof ZoteroVersionError || (error instanceof Error && error.name === "ZoteroVersionError" && typeof (error as { required?: unknown }).required === "number");
+}
+
+/**
+ * True for Zotero's refusal of a search condition it does not know (`Invalid condition 'lastRead' in hasOperator()`,
+ * JSON-RPC -32603), which is how a Zotero older than 10 answers a `resultLevel` or `lastRead` search.
+ */
+export function isUnknownConditionFault(error: unknown, conditions: readonly string[]): boolean {
+	if (!isBbtTransportError(error) || error.reason !== "rpc") return false;
+	const message = error.rpcMessage ?? "";
+	return /Invalid condition/i.test(message) && conditions.some(condition => message.includes(`'${condition}'`));
 }
 
 /** The additive `bbtError` payload field: the typed reason and the endpoint that failed, or null for non-transport errors. */
@@ -180,23 +212,67 @@ export function httpRequest(rawURL: string, timeoutMs: number, body?: string, si
 	});
 }
 
-export async function rpc(endpoint: string, method: string, params: unknown[], timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
-	const url = `${endpoint.replace(/\/$/, "")}/json-rpc`;
-	const response = await httpRequest(url, timeoutMs, JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal);
-	if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", url, `BBT HTTP ${response.status} for ${method}`, { status: response.status });
-	let parsed: unknown;
-	try { parsed = JSON.parse(response.text); }
-	catch (error) { throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${method}`, { cause: error }); }
-	if (!record(parsed) || parsed.jsonrpc !== "2.0" || parsed.id !== 1) throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`);
-	if ("error" in parsed) {
-		const fault = record(parsed.error) ? parsed.error : {};
-		throw new BbtTransportError("rpc", url, `BBT RPC error for ${method}`, {
+/** One JSON-RPC reply, settled: the result, or the typed fault this request alone ran into. */
+export type RpcSettled = { ok: true; result: unknown } | { ok: false; error: BbtTransportError };
+
+/**
+ * Reads one JSON-RPC reply envelope (0.6 OPT-01). `error` is read before the id check: Better BibTeX answers every error
+ * with HTTP 200 and `id: null` (`json-rpc.ts` handle()), so an error reply is accepted with `id` null or the request's own
+ * id and keeps its JSON-RPC code and message. A result must carry the request's id; one with `id: null` cannot be
+ * attributed to the request and is an invalid response.
+ */
+function settleReply(reply: unknown, id: number, url: string, method: string): RpcSettled {
+	if (!record(reply) || reply.jsonrpc !== "2.0") return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+	if ("error" in reply) {
+		if (reply.id !== null && reply.id !== id) return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+		const fault = record(reply.error) ? reply.error : {};
+		return { ok: false, error: new BbtTransportError("rpc", url, `BBT RPC error for ${method}`, {
 			...(typeof fault.code === "number" ? { rpcCode: fault.code } : {}),
 			...(typeof fault.message === "string" ? { rpcMessage: fault.message.slice(0, 500) } : {}),
-		});
+		}) };
 	}
-	if (!("result" in parsed)) throw new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`);
-	return parsed.result;
+	if (reply.id !== id) return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+	if (!("result" in reply)) return { ok: false, error: new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`) };
+	return { ok: true, result: reply.result };
+}
+
+function rpcURL(endpoint: string): string { return `${endpoint.replace(/\/$/, "")}/json-rpc`; }
+
+/** POSTs a JSON-RPC body and parses the HTTP 200 JSON answer; HTTP and JSON faults are typed for every request in it. */
+async function postRpc(url: string, body: unknown, label: string, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
+	const response = await httpRequest(url, timeoutMs, JSON.stringify(body), signal);
+	if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", url, `BBT HTTP ${response.status} for ${label}`, { status: response.status });
+	try { return JSON.parse(response.text) as unknown; }
+	catch (error) { throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${label}`, { cause: error }); }
+}
+
+export async function rpc(endpoint: string, method: string, params: unknown[], timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
+	const url = rpcURL(endpoint);
+	const settled = settleReply(await postRpc(url, { jsonrpc: "2.0", id: 1, method, params }, method, timeoutMs, signal), 1, url, method);
+	if (!settled.ok) throw settled.error;
+	return settled.result;
+}
+
+export interface RpcCall { method: string; params: unknown[] }
+
+/**
+ * Several JSON-RPC requests in one POST (0.6 OPT-01/OPT-10). Better BibTeX answers a batch array in request order
+ * (`Promise.all` over the requests) and echoes an id of 0 as null, so replies are matched by position, never by id; each
+ * request settles on its own (a `not found` for one citekey leaves the others intact). A fault of the whole POST (HTTP
+ * status, unreadable JSON, a reply that is not one answer per request) is thrown for the batch.
+ */
+export async function rpcBatch(endpoint: string, calls: readonly RpcCall[], timeoutMs: number, signal?: AbortSignal): Promise<RpcSettled[]> {
+	if (!calls.length) return [];
+	const url = rpcURL(endpoint);
+	const label = `a batch of ${calls.length} ${[...new Set(calls.map(call => call.method))].join("/")} requests`;
+	const parsed = await postRpc(url, calls.map((call, index) => ({ jsonrpc: "2.0", id: index + 1, method: call.method, params: call.params })), label, timeoutMs, signal);
+	if (!Array.isArray(parsed)) {
+		// A batch BBT could not parse at all comes back as one error envelope (`Parse error`, id null).
+		const whole = settleReply(parsed, 0, url, label);
+		throw whole.ok ? new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${label}`) : whole.error;
+	}
+	if (parsed.length !== calls.length) throw new BbtTransportError("invalid-response", url, `BBT answered ${parsed.length} of ${calls.length} requests in ${label}`);
+	return parsed.map((reply, index) => settleReply(reply, index + 1, url, calls[index].method));
 }
 
 export async function mapBounded<T, R>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {

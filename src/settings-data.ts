@@ -6,15 +6,24 @@ function integer(value: unknown, fallback: number, min: number, max: number): nu
 }
 function text(value: unknown, fallback: string): string { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 
+/**
+ * 0.6 OPT-10: the refresh concurrency a settings file without `collectConcurrency` gets: twice `concurrency`, at most 8,
+ * which is what refreshes used for attachment reads since 0.6 wave 1. An out-of-range value is passed through unchanged.
+ */
+export function defaultCollectConcurrency(concurrency: number): number {
+	return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
+}
+
 export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 	const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+	const concurrency = integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8);
 	return {
 		bbtEndpoint: text(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
 		zoteroIndexPath: text(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
 		caywFormat: text(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
 		requestTimeoutMs: integer(data.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs, 1000, 180000),
 		attachmentTimeoutMs: integer(data.attachmentTimeoutMs, DEFAULT_SETTINGS.attachmentTimeoutMs, 1000, 180000),
-		concurrency: integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8),
+		concurrency,
 		indexMaxAgeMinutes: integer(data.indexMaxAgeMinutes, DEFAULT_SETTINGS.indexMaxAgeMinutes, 1, 10080),
 		outputFolder: text(data.outputFolder, DEFAULT_SETTINGS.outputFolder),
 		imageFolder: text(data.imageFolder, DEFAULT_SETTINGS.imageFolder),
@@ -30,6 +39,7 @@ export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
 		referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
 		referencesHeadings: referencesHeadings(data.referencesHeadings), // 0.5 R10
 		recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
+		collectConcurrency: integer(data.collectConcurrency, defaultCollectConcurrency(concurrency), 1, 8), // 0.6 OPT-10
 	};
 }
 

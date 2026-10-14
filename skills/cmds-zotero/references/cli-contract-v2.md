@@ -324,7 +324,8 @@ needsImport}` with `state` one of `none`, `behind` (Zotero has annotations witho
 `foreign` (a note has the identity but not this plugin's owner marker; never written) and `duplicate`. It compares the
 note's `annotation-<attachment>-<annotation>` markers (detached blocks included) with the item's annotations; `orphaned`
 counts blocks whose annotation was deleted in Zotero, which are kept, never removed. Zotero unreachable is `ok:false,
-reason: bbt-unreachable` with `bbtError`.
+reason: bbt-unreachable` with `bbtError`. A Zotero older than 10 refuses the reading-history search: that is `ok:false,
+reason: zotero-too-old` (0.6), never `bbt-unreachable`.
 
 `import` takes exactly one selector (`--citekey`, or `--item-key` with `--library`) and is a dry run unless `--apply`.
 It renders from the item as Zotero has it now (one `item.export` plus `item.attachments`; the saved index is not

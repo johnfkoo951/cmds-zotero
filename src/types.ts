@@ -25,6 +25,12 @@ export interface CmdsZoteroSettings {
 	referencesHeadings: string[];
 	/** Days of Zotero reading history "Send recently read papers to notes" lists (1–365). */
 	recentReadsDays: number;
+	/**
+	 * 0.6 OPT-10: parallel requests during an index refresh (attachment batches, per-library and collection searches), apart
+	 * from `concurrency` (export batches, bibliography and other reads). 1–8; an older settings file derives it from
+	 * `concurrency` (twice the value, at most 8: the 0.6 wave-1 behaviour).
+	 */
+	collectConcurrency: number;
 }
 
 // 0.5 R10: default References headings; an empty configured list falls back to these.
@@ -48,6 +54,7 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	referencesFollowActiveNote: true,
 	referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS], // 0.5 R10
 	recentReadsDays: 30,
+	collectConcurrency: 4, // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
 };
 
 export interface ItemIdentity {
@@ -75,15 +82,44 @@ export interface Annotation {
 	sortIndex?: string;
 }
 
+/**
+ * Additive (0.6): an annotation made in Zotero's EPUB or web-snapshot reader. Such annotations have no PDF page: their
+ * position is an EPUB CFI (`FragmentSelector`) or a CSS selector (`CssSelector`), kept as Zotero reports it. They live
+ * beside `annotations` so readers of the PDF contract (0.5 and the offline core) keep seeing only PDF annotations.
+ */
+export interface ReaderAnnotation {
+	key: string;
+	attachmentKey: string;
+	type: string;
+	text: string;
+	comment: string;
+	color: string;
+	pageLabel: string;
+	version: number;
+	/** `zotero://select/<library|groups/N>/items/<attachmentKey>`: open-pdf links are used for PDF annotations only. */
+	uri: string;
+	tags: string[];
+	dateModified: string;
+	sortIndex?: string;
+	imagePath?: string;
+	/** Zotero's position object (`type` names the selector; `value` holds the CFI or CSS selector). */
+	position: Record<string, unknown>;
+}
+
 export interface Attachment {
 	key: string;
 	openURI: string;
 	path: string | null;
 	title: string;
 	annotations: Annotation[];
-	/** Additive (0.4): from the BetterBibTeX JSON export when present; lets a null-path PDF be told apart from a snapshot. */
+	/**
+	 * Additive (0.4): the MIME type when Better BibTeX reports one (`contentType`, or the BBT JSON `mimeType` since 0.6);
+	 * lets a null-path PDF be told apart from an EPUB or a snapshot. `attachmentFormat()` also reads the file extension.
+	 */
 	contentType?: string;
 	filename?: string;
+	/** Additive (0.6): EPUB and snapshot annotations; absent when the attachment has none. */
+	readerAnnotations?: ReaderAnnotation[];
 }
 
 export interface ZoteroIndexEntry extends ItemIdentity {
@@ -122,6 +158,32 @@ export interface Diagnostic {
 	citekey?: string;
 }
 
+/**
+ * Additive (0.6): one Zotero library as a refresh saw it (`user.groups` plus its parent-item search). Readers of an older
+ * index find the field absent; readers must skip elements they cannot read (see `indexLibraries()`).
+ */
+export interface IndexLibrary {
+	libraryID: number;
+	name: string;
+	/** `user` (library 1), `group` (item URIs under /groups/N/), `feed` (items only without the feed filter), `unknown` (empty or unreadable). */
+	kind: "user" | "group" | "feed" | "unknown";
+	groupID?: number;
+	/** Parent items Better BibTeX listed in this library during the refresh (feed items are not counted). */
+	items: number;
+	/** Entries of this library in the index, previous entries kept for skipped items included. */
+	indexed: number;
+}
+
+/** Additive (0.6): one collection of an indexed library, flat; `parentKey` is null at the library root. */
+export interface IndexCollection {
+	libraryID: number;
+	key: string;
+	name: string;
+	parentKey: string | null;
+	/** Ids of index entries filed directly in this collection (not in subcollections); absent when membership could not be read. */
+	items?: string[];
+}
+
 export interface ZoteroIndex {
 	schemaVersion: 2;
 	generatedAt: string;
@@ -131,6 +193,12 @@ export interface ZoteroIndex {
 	capabilities: Capabilities;
 	diagnostics: Diagnostic[];
 	complete: boolean;
+	/** Additive (0.6): the libraries Better BibTeX listed; absent from older indexes and when `user.groups` was unavailable. */
+	libraries?: IndexLibrary[];
+	/** Additive (0.6): every collection of the listed libraries with its direct members; absent when the tree was unavailable. */
+	collections?: IndexCollection[];
+	/** Additive (0.6): sorted ids of entries Zotero marks as retracted; absent when the flag could not be read. */
+	retracted?: string[];
 }
 
 export type Resolution =

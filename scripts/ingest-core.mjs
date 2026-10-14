@@ -7464,6 +7464,17 @@ function entryHash(entry) {
   const { contentHash: _hash, ...rest } = entry;
   return contentHash(rest);
 }
+function validReaderAnnotations(value, attachmentKey, item) {
+  if (!Array.isArray(value)) return false;
+  for (const annotation of value) {
+    if (!record(annotation) || typeof annotation.key !== "string" || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachmentKey || typeof annotation.version !== "number" || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags) || !record(annotation.position)) return false;
+    if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text4) => typeof text4 !== "string")) return false;
+    if (annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string" || annotation.sortIndex !== void 0 && typeof annotation.sortIndex !== "string") return false;
+    const location = parseZoteroURI(annotation.uri);
+    if (location.action !== "select" || location.itemKey !== attachmentKey || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
+  }
+  return true;
+}
 function validateEntryStructure(value) {
   if (!record(value) || !validateIdentity(value)) return false;
   const item = value;
@@ -7484,6 +7495,7 @@ function validateEntryStructure(value) {
         const location = parseZoteroURI(annotation.uri);
         if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
       }
+      if (attachment.readerAnnotations !== void 0 && !validReaderAnnotations(attachment.readerAnnotations, attachment.key, item)) return false;
     }
     return !item.attachmentPath || item.attachments.some((attachment) => attachment.path === item.attachmentPath);
   } catch {
@@ -8021,7 +8033,7 @@ function bbtObservation(error) {
     case "aborted":
       return `The request to ${at} was aborted by the plugin before Zotero answered`;
     case "rpc":
-      return `Better BibTeX at ${at} reported an error (${error.detail})`;
+      return `Better BibTeX at ${at} reported an error (${error.detail}${error.rpcMessage ? `: ${error.rpcMessage.replace(/\s+/g, " ").trim().slice(0, 200)}` : ""})`;
     default:
       return `Better BibTeX at ${at} returned an unexpected response (${error.detail})`;
   }
@@ -8043,6 +8055,19 @@ function describeBbtError(error) {
     default:
       return `${observed}.`;
   }
+}
+var ZoteroVersionError = class extends Error {
+  constructor(feature, required, found, cause) {
+    super(`${feature} needs Zotero ${required} or later${found ? `; this Zotero is ${found}` : "; this Zotero does not support the search it needs"}. Update Zotero, then retry.`);
+    this.feature = feature;
+    this.required = required;
+    this.found = found;
+    this.cause = cause;
+    this.name = "ZoteroVersionError";
+  }
+};
+function isZoteroVersionError(error) {
+  return error instanceof ZoteroVersionError || error instanceof Error && error.name === "ZoteroVersionError" && typeof error.required === "number";
 }
 function bbtErrorPayload(error) {
   return isBbtTransportError(error) ? { reason: error.reason, endpoint: error.endpoint } : null;
@@ -8082,26 +8107,37 @@ function httpRequest(rawURL, timeoutMs, body, signal) {
     request.end(body);
   });
 }
-async function rpc(endpoint, method, params, timeoutMs, signal) {
-  const url = `${endpoint.replace(/\/$/, "")}/json-rpc`;
-  const response = await httpRequest(url, timeoutMs, JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal);
-  if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", url, `BBT HTTP ${response.status} for ${method}`, { status: response.status });
-  let parsed;
-  try {
-    parsed = JSON.parse(response.text);
-  } catch (error) {
-    throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${method}`, { cause: error });
-  }
-  if (!record(parsed) || parsed.jsonrpc !== "2.0" || parsed.id !== 1) throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`);
-  if ("error" in parsed) {
-    const fault = record(parsed.error) ? parsed.error : {};
-    throw new BbtTransportError("rpc", url, `BBT RPC error for ${method}`, {
+function settleReply(reply, id, url, method) {
+  if (!record(reply) || reply.jsonrpc !== "2.0") return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+  if ("error" in reply) {
+    if (reply.id !== null && reply.id !== id) return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+    const fault = record(reply.error) ? reply.error : {};
+    return { ok: false, error: new BbtTransportError("rpc", url, `BBT RPC error for ${method}`, {
       ...typeof fault.code === "number" ? { rpcCode: fault.code } : {},
       ...typeof fault.message === "string" ? { rpcMessage: fault.message.slice(0, 500) } : {}
-    });
+    }) };
   }
-  if (!("result" in parsed)) throw new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`);
-  return parsed.result;
+  if (reply.id !== id) return { ok: false, error: new BbtTransportError("invalid-response", url, `Invalid BBT RPC envelope for ${method}`) };
+  if (!("result" in reply)) return { ok: false, error: new BbtTransportError("invalid-response", url, `Missing BBT RPC result for ${method}`) };
+  return { ok: true, result: reply.result };
+}
+function rpcURL(endpoint) {
+  return `${endpoint.replace(/\/$/, "")}/json-rpc`;
+}
+async function postRpc(url, body, label, timeoutMs, signal) {
+  const response = await httpRequest(url, timeoutMs, JSON.stringify(body), signal);
+  if (response.status !== 200) throw new BbtTransportError(response.status === 404 ? "http-404" : "http-other", url, `BBT HTTP ${response.status} for ${label}`, { status: response.status });
+  try {
+    return JSON.parse(response.text);
+  } catch (error) {
+    throw new BbtTransportError("invalid-response", url, `Invalid BBT RPC JSON for ${label}`, { cause: error });
+  }
+}
+async function rpc(endpoint, method, params, timeoutMs, signal) {
+  const url = rpcURL(endpoint);
+  const settled = settleReply(await postRpc(url, { jsonrpc: "2.0", id: 1, method, params }, method, timeoutMs, signal), 1, url, method);
+  if (!settled.ok) throw settled.error;
+  return settled.result;
 }
 async function mapBounded(items, concurrency, fn) {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("Concurrency must be between 1 and 8");
@@ -8681,7 +8717,9 @@ var DEFAULT_SETTINGS = {
   referencesFollowActiveNote: true,
   referencesHeadings: [...DEFAULT_REFERENCES_HEADINGS],
   // 0.5 R10
-  recentReadsDays: 30
+  recentReadsDays: 30,
+  collectConcurrency: 4
+  // 0.6 OPT-10: twice the default concurrency, as refreshes have run since wave 1
 };
 
 // src/citations/scan.ts
@@ -9203,8 +9241,22 @@ var DIAGNOSTIC_CODES2 = {
   "legacy-plugin-enabled": "error",
   "index-stale": "info",
   "index-in-git": "warning",
-  "legacy-frontmatter-dialect": "info"
+  "legacy-frontmatter-dialect": "info",
   // 0.5 R14
+  "reader-annotations": "info",
+  // 0.6 epub-snapshot-annotations
+  // 0.6 index-refresh-resilience: items a refresh left out instead of aborting.
+  "item-skipped": "warning",
+  "missing-citekey": "warning",
+  // 0.6 group-library-validation (report-only).
+  "library-not-indexed": "warning",
+  "library-empty": "info",
+  "feed-library": "info",
+  "collections-unavailable": "info",
+  // 0.6 collection-membership-index
+  // 0.6 retraction-flags-from-zotero.
+  "retracted-source": "warning",
+  "retraction-check-unavailable": "info"
 };
 function diagnostic(code, message, extra = {}) {
   const result = { code, severity: DIAGNOSTIC_CODES2[code], message };
@@ -9883,6 +9935,9 @@ function readingOrder(entry) {
     return ordered.map(({ annotation }) => ({ attachment, annotation }));
   });
 }
+
+// src/api/normalize.ts
+var MAX_READER_POSITION = 16 * 1024;
 
 // src/citations/score.ts
 function completionRows(entries) {
@@ -11072,6 +11127,7 @@ async function recentAction(host, request) {
   } catch (error) {
     const bbtError = bbtErrorPayload(error);
     const message = error instanceof Error ? error.message : "Zotero's reading history could not be read.";
+    if (isZoteroVersionError(error)) return { ...envelope(host, "recent", 2, { reason: "zotero-too-old", message }) };
     return { ...envelope(host, "recent", 2, { reason: bbtError ? "bbt-unreachable" : "invalid-request", message }), ...bbtError ? { bbtError } : {} };
   }
   const today = localDay(host.now);
@@ -11297,15 +11353,19 @@ function integer(value, fallback, min, max) {
 function text3(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
+function defaultCollectConcurrency(concurrency) {
+  return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
+}
 function normalizeSettings(raw) {
   const data = raw && typeof raw === "object" ? raw : {};
+  const concurrency = integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8);
   return {
     bbtEndpoint: text3(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
     zoteroIndexPath: text3(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
     caywFormat: text3(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
     requestTimeoutMs: integer(data.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs, 1e3, 18e4),
     attachmentTimeoutMs: integer(data.attachmentTimeoutMs, DEFAULT_SETTINGS.attachmentTimeoutMs, 1e3, 18e4),
-    concurrency: integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8),
+    concurrency,
     indexMaxAgeMinutes: integer(data.indexMaxAgeMinutes, DEFAULT_SETTINGS.indexMaxAgeMinutes, 1, 10080),
     outputFolder: text3(data.outputFolder, DEFAULT_SETTINGS.outputFolder),
     imageFolder: text3(data.imageFolder, DEFAULT_SETTINGS.imageFolder),
@@ -11321,7 +11381,9 @@ function normalizeSettings(raw) {
     referencesFollowActiveNote: typeof data.referencesFollowActiveNote === "boolean" ? data.referencesFollowActiveNote : DEFAULT_SETTINGS.referencesFollowActiveNote,
     referencesHeadings: referencesHeadings(data.referencesHeadings),
     // 0.5 R10
-    recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365)
+    recentReadsDays: integer(data.recentReadsDays, DEFAULT_SETTINGS.recentReadsDays, 1, 365),
+    collectConcurrency: integer(data.collectConcurrency, defaultCollectConcurrency(concurrency), 1, 8)
+    // 0.6 OPT-10
   };
 }
 function normalizeTagList(value) {

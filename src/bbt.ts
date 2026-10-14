@@ -1,24 +1,23 @@
 import type { Capabilities, CmdsZoteroSettings, ZoteroIndex, ZoteroIndexEntry } from "./types";
-import { BbtTransportError, httpRequest, isBbtTransportError, mapBounded, rpc, type BbtTransportReason } from "./api/transport";
-import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, text } from "./api/normalize";
+import { BbtTransportError, httpRequest, isBbtTransportError, isUnknownConditionFault, mapBounded, rpc, rpcBatch, zoteroMajor, ZoteroVersionError, type BbtTransportReason } from "./api/transport";
+import { normalizeAttachments, normalizeEntryUnhashed, parseItemURI, primaryPdfPath, text } from "./api/normalize";
+import { collectIndex } from "./index/collector";
+import { defaultCollectConcurrency } from "./settings-data";
 import { record, sealEntry, verifyEntry, verifyIndex } from "./identity";
-import { indexDiagnostics } from "./diagnostics";
 import { positiveInteger } from "./uris";
 import { addDays, clampRecentDays, dayTerms, localDay, orderRecent, parseRecentItem, recentKey, windowTerms, type RecentRead } from "./recent/recent-reads";
+import { afterTerms, dateByBisection } from "./recent/read-dating";
 
-/** Calendar days probed concurrently while dating recent reads; the probes are single indexed SQLite queries in Zotero. */
+/** Calendar days probed concurrently when an item's reading day must be found by exact-day probes. */
 const RECENT_DAY_BATCH = 7;
+/** Search conditions only Zotero 10 knows; refusing them is how an older Zotero answers a reading-history search. */
+const ZOTERO_10_CONDITIONS: readonly string[] = ["resultLevel", "lastRead"];
 
 /**
- * Parallel `item.attachments` calls during an index refresh: twice the configured parallel requests, at most 8 (the
- * `mapBounded` limit). A refresh makes one such call per parent item; each is a short read whose time is mostly the round
- * trip, so keeping more in flight shortens the refresh while bibliography batches, reading history and the export batches
- * keep the configured value. Doubling keeps the setting meaningful: the default 2 gives 4, a value lowered to 1 for a slow
- * Zotero still gives only 2. An out-of-range value is passed through so `mapBounded` rejects it as before.
+ * The wave-1 refresh concurrency for `concurrency` (twice the value, at most 8). Since 0.6 OPT-10 refreshes use the
+ * separate `collectConcurrency` setting, whose default for an older settings file is this value.
  */
-export function attachmentConcurrency(concurrency: number): number {
-	return Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 8 ? Math.min(8, concurrency * 2) : concurrency;
-}
+export function attachmentConcurrency(concurrency: number): number { return defaultCollectConcurrency(concurrency); }
 
 /**
  * Identity a fresh single-item collection must reproduce; the cached citekey is only the lookup handle. `libraryID` is the
@@ -116,77 +115,21 @@ export class BbtService {
 		});
 	}
 
+	/**
+	 * A new index from Better BibTeX (0.6: per-library searches, skipped items instead of aborts, collections, retraction
+	 * flags, batched attachment reads; see `collectIndex`). The previous index is the host's validated snapshot: its sealed
+	 * entries are not hashed again, and skipped items keep their previous entries.
+	 */
 	async collect(previous?: ZoteroIndex): Promise<ZoteroIndex> {
 		const settings = { ...this.settings };
 		const signal = this.controller.signal;
-		const call = (method: string, params: unknown[], timeout = settings.requestTimeoutMs): Promise<unknown> => this.observed(() => rpc(settings.bbtEndpoint, method, params, timeout, signal));
 		const capabilities = await this.readCapabilities(settings, signal);
-		const result = await call("item.search", [[["itemType", "isNot", "attachment"], ["itemType", "isNot", "annotation"], ["itemType", "isNot", "note"]], "*"]);
-		if (!Array.isArray(result)) throw new Error("Invalid BBT parent search response");
-		const libraries = new Map<string, Map<string, ReturnType<typeof parseItemURI>>>();
-		for (const item of result) {
-			if (!record(item)) throw new Error("Malformed BBT search item");
-			const citekey = text(item.citekey) || text(item.citationKey) || text(item["citation-key"]);
-			const library = text(item.library);
-			if (!citekey || !library) throw new Error("Search item lacks named library citation identity");
-			const scope = parseItemURI(text(item.id));
-			const keys = libraries.get(library) ?? new Map<string, ReturnType<typeof parseItemURI>>();
-			if (keys.has(citekey)) throw new Error("Duplicate citation key inside a named library cannot be exported unambiguously");
-			for (const prior of keys.values()) if (prior.libraryType !== scope.libraryType || prior.groupID !== scope.groupID) throw new Error("Library name maps to multiple URI scopes");
-			keys.set(citekey, scope);
-			libraries.set(library, keys);
-		}
-		const batches: { library: string; keys: string[] }[] = [];
-		for (const [library, scoped] of libraries) {
-			const keys = [...scoped.keys()];
-			for (let offset = 0; offset < keys.length; offset += 50) batches.push({ library, keys: keys.slice(offset, offset + 50) });
-		}
-		const libraryIDs = new Map<string, number>();
-		// The previous index is the host's validated snapshot: its sealed entries are not hashed again.
 		const validPrevious = previous && verifyIndex(previous) ? new Map(previous.entries.map(entry => [entry.id, entry])) : new Map<string, ZoteroIndexEntry>();
-		const exports = await mapBounded(batches, settings.concurrency, async ({ library, keys }) => {
-			const serialized = await call("item.export", [keys, "BetterBibTeX JSON", library]);
-			if (typeof serialized !== "string") throw new Error("BBT export must return a JSON string");
-			const exported: unknown = JSON.parse(serialized);
-			if (!record(exported) || !Array.isArray(exported.items)) throw new Error("Invalid BetterBibTeX JSON export envelope");
-			const entries = exported.items.map(item => {
-				if (!record(item) || !positiveInteger(item.libraryID)) throw new Error("Exported library identity mismatch");
-				const priorID = libraryIDs.get(library);
-				if (priorID !== undefined && priorID !== item.libraryID) throw new Error("Named library has inconsistent local IDs");
-				libraryIDs.set(library, item.libraryID);
-				const id = `${item.libraryID}:${text(item.itemKey)}`;
-				// Hashed once below, after the attachments step changed it for the last time.
-				const entry = normalizeEntryUnhashed(item, validPrevious.get(id));
-				const searched = libraries.get(library)?.get(entry.citekey);
-				if (!keys.includes(entry.citekey) || !searched || searched.itemKey !== entry.itemKey || searched.libraryType !== entry.libraryType || searched.groupID !== entry.groupID) throw new Error("Export differs from searched item identity");
-				return entry;
-			});
-			if (entries.length !== keys.length || new Set(entries.map(entry => entry.citekey)).size !== keys.length) throw new Error("BBT export did not cover the requested parents");
-			return entries;
-		});
-		// Each entry is structure-checked and hashed once, after its last change (sealEntry): with attachments, or with the
-		// previous attachments (or none) when this item's attachments could not be read.
-		const entries = await mapBounded(exports.flat(), attachmentConcurrency(settings.concurrency), async entry => {
-			try {
-				const attachments = await call("item.attachments", [entry.citekey, entry.libraryID], settings.attachmentTimeoutMs);
-				entry.attachments = normalizeAttachments(attachments, entry);
-				entry.attachmentPath = entry.attachments.find(attachment => attachment.path?.toLowerCase().endsWith(".pdf"))?.path ?? "";
-				if (!sealEntry(entry)) throw new Error("Invalid enriched attachment data");
-			} catch (error) {
-				if (signal.aborted) throw error;
-				const old = validPrevious.get(entry.id);
-				entry.attachments = old && old.libraryType === entry.libraryType && old.groupID === entry.groupID ? old.attachments : [];
-				entry.attachmentPath = old && entry.attachments === old.attachments ? old.attachmentPath : "";
-				entry.attachmentStatus = "unavailable";
-				if (!sealEntry(entry)) throw new Error("Invalid normalized parent item");
-			}
-			return entry;
-		});
-		if (signal.aborted) throw new Error("BBT collection cancelled");
-		entries.sort((left, right) => left.id.localeCompare(right.id));
-		const index: ZoteroIndex = { schemaVersion: 2, generatedAt: new Date().toISOString(), source: "better-bibtex", count: entries.length, entries, capabilities, diagnostics: indexDiagnostics(entries), complete: entries.every(entry => entry.attachmentStatus === "complete") };
-		if (!verifyIndex(index)) throw new Error("Invalid collected Zotero index");
-		return index;
+		return collectIndex({
+			call: (method, params, timeout = settings.requestTimeoutMs) => this.observed(() => rpc(settings.bbtEndpoint, method, params, timeout, signal)),
+			batch: (calls, timeout) => this.observed(() => rpcBatch(settings.bbtEndpoint, calls, timeout, signal)),
+			signal,
+		}, settings, capabilities, validPrevious);
 	}
 
 	/** CSL bibliography text for one entry; `style` defaults to the configured style (0.5 R4: every style is observed and typed). */
@@ -200,13 +143,18 @@ export class BbtService {
 
 	/**
 	 * Items whose attachment Zotero opened within the last `days` calendar days, newest first (Zotero 10
-	 * `attachmentLastRead`). One window search, then exact-day searches backwards from today until every item has its day;
-	 * each probe is one cheap Zotero search. Read-only. Rows without a citekey (standalone PDFs) are left out.
+	 * `attachmentLastRead`). One window search, then the day of each item's latest read by bisection over the window
+	 * (0.6 OPT-19: date-form `lastRead isAfter` searches, about log2(days) per distinct reading day instead of one per day),
+	 * each proposed day confirmed by one exact-day search.
+	 * Read-only. Rows without a citekey (standalone PDFs) are left out. A Zotero that refuses the Zotero 10 search
+	 * conditions raises `ZoteroVersionError`, never a Better BibTeX outage.
 	 */
 	async recentlyRead(days: number, options: { signal?: AbortSignal; now?: Date } = {}): Promise<RecentRead[]> {
 		const window = clampRecentDays(days);
 		const search = async (terms: unknown[]): Promise<unknown[]> => {
-			const result = await this.call("item.search", [terms], this.settings.requestTimeoutMs, options.signal);
+			let result: unknown;
+			try { result = await this.call("item.search", [terms], this.settings.requestTimeoutMs, options.signal); }
+			catch (error) { throw await this.zotero10Gate(error, options.signal); }
 			if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
 			return result as unknown[];
 		};
@@ -215,20 +163,53 @@ export class BbtService {
 			const parsed = parseRecentItem(raw);
 			if (parsed) rows.set(recentKey(parsed), { ...parsed, readOn: null });
 		}
+		if (!rows.size) return [];
 		const today = localDay(options.now ?? new Date());
-		let undated = rows.size;
-		for (let offset = 0; offset < window && undated > 0; offset += RECENT_DAY_BATCH) {
+		const concurrency = Math.max(1, this.settings.concurrency);
+		const keysOf = (found: unknown[]): Set<string> => {
+			const keys = new Set<string>();
+			for (const raw of found) { const parsed = parseRecentItem(raw); if (parsed) keys.add(recentKey(parsed)); }
+			return keys;
+		};
+		// Bisection proposes each item's day; one exact-day search per proposed day (the `is` form verified live in 0.5)
+		// confirms it. An item its proposed day does not confirm is dated by exact-day probes backwards from today, as before
+		// 0.6, so a Zotero that compares `isAfter` differently costs searches but never mis-dates a read.
+		const proposed = await dateByBisection([...rows.keys()], addDays(today, -(window - 1)), today, async day => keysOf(await search(afterTerms(day))), concurrency);
+		const byDay = new Map<string, string[]>();
+		for (const [key, day] of proposed) byDay.set(day, [...(byDay.get(day) ?? []), key]);
+		const proposedDays = [...byDay.keys()];
+		const confirmed = await mapBounded(proposedDays, concurrency, async day => keysOf(await search(dayTerms(day))));
+		const undated = new Set(rows.keys());
+		proposedDays.forEach((day, index) => {
+			for (const key of byDay.get(day) ?? []) {
+				const row = rows.get(key);
+				if (row && confirmed[index].has(key)) { row.readOn = day; undated.delete(key); }
+			}
+		});
+		for (let offset = 0; offset < window && undated.size > 0; offset += RECENT_DAY_BATCH) {
 			const daysToProbe = Array.from({ length: Math.min(RECENT_DAY_BATCH, window - offset) }, (_, step) => addDays(today, -(offset + step)));
-			const results = await mapBounded(daysToProbe, Math.max(1, this.settings.concurrency), day => search(dayTerms(day)));
+			const results = await mapBounded(daysToProbe, concurrency, async day => keysOf(await search(dayTerms(day))));
 			results.forEach((found, step) => {
-				for (const raw of found) {
-					const parsed = parseRecentItem(raw);
-					const row = parsed ? rows.get(recentKey(parsed)) : undefined;
-					if (row && row.readOn === null) { row.readOn = daysToProbe[step]; undated--; }
+				for (const key of found) {
+					const row = rows.get(key);
+					if (row && undated.has(key)) { row.readOn = daysToProbe[step]; undated.delete(key); }
 				}
 			});
 		}
 		return orderRecent([...rows.values()]);
+	}
+
+	/**
+	 * 0.6 recent-reads-efficiency: a refused Zotero 10 search condition (`Invalid condition 'resultLevel'`, JSON-RPC
+	 * -32603) becomes a `ZoteroVersionError` naming the version `api.ready` reports, unless that version is 10 or later
+	 * (then the original fault stands). Any other error is returned unchanged.
+	 */
+	private async zotero10Gate(error: unknown, signal?: AbortSignal): Promise<unknown> {
+		if (!isUnknownConditionFault(error, ZOTERO_10_CONDITIONS)) return error;
+		let found: string | null = null;
+		try { found = (await this.capabilities({ signal })).zotero; } catch { /* the refused condition alone tells */ }
+		const major = zoteroMajor(found);
+		return major !== null && major >= 10 ? error : new ZoteroVersionError("Zotero's reading history", 10, found, error);
 	}
 
 	/** Parent items whose citekey is exactly `citekey`, in every library (a citekey is unique only within one library). */
@@ -283,7 +264,7 @@ export class BbtService {
 		if (entry.itemKey !== target.itemKey || (target.libraryID !== undefined && entry.libraryID !== target.libraryID) || entry.libraryType !== target.libraryType || (entry.groupID ?? 0) !== (target.groupID ?? 0)) throw new Error("The fresh Better BibTeX export is a different Zotero item; refresh the index.");
 		const attachments = await this.call("item.attachments", [entry.citekey, entry.libraryID], this.settings.attachmentTimeoutMs, signal);
 		entry.attachments = normalizeAttachments(attachments, entry);
-		entry.attachmentPath = entry.attachments.find(attachment => attachment.path?.toLowerCase().endsWith(".pdf"))?.path ?? "";
+		entry.attachmentPath = primaryPdfPath(entry.attachments);
 		entry.attachmentStatus = "complete";
 		if (!sealEntry(entry)) throw new Error("Invalid fresh Zotero item data");
 		return entry;

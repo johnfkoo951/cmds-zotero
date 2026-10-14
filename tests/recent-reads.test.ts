@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as http from "node:http";
 import { BbtService } from "../src/bbt";
+import { bbtErrorPayload, isUnknownConditionFault, isZoteroVersionError } from "../src/api/transport";
 import { DEFAULT_SETTINGS, type ZoteroIndexEntry } from "../src/types";
 import { normalizeAttachments, normalizeEntry } from "../src/api/normalize";
 import { entryHash } from "../src/identity";
@@ -41,7 +42,8 @@ async function serve(handler: (call: { method: string; params: unknown[] }) => u
 			calls.push(call);
 			let payload: unknown;
 			try { payload = { jsonrpc: "2.0", id: 1, result: handler(call) }; }
-			catch (error) { payload = { jsonrpc: "2.0", id: 1, error: { code: -32602, message: error instanceof Error ? error.message : "error" } }; }
+			// Better BibTeX's real error shape: id null (json-rpc.ts handle()).
+			catch (error) { payload = { jsonrpc: "2.0", error: { code: -32602, message: error instanceof Error ? error.message : "error" }, id: null }; }
 			response.setHeader("Content-Type", "application/json");
 			response.end(JSON.stringify(payload));
 		});
@@ -128,26 +130,71 @@ test("note status compares annotation blocks without contacting Zotero", () => {
 	assert.equal(noteAnnotationIDs("<!-- cmds-zotero:annotation-EFGH2345-JKLM2345:nothex -->").size, 0, "malformed markers are not counted");
 });
 
-test("recentlyRead dates every item with exact-day probes and stops once all are dated", async () => {
-	const readOn: Record<string, string> = { ABCD2345: "2026-10-10", WXYZ2345: "2026-10-12", KLMN2345: "2026-09-30" };
-	const rows = [row("ABCD2345", "Example2026", "Second"), row("WXYZ2345", "Grouped2026", "First", 12345), row("KLMN2345", "Third2026", "Third"), { ...row("EFGH2345", "", "Standalone PDF"), citekey: "" }];
-	const bbt = await serve(call => {
+/** A mock reading history: `isInTheLast` returns every row, `isAfter` the rows read strictly after the day, `is` the rows of that day. */
+function readingHistory(rows: Record<string, unknown>[], readOn: Record<string, string>, options: { afterShift?: number } = {}) {
+	return (call: { method: string; params: unknown[] }): unknown => {
 		assert.equal(call.method, "item.search");
 		const terms = call.params[0] as unknown[][];
 		assert.deepEqual(terms[0], ["resultLevel", "item"]);
-		const [, operator, value] = terms[1] as [string, string, string];
+		const [field, operator, value] = terms[1] as [string, string, string];
+		assert.equal(field, "lastRead");
+		const day = (item: Record<string, unknown>): string | undefined => readOn[String(item.id).slice(-8)];
 		if (operator === "isInTheLast") return rows;
+		// `afterShift` models a Zotero whose isAfter compares a different day than the exact-day `is` does.
+		if (operator === "isAfter") return rows.filter(item => { const read = day(item); return read !== undefined && read > addDays(value, options.afterShift ?? 0); });
 		assert.equal(operator, "is");
-		return rows.filter(item => readOn[String(item.id).slice(-8)] === value);
-	});
+		return rows.filter(item => day(item) === value);
+	};
+}
+
+test("recentlyRead dates every item by bisection, confirmed by one exact-day search per reading day (0.6 OPT-19)", async () => {
+	const readOn: Record<string, string> = { ABCD2345: "2026-10-10", WXYZ2345: "2026-10-12", KLMN2345: "2026-09-30" };
+	const rows = [row("ABCD2345", "Example2026", "Second"), row("WXYZ2345", "Grouped2026", "First", 12345), row("KLMN2345", "Third2026", "Third"), { ...row("EFGH2345", "", "Standalone PDF"), citekey: "" }];
+	const bbt = await serve(readingHistory(rows, readOn));
 	try {
 		const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: bbt.endpoint });
 		const recent = await service.recentlyRead(30, { now: new Date(2026, 9, 12, 9) });
 		assert.deepEqual(recent.map(item => [item.citekey, item.readOn]), [["Grouped2026", "2026-10-12"], ["Example2026", "2026-10-10"], ["Third2026", "2026-09-30"]]);
-		const dayProbes = bbt.calls.filter(call => (call.params[0] as unknown[][])[1][1] === "is").length;
-		assert.equal(dayProbes, 14, "two 7-day batches reach 2026-09-30; no further days are probed");
+		const operators = bbt.calls.map(call => (call.params[0] as unknown[][])[1][1]);
+		assert.equal(operators.filter(operator => operator === "is").length, 3, "one confirmation per distinct reading day and no exact-day scan");
+		assert.ok(operators.filter(operator => operator === "isAfter").length <= 3 * 5, "at most ceil(log2 30) searches per item");
 		service.dispose();
 	} finally { await bbt.close(); }
+});
+
+test("recentlyRead never mis-dates a read when Zotero's isAfter disagrees with its exact-day search: unconfirmed items fall back to exact-day probes", async () => {
+	const readOn: Record<string, string> = { ABCD2345: "2026-10-10", WXYZ2345: "2026-10-12", KLMN2345: "2026-09-30" };
+	const rows = [row("ABCD2345", "Example2026", "Second"), row("WXYZ2345", "Grouped2026", "First", 12345), row("KLMN2345", "Third2026", "Third")];
+	for (const afterShift of [-1, 1]) {
+		const bbt = await serve(readingHistory(rows, readOn, { afterShift }));
+		try {
+			const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: bbt.endpoint });
+			const recent = await service.recentlyRead(30, { now: new Date(2026, 9, 12, 9) });
+			assert.deepEqual(recent.map(item => [item.citekey, item.readOn]), [["Grouped2026", "2026-10-12"], ["Example2026", "2026-10-10"], ["Third2026", "2026-09-30"]], `isAfter shifted by ${afterShift} day`);
+			service.dispose();
+		} finally { await bbt.close(); }
+	}
+});
+
+test("recentlyRead on a Zotero older than 10 is a ZoteroVersionError naming the version, never a Better BibTeX outage", async () => {
+	for (const [zotero, expectVersionError] of [["9.0.4", true], ["10.0.6", false]] as const) {
+		const bbt = await serve(call => {
+			if (call.method === "api.ready") return { zotero, betterbibtex: "7.0.5" };
+			throw new Error("Invalid condition 'resultLevel' in hasOperator()");
+		});
+		try {
+			const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: bbt.endpoint });
+			const error = await service.recentlyRead(30).then(() => null, (caught: unknown) => caught);
+			assert.ok(error instanceof Error);
+			assert.equal(isZoteroVersionError(error), expectVersionError, zotero);
+			if (expectVersionError) {
+				assert.match(error.message, /needs Zotero 10 or later; this Zotero is 9\.0\.4/);
+				assert.equal(bbtErrorPayload(error), null, "no bbtError: Better BibTeX answered");
+			} else assert.equal(bbtErrorPayload(error)?.reason, "rpc", "Zotero 10 refusing the search is a real RPC fault");
+			service.dispose();
+		} finally { await bbt.close(); }
+	}
+	assert.equal(isUnknownConditionFault(new Error("Invalid condition 'lastRead' in hasOperator()"), ["lastRead"]), false, "only a typed RPC fault counts");
 });
 
 test("recentlyRead with nothing read in the window makes exactly one search", async () => {
@@ -160,7 +207,7 @@ test("recentlyRead with nothing read in the window makes exactly one search", as
 	} finally { await bbt.close(); }
 });
 
-test("collectEntry reads one item fresh, follows a citekey renamed in Zotero, and refuses another item", async () => {
+test("collectEntry reads one item fresh, follows a citekey renamed in Zotero after BBT's real id-null not-found reply, and refuses another item", async () => {
 	let renamed = false;
 	const bbt = await serve(call => {
 		if (call.method === "item.export") {

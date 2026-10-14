@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as http from "node:http";
 import * as net from "node:net";
-import { BbtTransportError, bbtErrorPayload, bbtObservation, bbtReasonLabel, classifyTransportError, describeBbtError, httpRequest, isBbtTransportError, rpc, transportReasonOf } from "../src/api/transport";
+import { BbtTransportError, bbtErrorPayload, bbtObservation, bbtReasonLabel, classifyTransportError, describeBbtError, httpRequest, isBbtTransportError, rpc, rpcBatch, transportReasonOf } from "../src/api/transport";
 import { BbtService, type BbtOutcome } from "../src/bbt";
 import { IndexRefusalError, classifyRefreshError, describeRefreshFailure, transportErrorOf } from "../src/index-service";
 import { DEFAULT_SETTINGS, type ZoteroIndexEntry } from "../src/types";
@@ -107,7 +107,11 @@ test("httpRequest and rpc throw typed errors for a closed port, a hung server, H
 		if (request.url === "/broken/json-rpc") { response.statusCode = 500; response.end("boom"); return; }
 		if (request.url === "/garbage/json-rpc") { response.end("{not-json"); return; }
 		if (request.url === "/shape/json-rpc") { response.end(JSON.stringify({ hello: "world" })); return; }
-		if (request.url === "/rpcerror/json-rpc") { response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "Method not found" } })); return; }
+		// Better BibTeX's real error shape (json-rpc.ts handle()): HTTP 200 and id null, never the request's id.
+		if (request.url === "/rpcerror/json-rpc") { response.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32601, message: "Method not found: item.bibliographyx" }, id: null })); return; }
+		if (request.url === "/rpcerror-own-id/json-rpc") { response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32602, message: "not found: Gone2026" } })); return; }
+		if (request.url === "/rpcerror-foreign-id/json-rpc") { response.end(JSON.stringify({ jsonrpc: "2.0", id: 7, error: { code: -32602, message: "not found" } })); return; }
+		if (request.url === "/null-success/json-rpc") { response.end(JSON.stringify({ jsonrpc: "2.0", id: null, result: "orphan" })); return; }
 		if (request.url === "/noresult/json-rpc") { response.end(JSON.stringify({ jsonrpc: "2.0", id: 1 })); return; }
 		response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { zotero: "7", betterbibtex: "7" } }));
 	});
@@ -126,15 +130,22 @@ test("httpRequest and rpc throw typed errors for a closed port, a hung server, H
 		assert.ok(isBbtTransportError(broken));
 		assert.equal(broken.reason, "http-other");
 		assert.equal(broken.status, 500);
-		for (const path of ["/garbage", "/shape", "/noresult"]) {
+		for (const path of ["/garbage", "/shape", "/noresult", "/null-success", "/rpcerror-foreign-id"]) {
 			const invalid = await rejection(rpc(`${api.endpoint}${path}`, "api.ready", [], 1000));
 			assert.ok(isBbtTransportError(invalid), path);
 			assert.equal(invalid.reason, "invalid-response", path);
 		}
 		const rpcError = await rejection(rpc(`${api.endpoint}/rpcerror`, "item.bibliography", [], 1000));
 		assert.ok(isBbtTransportError(rpcError));
-		assert.equal(rpcError.reason, "rpc");
+		assert.equal(rpcError.reason, "rpc", "an id-null error reply is an RPC fault, never an invalid envelope");
 		assert.equal(rpcError.detail, "BBT RPC error for item.bibliography");
+		assert.equal(rpcError.rpcCode, -32601);
+		assert.equal(rpcError.rpcMessage, "Method not found: item.bibliographyx");
+		assert.match(rpcError.message, /reported an error \(BBT RPC error for item\.bibliography: Method not found: item\.bibliographyx\)\.$/);
+		const ownId = await rejection(rpc(`${api.endpoint}/rpcerror-own-id`, "item.export", [], 1000));
+		assert.ok(isBbtTransportError(ownId));
+		assert.equal(ownId.reason, "rpc", "an error carrying the request's own id is accepted too (JSON-RPC 2.0)");
+		assert.equal(ownId.rpcMessage, "not found: Gone2026");
 		const controller = new AbortController();
 		const aborted = rejection(httpRequest(`${api.endpoint}/slow/json-rpc?x=1`, 5000, undefined, controller.signal));
 		controller.abort();
@@ -210,7 +221,7 @@ test("BbtService records the last real outcome from calls only and never from it
 	let mode: "ok" | "rpc-error" | "hang" = "ok";
 	const api = await serve((request, response) => {
 		if (mode === "hang") return;
-		if (mode === "rpc-error") { response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: 1, message: "nope" } })); return; }
+		if (mode === "rpc-error") { response.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "nope" }, id: null })); return; }
 		let body = "";
 		request.on("data", chunk => { body += String(chunk); });
 		request.on("end", () => {
@@ -256,4 +267,52 @@ test("BbtService records the last real outcome from calls only and never from it
 		assert.equal(offline.lastOutcome?.ok, false);
 		assert.equal(offline.lastOutcome?.reason, "connection-refused");
 	} finally { offline.dispose(); }
+});
+
+// 0.6 OPT-01: batch replies are matched by position; BBT answers errors with id null and echoes an id of 0 as null.
+test("rpcBatch matches replies by position, settles each request on its own and types whole-batch faults", async () => {
+	let mode: "ok" | "short" | "parse-error" | "not-array" | "bad-id" = "ok";
+	const bodies: unknown[] = [];
+	const api = await serve((request, response) => {
+		let body = "";
+		request.on("data", chunk => { body += String(chunk); });
+		request.on("end", () => {
+			const calls = JSON.parse(body) as { id: number; method: string; params: unknown[] }[];
+			bodies.push(calls);
+			if (mode === "parse-error") { response.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error: synthetic" }, id: null })); return; }
+			if (mode === "not-array") { response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "single" })); return; }
+			const replies = calls.map(call => call.params[0] === "Missing2026"
+				? { jsonrpc: "2.0", error: { code: -32602, message: "Missing2026 not found" }, id: null }
+				: { jsonrpc: "2.0", result: `attachments of ${String(call.params[0])}`, id: mode === "bad-id" ? 99 : call.id });
+			response.end(JSON.stringify(mode === "short" ? replies.slice(1) : replies));
+		});
+	});
+	try {
+		assert.deepEqual(await rpcBatch(api.endpoint, [], 1000), [], "an empty batch never reaches BBT");
+		assert.equal(bodies.length, 0);
+		const calls = ["Alpha2026", "Missing2026", "Gamma2026"].map(citekey => ({ method: "item.attachments", params: [citekey, 1] }));
+		const settled = await rpcBatch(api.endpoint, calls, 1000);
+		assert.deepEqual((bodies[0] as { id: number }[]).map(call => call.id), [1, 2, 3], "ids start at 1: BBT would echo an id of 0 as null");
+		assert.deepEqual(settled.map(reply => reply.ok), [true, false, true]);
+		assert.deepEqual(settled[0], { ok: true, result: "attachments of Alpha2026" });
+		assert.deepEqual(settled[2], { ok: true, result: "attachments of Gamma2026" });
+		const failed = settled[1];
+		assert.ok(!failed.ok && failed.error.reason === "rpc" && failed.error.rpcCode === -32602 && failed.error.rpcMessage === "Missing2026 not found", "the id-null error lands on its own position");
+		mode = "bad-id";
+		const misattributed = await rpcBatch(api.endpoint, calls.slice(0, 1), 1000);
+		assert.ok(!misattributed[0].ok && misattributed[0].error.reason === "invalid-response", "a result for another id is never attributed to this request");
+		mode = "short";
+		const short = await rejection(rpcBatch(api.endpoint, calls, 1000));
+		assert.ok(isBbtTransportError(short) && short.reason === "invalid-response");
+		assert.match(short.detail, /answered 2 of 3 requests/);
+		mode = "parse-error";
+		const parse = await rejection(rpcBatch(api.endpoint, calls, 1000));
+		assert.ok(isBbtTransportError(parse) && parse.reason === "rpc" && parse.rpcCode === -32700);
+		mode = "not-array";
+		const single = await rejection(rpcBatch(api.endpoint, calls, 1000));
+		assert.ok(isBbtTransportError(single) && single.reason === "invalid-response");
+	} finally { await api.close(); }
+	const port = await closedPort();
+	const refused = await rejection(rpcBatch(`http://127.0.0.1:${port}`, [{ method: "api.ready", params: [] }], 1000));
+	assert.ok(isBbtTransportError(refused) && refused.reason === "connection-refused");
 });

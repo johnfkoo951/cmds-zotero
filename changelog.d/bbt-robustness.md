@@ -1,0 +1,8 @@
+- Importing an item whose citation key changed in Zotero works again: Better BibTeX's error replies are now read correctly, so the import follows the item by its key instead of failing.
+- One bad item no longer stops a whole refresh. Duplicate citation keys inside a library, a missing citation key or an item that cannot be exported are skipped with a diagnostic and keep their previous entry; the index is marked incomplete so nothing claims a complete answer.
+- Feeds never enter the index, and two libraries with the same name no longer stop a refresh. *Diagnostics* lists every library with its item counts and reports libraries that are empty or could not be indexed.
+- EPUB and web-snapshot annotations are indexed instead of making the whole item's attachments unavailable; their links select the attachment in Zotero, and PDF links stay as they were.
+- The index records collection membership ("Parent/Child" paths) and Zotero's own retraction flags; a retracted source shows a warning in *Diagnostics*.
+- Refreshes read attachments in batches and have their own *Refresh requests* limit (1–8), so the *Parallel requests* setting again means what it says.
+- "Recently read" finds the day of each read with a handful of Zotero searches instead of one search per day, and each day is double-checked with an exact-day search.
+- On a Zotero older than 10, "Recently read" and the agent `recent` action say that Zotero 10 is needed (`zotero-too-old`) instead of reporting Better BibTeX as unreachable.

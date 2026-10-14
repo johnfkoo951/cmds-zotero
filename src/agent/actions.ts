@@ -32,7 +32,7 @@ import type { ExtractResult } from "../pdf/extract";
 import { extractQuoteCallouts, locateBatch } from "../pdf/locate";
 import type { LocateRequest } from "../pdf/locate";
 import { createHash } from "node:crypto";
-import { bbtErrorPayload, describeBbtError, mapBounded } from "../api/transport";
+import { bbtErrorPayload, describeBbtError, isZoteroVersionError, mapBounded } from "../api/transport";
 import { formatIndexAge, IndexRefusalError } from "../index-service";
 import { textLayerReport, textLayerWarning } from "../pdf/text-layer";
 import { describeNoteStatus, describeSendOutcome, indexEntryFor, localDay, needsSending, readLabel, type ImportNoteResult, type RecentRead, type RecentReport } from "../recent/recent-reads";
@@ -745,6 +745,8 @@ export async function recentAction(host: ActionHost, request: RecentRequest): Pr
 	catch (error) {
 		const bbtError = bbtErrorPayload(error);
 		const message = error instanceof Error ? error.message : "Zotero's reading history could not be read.";
+		// 0.6: Zotero answered but is older than 10, so the reading-history search is refused; Better BibTeX is reachable.
+		if (isZoteroVersionError(error)) return { ...envelope(host, "recent", 2, { reason: "zotero-too-old", message }) };
 		return { ...envelope(host, "recent", 2, { reason: bbtError ? "bbt-unreachable" : "invalid-request", message }), ...(bbtError ? { bbtError } : {}) };
 	}
 	const today = localDay(host.now);
