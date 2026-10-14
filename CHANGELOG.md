@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.3 — 2026-10-15
+
+Importing and updating at scale: notes found wherever they moved, file-name patterns, batches by search with a review list, adopting notes from other plugins, and per-note repairs. Zotero stays read-only and every change to an existing note is previewed and backed up first. With the default settings new notes keep 0.6.2's names and folders. Two things behave differently: *Update all owned literature notes* first shows a review list, and literature notes you moved out of the literature folder that still carry their CMDS identity are now updated where they are.
+
+Finding and naming notes:
+
+- Literature notes moved or renamed anywhere in the vault are found by their identity (`zoteroID` and the plugin's owner marker) and updated where they are, instead of being imported again. Paper hubs that name the item do not count. Diagnose setup lists literature notes outside the output folder.
+- New-note file name and subfolder (Settings → Literature notes) from fixed tokens `{citekey}`, `{title}`, `{shortTitle}`, `{year}`, `{firstAuthor}`, `{itemType}` and `{collection}`, sanitised and length-limited; the import preview shows the resulting path. The defaults keep `@citekey` in the output folder, and existing notes keep their names. These are fixed tokens, not templates.
+- New commands: Open or import literature note, Update current literature note.
+
+Updates and batches:
+
+- The update preview lets you choose which parts to refresh (title and abstract, bibliography entry, metadata and links, Zotero notes, annotations); the rest stays byte for byte.
+- Update all owned literature notes, the new Import literature notes by search (`col:`, `tag:` and the other picker fields; new notes only, with progress and Cancel) and Adopt existing literature notes first show a review list with what happens to each note and a box per row. Nothing is read from Zotero or written before Apply.
+- New command Update literature notes changed in Zotero: lists only notes whose item or annotations changed since the note was last written or since a date you choose; an unknown date is never treated as unchanged.
+- Notes synced by Zotero Better Notes are skipped by batch updates and get a warning in single updates.
+
+Adopting and repairing notes:
+
+- Adopt current note as literature note (and Adopt existing literature notes for every matching note in the vault, after the review list): notes made by Zotero Integration, ZotLit or named by citekey are matched by citekey, DOI or Zotero link (several matching items are offered to choose from; a DOI-only match is unticked), get the missing identity keys line by line and the generated sections appended below your text, with a backup. Hubs, Raw Sources, Better Notes notes and notes CMDS already owns are refused.
+- Rebuild current literature note: after a backup, re-renders the generated sections and repairs damaged, duplicate and missing markers. Every line you wrote stays; an edited or detached duplicate keeps its text.
+- Per-note previewed frontmatter patches with backup and checks before, during and after the write: Refresh frontmatter of current note from Zotero (only the plugin's metadata keys the note already has; never `zoteroID` or `tags`), Remove legacy keys from current note (the keys 0.3 and 0.4 wrote; Report notes with legacy Zotero keys lists them vault-wide without changing anything), and Relink current note to merged Zotero item (when Zotero merged the item; only with a complete index, several candidates go to a chooser).
+
 ## 0.6.2 — 2026-10-15
 
 A citation editor, bibliographies in Zotero's installed styles and a pandoc export kit. Zotero stays read-only, nothing leaves your computer and the plugin runs no other program. Two defaults change what you see: citekey problems are underlined in the editor (Settings → Citations), and *Copy bibliography* keeps the style's own order (Bibliography order: citation restores 0.6.1's order). Literature notes and managed section IDs are unchanged.
