@@ -161,7 +161,9 @@ root `.gitignore` should also carry:
 
 ```gitignore
 /.cmds-zotero/
-/80. References/zotero-index.json
+/References/Zotero/zotero-index.json
 ```
+
+Use your own *Index path* if you changed it (installs from before 0.6.5 often use `/80. References/zotero-index.json`).
 
 Ignore rules do not untrack files already committed; `git rm --cached` them first.

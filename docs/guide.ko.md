@@ -2,8 +2,8 @@
 Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 메타데이터, 하이라이트와 메모, Zotero 노트, 인용과 원문 링크를 한 노트에 모으고, 사람이 쓴 글은 그대로 둡니다. Zotero는 읽기 전용으로 다룹니다.
 
 ## 버전과 공개 상태
-**2026-10-15**에 공개한 **CMDS Zotero 0.6.4** 기준입니다. [GitHub 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.4)에는 CI가 빌드하고 출처를 증명한 `main.js`, `manifest.json`, `styles.css`가 있습니다. **설정 → 커뮤니티 플러그인 → 탐색**에서 설치하거나, 수동 설치나 BRAT로 설치합니다.
-0.6.4는 커뮤니티 디렉터리 등록을 준비합니다. Obsidian 1.13 이상에서도 설치된 스타일을 고르면 설정 칸이 바로 바뀌고, 현재 노트용 명령은 노트가 열려 있을 때만 나타납니다. 0.6.3은 옮긴 문헌 노트를 찾아내고, 새 노트 이름을 고정 토큰으로 정하고, 검색으로 일괄 가져오고, 모든 일괄 작업 전에 검토 목록을 보여 주고, 다른 Zotero 플러그인이 만든 노트를 넘겨받고(adopt), 노트별 갱신·재생성·frontmatter 새로 고침·옛 키 정리·병합 항목 재연결을 추가합니다. 같은 날 공개한 0.6.2는 인용 편집기, Zotero에 설치된 스타일과 로캘로 만드는 참고문헌, 인용 점검(Check citations), 참고문헌 구역, pandoc 내보내기 키트를 추가했습니다. 0.6.1은 노트 레이아웃 설정, 항목 내용 삽입, 더 풍부한 주석 사이드바, 필드 검색, Zotero 선택 항목 명령, 설정 진단을 추가했습니다. 0.6.0은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고, 문제 있는 항목이 있어도 갱신을 이어 가며, 인용 선택기가 기다리게 하고, 설정 탭을 다시 정리하고, 에이전트 액션을 추가했습니다. 모든 변경은 [변경 기록](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md)에 있습니다. 검증 환경은 Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71, macOS입니다. 0.5 때 실제 서재로 최근 읽은 논문 목록, 문헌 노트 생성·갱신 4건, PDF 텍스트 추출 4건(스캔본 1건 포함), 인용문 위치 찾기를 확인했습니다. 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
+**2026-10-15**에 공개한 **CMDS Zotero 0.6.5** 기준입니다. [GitHub 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.5)에는 CI가 빌드하고 출처를 증명한 `main.js`, `manifest.json`, `styles.css`가 있습니다. **설정 → 커뮤니티 플러그인 → 탐색**에서 설치하거나, 수동 설치나 BRAT로 설치합니다.
+0.6.5는 새로 설치한 경우 인덱스를 번호 붙은 `80. References` 폴더 대신 문헌 노트 옆 `References/Zotero/zotero-index.json`에 만듭니다. 그 자리에 인덱스가 이미 있는 설치는 그대로 씁니다. 0.6.4는 커뮤니티 디렉터리 등록을 준비했습니다. Obsidian 1.13 이상에서도 설치된 스타일을 고르면 설정 칸이 바로 바뀌고, 현재 노트용 명령은 노트가 열려 있을 때만 나타납니다. 0.6.3은 옮긴 문헌 노트를 찾아내고, 새 노트 이름을 고정 토큰으로 정하고, 검색으로 일괄 가져오고, 모든 일괄 작업 전에 검토 목록을 보여 주고, 다른 Zotero 플러그인이 만든 노트를 넘겨받고(adopt), 노트별 갱신·재생성·frontmatter 새로 고침·옛 키 정리·병합 항목 재연결을 추가합니다. 같은 날 공개한 0.6.2는 인용 편집기, Zotero에 설치된 스타일과 로캘로 만드는 참고문헌, 인용 점검(Check citations), 참고문헌 구역, pandoc 내보내기 키트를 추가했습니다. 0.6.1은 노트 레이아웃 설정, 항목 내용 삽입, 더 풍부한 주석 사이드바, 필드 검색, Zotero 선택 항목 명령, 설정 진단을 추가했습니다. 0.6.0은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고, 문제 있는 항목이 있어도 갱신을 이어 가며, 인용 선택기가 기다리게 하고, 설정 탭을 다시 정리하고, 에이전트 액션을 추가했습니다. 모든 변경은 [변경 기록](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md)에 있습니다. 검증 환경은 Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71, macOS입니다. 0.5 때 실제 서재로 최근 읽은 논문 목록, 문헌 노트 생성·갱신 4건, PDF 텍스트 추출 4건(스캔본 1건 포함), 인용문 위치 찾기를 확인했습니다. 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
 0.6.1에서 올리면 기본 설정에서 네 가지가 달라 보입니다. 편집기에서 citekey 문제에 밑줄이 그어지고, 복사한 참고문헌은 스타일 자체의 순서를 따르고, **Update all owned literature notes**는 먼저 검토 목록을 보여 주고, 출력 폴더 밖으로 옮긴 문헌 노트는 옮긴 자리에서 갱신됩니다. 새 노트의 이름과 폴더는 0.6.1과 같습니다.
 
 ## 준비물과 용어
@@ -177,7 +177,7 @@ PDF 쪽 번호는 **1부터 시작하는 파일 위치**이지 인쇄된 쪽 번
 |---|---|---|
 | Connection | Server endpoint | `http://127.0.0.1:23119/better-bibtex`; localhost 주소만 허용 |
 | Connection | Test connection | 저장된 주소로 BBT 연결 시험 |
-| Literature index | Index path | `80. References/zotero-index.json` |
+| Literature index | Index path | `References/Zotero/zotero-index.json`(0.6.5 이전 기본값 `80. References/zotero-index.json`은 인덱스가 이미 있으면 유지) |
 | Literature index | Maximum index age | 60분(1–10080); 지나면 다음 조회 때 백그라운드 갱신 |
 | Literature index | Refresh saved index | 지금 인덱스 갱신 |
 | Citations | Citation trigger | Bracket: `[@` 뒤에 자동완성; At sign: 단독 `@` 뒤에도; Off |

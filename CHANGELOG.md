@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.5 — 2026-10-15
+
+A neutral default for the index. Nothing changes for an install that has saved its settings.
+
+- New installs build the index at `References/Zotero/zotero-index.json`, next to the default literature-note folder, instead of `80. References/zotero-index.json` at the vault root (a numbered folder from the author's own vault).
+- Settings that never stored an *Index path* keep using an index that already exists at `80. References/zotero-index.json`, in the plugin and in the agent CLI's offline mode, so such an install does not build a second index. Press Save configuration to keep a path for good.
+
 ## 0.6.4 — 2026-10-15
 
 Ready for the Obsidian Community directory. No setting, command ID or note format changes.

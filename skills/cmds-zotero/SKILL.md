@@ -146,7 +146,7 @@ node ${CMDS_ZOTERO_ROOT}/scripts/ingest-ro.mjs --vault "Research" --offline --ac
 ```
 
 Without `--vault-path`, the CLI resolves the name from the desktop Obsidian vault registry; duplicate names require an explicit path.
-The index defaults to `80. References/zotero-index.json`, overridden by plugin settings. Validate top-level `schemaVersion:2`.
+The index defaults to `References/Zotero/zotero-index.json` (`80. References/zotero-index.json` where an index from before 0.6.5 already exists and the settings name no path), overridden by plugin settings. Validate top-level `schemaVersion:2`.
 Offline connection probes only local BBT readiness. Other offline actions do not contact BBT or write files.
 
 ## Reconcile and privacy boundaries

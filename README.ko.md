@@ -6,7 +6,7 @@
 
 **설치:** Obsidian **설정 → 커뮤니티 플러그인 → 탐색**에서 "CMDS Zotero"를 검색하거나, BRAT로 `johnfkoo951/cmds-zotero`를 설치하거나, [최신 릴리스](https://github.com/johnfkoo951/cmds-zotero/releases/latest)의 `main.js`, `manifest.json`, `styles.css`를 `<볼트>/.obsidian/plugins/cmds-zotero/`에 복사합니다. 같은 컴퓨터에서 [Better BibTeX](https://retorque.re/zotero-better-bibtex/)가 설치된 [Zotero](https://www.zotero.org/)가 실행 중이어야 하며 데스크톱 전용입니다.
 
-**0.6.4(2026-10-15).** 0.6.4는 커뮤니티 디렉터리 등록을 준비합니다. Obsidian 1.13 이상에서도 설치된 스타일을 고르면 설정 칸이 바로 바뀌고, 아래 고지가 플러그인이 볼트 밖에서 읽는 모든 파일을 다룹니다. 0.6.3은 옮겨진 문헌 노트 찾기, 고정 토큰으로 새 노트 이름 짓기, 검색으로 일괄 가져오기, 실행 전 일괄 작업 검토, 다른 Zotero 플러그인 노트 입양(adopt), 노트별 재구성·frontmatter 새로고침·옛 키 정리·병합된 항목 다시 연결을 추가합니다. 0.6.2는 인용 편집기(한글·악센트 무시 `[@` 검색, 인용 묶음, 로케이터, 이름 붙은 인용 형식, citekey 문제 표시, 호버 카드, 선택형 저자-연도 표시, 커서 위치 인용 동작, 바뀐 citekey 고치기), Zotero에 설치된 CSL 스타일과 로케일의 참고문헌(노트별 `csl`/`lang`), 인용 점검, 관리되는 참고문헌 구역, pandoc 내보내기 키트를 추가했습니다. 0.6.1은 노트 레이아웃 설정(구역 켜고 끄기, 콜아웃 이름, 항목 유형별 필드, Zotero 서식 텍스트, `+`로 이어진 하이라이트 합치기, 주석 태그를 Obsidian 태그로), 항목 내용 삽입, 필터·따라가기 모드·최신 가져오기·카드 동작·검색·드래그를 갖춘 주석 사이드바, 자료 선택 창의 필드 검색(`author:`, `col:`, `tag:` 등), Zotero 선택 항목 열기·가져오기·인용, 상태 표시줄 메뉴, 보고 전용 설정 진단(Diagnose setup)을 추가합니다. 0.6.0은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고 에이전트 액션 `annotations`·`citing`을 추가했습니다. [변경 기록](CHANGELOG.md)을 참고하세요. 사용설명서: [docs/guide.ko.md](docs/guide.ko.md) · [웹](https://apps.cmdspace.work/plugins/cmds-zotero/?lang=ko) · [English](docs/guide.md). Zotero 쪽 설정: [docs/zotero-side.ko.md](docs/zotero-side.ko.md). Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71(macOS)에서 검증했으며 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
+**0.6.5(2026-10-15).** 0.6.5는 새로 설치한 경우 인덱스를 번호 붙은 `80. References` 폴더 대신 문헌 노트 옆 `References/Zotero/zotero-index.json`에 만듭니다. 그 자리에 인덱스가 이미 있는 설치는 그대로 씁니다. 0.6.4는 커뮤니티 디렉터리 등록을 준비했습니다. Obsidian 1.13 이상에서도 설치된 스타일을 고르면 설정 칸이 바로 바뀌고, 아래 고지가 플러그인이 볼트 밖에서 읽는 모든 파일을 다룹니다. 0.6.3은 옮겨진 문헌 노트 찾기, 고정 토큰으로 새 노트 이름 짓기, 검색으로 일괄 가져오기, 실행 전 일괄 작업 검토, 다른 Zotero 플러그인 노트 입양(adopt), 노트별 재구성·frontmatter 새로고침·옛 키 정리·병합된 항목 다시 연결을 추가합니다. 0.6.2는 인용 편집기(한글·악센트 무시 `[@` 검색, 인용 묶음, 로케이터, 이름 붙은 인용 형식, citekey 문제 표시, 호버 카드, 선택형 저자-연도 표시, 커서 위치 인용 동작, 바뀐 citekey 고치기), Zotero에 설치된 CSL 스타일과 로케일의 참고문헌(노트별 `csl`/`lang`), 인용 점검, 관리되는 참고문헌 구역, pandoc 내보내기 키트를 추가했습니다. 0.6.1은 노트 레이아웃 설정(구역 켜고 끄기, 콜아웃 이름, 항목 유형별 필드, Zotero 서식 텍스트, `+`로 이어진 하이라이트 합치기, 주석 태그를 Obsidian 태그로), 항목 내용 삽입, 필터·따라가기 모드·최신 가져오기·카드 동작·검색·드래그를 갖춘 주석 사이드바, 자료 선택 창의 필드 검색(`author:`, `col:`, `tag:` 등), Zotero 선택 항목 열기·가져오기·인용, 상태 표시줄 메뉴, 보고 전용 설정 진단(Diagnose setup)을 추가합니다. 0.6.0은 인덱스 갱신·시작·일괄 갱신을 빠르게 하고 에이전트 액션 `annotations`·`citing`을 추가했습니다. [변경 기록](CHANGELOG.md)을 참고하세요. 사용설명서: [docs/guide.ko.md](docs/guide.ko.md) · [웹](https://apps.cmdspace.work/plugins/cmds-zotero/?lang=ko) · [English](docs/guide.md). Zotero 쪽 설정: [docs/zotero-side.ko.md](docs/zotero-side.ko.md). Obsidian 1.14.4, Zotero 10.0.6, Better BibTeX 9.0.71(macOS)에서 검증했으며 그룹 라이브러리와 Windows/Linux는 실사용 검증 범위가 아닙니다.
 
 ## 범위
 
@@ -38,7 +38,7 @@ BBT `api.ready`, 필터링된 `item.search`, **BetterBibTeX JSON** 형식의 `it
 
 **로컬 프로세스.** 에이전트 요청과 Diagnose setup·Diagnose index and links 명령을 처리할 때, 볼트 폴더가 Git 저장소이면 플러그인은 볼트에서 `git`을 읽기 전용으로 실행합니다(`ls-files`, `check-ignore`, optional lock 끔). 인덱스와 비공개 캐시가 추적되는지, 무시되는지를 알리기 위해서입니다. 볼트 안의 `.gitignore` 파일은 내용을 읽고, 이 답을 최대 1분 동안 재사용하려고 Git의 index·ignore·설정 파일(`~/.gitconfig`, `~/.config/git/` 또는 `$XDG_CONFIG_HOME/git/` 포함)은 메타데이터(식별 번호·크기·시각)만 확인합니다. `git`은 평소처럼 자기 설정을 읽습니다. 그 밖의 프로그램은 실행하지 않습니다.
 
-**쓰기.** Zotero 원본은 읽기 전용입니다. 라이브러리 수정, citekey PIN, 데이터베이스·환경설정 변경을 하지 않습니다. 플러그인은 현재 볼트의 자기 설정·인덱스와 사용자가 요청한 노트·자산을 기록합니다. Zotero가 실행 중이면 백그라운드에서 *Index path*(기본 `80. References/zotero-index.json`)에 인덱스를 만들고, 오래되면 갱신합니다. 기존 문헌노트를 조용히 다시 쓰지 않습니다. 텔레메트리, 자체 업데이트, 자체 HTTP 서버, 유료 서비스 연동은 없습니다. Hookmark는 별도 라이선스를 가진 선택적 소프트웨어이며 일반 Zotero 링크 사용에 필수가 아닙니다.
+**쓰기.** Zotero 원본은 읽기 전용입니다. 라이브러리 수정, citekey PIN, 데이터베이스·환경설정 변경을 하지 않습니다. 플러그인은 현재 볼트의 자기 설정·인덱스와 사용자가 요청한 노트·자산을 기록합니다. Zotero가 실행 중이면 백그라운드에서 *Index path*(기본 `References/Zotero/zotero-index.json`. 설정을 저장한 적이 없고 이전 기본값 `80. References/zotero-index.json`에 인덱스가 이미 있으면 그대로 씀)에 인덱스를 만들고, 오래되면 갱신합니다. 기존 문헌노트를 조용히 다시 쓰지 않습니다. 텔레메트리, 자체 업데이트, 자체 HTTP 서버, 유료 서비스 연동은 없습니다. Hookmark는 별도 라이선스를 가진 선택적 소프트웨어이며 일반 Zotero 링크 사용에 필수가 아닙니다.
 
 ## 소스에서 빌드하거나 cmds-link-zotero에서 옮기기
 
@@ -158,7 +158,7 @@ node scripts/ingest-ro.mjs --vault "Research" --action reconcile
 
 읽기 전용 액션은 암묵적으로 인덱스·note-map을 갱신하지 않습니다. `ingest-ro.mjs`는 쓰기 요청과
 조회 중 쓰기 가능한 구형 live API 경로를 차단합니다. 오프라인은 설정된 인덱스(기본
-`80. References/zotero-index.json`)를 읽습니다. 누락·손상·불완전·시각 미확인 인덱스로 부재를 단정하지 않습니다.
+`References/Zotero/zotero-index.json`, 0.6.5 이전 인덱스가 이미 있으면 `80. References/zotero-index.json`)를 읽습니다. 누락·손상·불완전·시각 미확인 인덱스로 부재를 단정하지 않습니다.
 오래된 인덱스의 부정 판정은 `--allow-stale` 없이는 보류하며, 이 flag로 **apply를 허가하지 않습니다**.
 
 **비소유 노트 쓰기 예외:** dry-run 검토 후 명시적으로 `reconcile --apply`를 실행하면 paper hub의
