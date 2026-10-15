@@ -8,7 +8,7 @@ import { registerLiteratureCommands } from "./commands-literature";
 import { registerAnnotationCommands } from "./commands-annotations";
 import { registerLibraryCommands } from "./commands-library";
 import { registerCitationCommands } from "./commands-citations";
-import { registerReferenceCommands } from "./commands-references";
+import { registerReferenceCommands, whenNote } from "./commands-references";
 import { registerNoteCommands } from "./commands-notes";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "../views/annotations-view";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "../views/references-view";
@@ -50,8 +50,8 @@ export function registerCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.addCommand({ id: "copy-file-link", name: "Copy Obsidian file link (Hookmark-native)", callback: () => { void plugin.navigation.pick(entry => { void plugin.run(() => plugin.navigation.copyFileLink(entry)); }); } });
 	plugin.addCommand({ id: "open-link-under-cursor", name: "Open link under cursor", editorCallback: (editor: Editor) => { void plugin.navigation.openLinkUnderCursor(editor); } });
 	// 0.5 R10: pandoc-ready bibliography for the active note (index-local citation rows, one BBT export per library).
-	plugin.addCommand({ id: "copy-csl-json", name: "Copy CSL-JSON for cited sources", callback: () => { void plugin.run(() => plugin.bibliography.copyCslJsonForActiveNote()); } });
-	plugin.addCommand({ id: "write-bibliography-sidecar", name: "Write pandoc bibliography sidecar for current note", callback: () => { void plugin.run(() => plugin.bibliography.writeBibliographySidecar()); } });
+	plugin.addCommand({ id: "copy-csl-json", name: "Copy CSL-JSON for cited sources", checkCallback: whenNote(() => plugin.currentNote() !== null, () => { void plugin.run(() => plugin.bibliography.copyCslJsonForActiveNote()); }) });
+	plugin.addCommand({ id: "write-bibliography-sidecar", name: "Write pandoc bibliography sidecar for current note", checkCallback: whenNote(() => plugin.currentNote() !== null, () => { void plugin.run(() => plugin.bibliography.writeBibliographySidecar()); }) });
 	registerLiteratureCommands(plugin); // 0.6.1 WP7
 	registerAnnotationCommands(plugin); // 0.6.1 annotations sidebar: follow, pin, live read and card actions
 	registerLibraryCommands(plugin); // 0.6.1 WP10

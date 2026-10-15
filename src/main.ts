@@ -175,6 +175,12 @@ export default class CMDSZoteroPlugin extends Plugin {
 		return this.lastView && this.lastView.leaf.view === this.lastView ? this.lastView : null;
 	}
 
+	/** The note the current-note commands act on: the active or last Markdown view's file, else the active Markdown file. */
+	currentNote(): TFile | null {
+		const file = this.lastMarkdownView()?.file ?? this.app.workspace.getActiveFile();
+		return file instanceof TFile && file.extension === "md" ? file : null;
+	}
+
 	private refreshViews(): void {
 		this.citations.refreshEditors(); // 0.6.2: citekey marks and rendered citations follow the index and the settings
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REFERENCES)) if (leaf.view instanceof ReferencesView) void leaf.view.render();
