@@ -19,6 +19,11 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	private readonly problems = new Map<string, string>();
 	/** 0.6.4: shows a draft value set outside its control (the style picker) in the last rendered control for that key. */
 	private readonly refreshers = new Map<string, () => void>();
+	/**
+	 * 0.6.4: Obsidian 1.13+ never calls display(), so the first row rendered after the tab opens takes a new draft; the
+	 * stored settings may have changed while the tab was closed (Choose bibliography style from installed styles).
+	 */
+	private draftStale = true;
 	private readonly actions: SettingsActions;
 
 	constructor(app: App, private plugin: CMDSZoteroPlugin) {
@@ -35,7 +40,10 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			refreshIndex: async () => { await this.plugin.refreshIndex(); return ""; },
 			// 0.6.2 installed-csl-style-picker: a style Better BibTeX renders goes into the draft; Save stores it.
 			chooseStyle: async () => {
+				const draft = this.draft;
 				await chooseInstalledStyle(this.plugin, style => {
+					// The tab was closed while the picker was open: its draft is gone, so there is nothing to update.
+					if (this.draft !== draft) return;
 					this.draft.bibliographyStyle = style.key;
 					// Obsidian 1.13+ never calls display() again, so the rendered field is updated in place on every version.
 					this.refreshers.get("bibliographyStyle")?.();
@@ -50,6 +58,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	private reset(): void {
 		this.draft = draftOf(this.plugin.settings);
 		this.problems.clear();
+		this.draftStale = false;
 	}
 
 	display(): void {
@@ -87,6 +96,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	hide(): void {
 		this.reset();
 		this.refreshers.clear();
+		this.draftStale = true;
 		super.hide();
 	}
 
@@ -116,6 +126,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 
 	/** One row: a control bound to the draft with its inline problem, a button with its own status, or a note. */
 	private renderRow(setting: Setting, row: RowSpec): void {
+		if (this.draftStale) this.reset();
 		if (row.kind === "note") { setting.setDesc(row.text); return; }
 		setting.setName(row.name).setDesc(row.desc);
 		if (row.kind === "action") {
