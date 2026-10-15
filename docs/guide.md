@@ -243,7 +243,7 @@ The Hookmark commands only copy links to the clipboard. They do not change Hookm
 
 ## Data and privacy
 - The plugin asks the local BBT for metadata, citations, bibliographies, attachments and annotations, and reading history. It never changes Zotero settings, the database, citekeys or library records.
-- Importing image annotations, or inserting one as a callout from the annotations sidebar or Search annotations, reads Zotero's cached image outside the vault and copies it into the image folder. Choosing a bibliography style reads the list of styles in Zotero's `styles` folder, read-only.
+- Importing image annotations, or inserting one as a callout from the annotations sidebar or Search annotations, reads Zotero's cached image outside the vault and copies it into the image folder. Listing Zotero's installed styles (choosing a style, a note whose `csl` names one, the pandoc export kit) reads the `.csl` files in Zotero's `styles` folder, read-only.
 - In the vault it writes settings, the index, literature notes, image copies, export kits you ask for and private files under `.cmds-zotero/` (bibliography, note map, backups, PDF text caches). It creates `.cmds-zotero/.gitignore` first so the folder stays out of git. PDF text caches hold full paper text; do not share them.
 - The index and note map can contain bibliographic data, private paths and annotations. Keep them out of public repositories.
 - For agent requests and the **Diagnose setup** and **Diagnose index and links** commands, when the vault is a Git repository, the plugin runs `git` read-only (`ls-files`, `check-ignore`) to report whether private files are ignored. It runs nothing else; the export kit leaves running pandoc to you.
