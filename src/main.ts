@@ -7,7 +7,7 @@ import { PdfTextService } from "./pdf/extract";
 import type { BibliographyDetail } from "./bibliography-store"; // 0.5 R12
 import { VaultLinks } from "./vault-links";
 import { VaultIndexStorage, relativePath } from "./vault-storage";
-import { normalizeSettings, validateEndpoint } from "./settings-data";
+import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, storesIndexPath, validateEndpoint } from "./settings-data";
 import { CmdsZoteroSettingsTab } from "./settings/tab";
 import { ReferencesView, VIEW_TYPE_REFERENCES } from "./views/references-view";
 import { AnnotationsView, VIEW_TYPE_ANNOTATIONS } from "./views/annotations-view";
@@ -61,7 +61,9 @@ export default class CMDSZoteroPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		const stored: unknown = await this.loadData();
-		this.settings = normalizeSettings(stored);
+		// 0.6.5: settings that store no Index path keep an index already at the pre-0.6.5 default (no second index).
+		const legacyIndex = !storesIndexPath(stored) && await this.app.vault.adapter.exists(LEGACY_DEFAULT_INDEX_PATH);
+		this.settings = normalizeSettings(stored, { legacyIndex });
 		this.settings.bbtEndpoint = validateEndpoint(this.settings.bbtEndpoint);
 		this.active = true;
 		this.configure();

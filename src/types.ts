@@ -108,7 +108,8 @@ export const DEFAULT_REFERENCES_HEADINGS: readonly string[] = ["References", "Bi
 
 export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	bbtEndpoint: "http://127.0.0.1:23119/better-bibtex",
-	zoteroIndexPath: "80. References/zotero-index.json",
+	// 0.6.5: a neutral folder next to the literature notes (before 0.6.5: "80. References/zotero-index.json", see settings-data.ts).
+	zoteroIndexPath: "References/Zotero/zotero-index.json",
 	caywFormat: "pandoc",
 	requestTimeoutMs: 20000,
 	attachmentTimeoutMs: 60000,

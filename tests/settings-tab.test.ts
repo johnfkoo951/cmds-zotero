@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "../src/types";
-import { normalizeSettings, normalizeTagList } from "../src/settings-data";
+import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, normalizeTagList, storesIndexPath } from "../src/settings-data";
 import { choiceField, draftOf, endpointField, integerField, linesField, parsePeerVaults, peerVaultsField, secondsField, tagsField, toggleField, vaultPathField, vaultPathProblem } from "../src/settings/fields";
 import { buildSections, controlRows, saveBlocker, type DropdownRowSpec } from "../src/settings/model";
 import { SETTINGS_SECTIONS } from "../src/settings/registry";
@@ -13,9 +13,9 @@ const sections = buildSections(SETTINGS_SECTIONS);
 const controls = controlRows(sections);
 const rowFor = (key: string) => controls.find(row => row.field.key === key);
 
-test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the picker wait, 0.6.1 the note layout", () => {
+test("0.5 keys and defaults are unchanged (0.6.5: a neutral Index path); 0.6 adds refresh requests and the picker wait, 0.6.1 the note layout", () => {
 	assert.deepEqual(DEFAULT_SETTINGS, {
-		bbtEndpoint: "http://127.0.0.1:23119/better-bibtex", zoteroIndexPath: "80. References/zotero-index.json", caywFormat: "pandoc",
+		bbtEndpoint: "http://127.0.0.1:23119/better-bibtex", zoteroIndexPath: "References/Zotero/zotero-index.json", caywFormat: "pandoc",
 		requestTimeoutMs: 20000, attachmentTimeoutMs: 60000, concurrency: 2, indexMaxAgeMinutes: 60, outputFolder: "References/Zotero",
 		imageFolder: "References/Zotero/images", bibliographyStyle: "apa", peerVaults: [], citationTrigger: "bracket", excludedTags: ["obscite"],
 		headingHighlightColor: "gray", referencesFollowActiveNote: true, referencesHeadings: ["References", "Bibliography", "Works Cited", "참고 문헌", "참고 자료"], recentReadsDays: 30,
@@ -32,6 +32,21 @@ test("0.5 keys and defaults are unchanged; 0.6 adds refresh requests and the pic
 		// 0.6.3 filename-folder-pattern: the 0.6.1 path.
 		noteFilenamePattern: "@{citekey}", noteFolderPattern: "",
 	});
+});
+
+test("0.6.5 Index path: a stored path wins; without one, an index already at the old default is kept, else the new default", () => {
+	assert.equal(LEGACY_DEFAULT_INDEX_PATH, "80. References/zotero-index.json");
+	// A stored path (the two live vaults store theirs) is used whether or not an old index exists.
+	assert.equal(normalizeSettings({ zoteroIndexPath: "Lit/index.json" }, { legacyIndex: true }).zoteroIndexPath, "Lit/index.json");
+	assert.equal(normalizeSettings({ zoteroIndexPath: "Lit/index.json" }).zoteroIndexPath, "Lit/index.json");
+	// Never stored (no data.json, other keys only, or an empty value): the old default only while an index exists there.
+	for (const raw of [null, {}, { outputFolder: "Notes" }, { zoteroIndexPath: "  " }, { zoteroIndexPath: 7 }]) {
+		assert.equal(storesIndexPath(raw), false, JSON.stringify(raw));
+		assert.equal(normalizeSettings(raw, { legacyIndex: true }).zoteroIndexPath, LEGACY_DEFAULT_INDEX_PATH, JSON.stringify(raw));
+		assert.equal(normalizeSettings(raw, { legacyIndex: false }).zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath, JSON.stringify(raw));
+		assert.equal(normalizeSettings(raw).zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath, JSON.stringify(raw));
+	}
+	assert.equal(storesIndexPath({ zoteroIndexPath: "80. References/zotero-index.json" }), true);
 });
 
 test("every stored key has exactly one control, with a name and a description", () => {

@@ -6,7 +6,7 @@ import { readLocalFile } from "../local-file";
 import { parseNoteText } from "../frontmatter-read";
 import type { NoteRecord, ScanSkip, VaultReader } from "../agent/types";
 import { findNote as findListedNote, notePathCandidates } from "../agent/note-lookup";
-import { normalizeSettings } from "../settings-data";
+import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, storesIndexPath } from "../settings-data";
 import type { CmdsZoteroSettings } from "../types";
 import { SCAN_CONCURRENCY, scanInOrder } from "../vault-scan";
 
@@ -173,10 +173,12 @@ export class FsVaultReader implements VaultReader {
 
 /** Plugin settings as persisted by Obsidian in the vault's configuration folder, normalized exactly like the plugin does; defaults when absent. */
 export async function readPluginSettings(root: string, configDir: string): Promise<{ settings: CmdsZoteroSettings; present: boolean }> {
-	try {
-		const raw: unknown = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
-		return { settings: normalizeSettings(raw), present: true };
-	} catch { return { settings: normalizeSettings({}), present: false }; }
+	// 0.6.5: the same Index path fallback as the plugin (an index already at the pre-0.6.5 default is kept).
+	const legacyIndex = async (raw: unknown): Promise<boolean> => !storesIndexPath(raw) && await fs.lstat(join(root, LEGACY_DEFAULT_INDEX_PATH)).then(() => true, () => false);
+	let raw: unknown;
+	try { raw = JSON.parse(await fs.readFile(join(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8")); }
+	catch { return { settings: normalizeSettings({}, { legacyIndex: await legacyIndex({}) }), present: false }; }
+	return { settings: normalizeSettings(raw, { legacyIndex: await legacyIndex(raw) }), present: true };
 }
 
 export async function readEnabledPlugins(root: string, configDir: string): Promise<string[] | null> {

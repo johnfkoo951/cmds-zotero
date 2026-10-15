@@ -194,6 +194,22 @@ test("offline locate --file reports pdf-too-large for an oversized PDF and pdf-i
 
 // HYG-02: the offline CLI reads a custom configuration folder when told to, and only a single dot-folder name is accepted.
 
+test("0.6.5: settings without an Index path keep an index at the pre-0.6.5 default; without that index the new default is used", () => {
+	const root = vault();
+	const settings = join(root, ".obsidian", "plugins", "cmds-zotero", "data.json");
+	const resolve = () => run(["--vault", "Research", "--vault-path", root, "--offline", "--action", "resolve", "--citekey", "smith2020"]);
+	rmSync(settings);
+	const kept = JSON.parse(resolve().stdout);
+	assert.equal(kept.status, "resolved", "no data.json: the index at the old default is used");
+	assert.equal(kept.connection.index.path, "80. References/zotero-index.json");
+	writeFileSync(settings, JSON.stringify({ outputFolder: "Notes" }));
+	assert.equal(JSON.parse(resolve().stdout).connection.index.path, "80. References/zotero-index.json", "settings that never stored a path");
+	rmSync(join(root, "80. References", "zotero-index.json"));
+	const fresh = resolve();
+	assert.equal(fresh.status, 1);
+	assert.equal(JSON.parse(fresh.stdout).connection.index.path, "References/Zotero/zotero-index.json", "no old index: the new default");
+});
+
 test("--config-dir reads the plugin settings and index path from the vault's own configuration folder", () => {
 	const root = vault();
 	renameSync(join(root, ".obsidian"), join(root, ".config-custom"));

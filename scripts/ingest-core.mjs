@@ -8742,7 +8742,8 @@ function checkCitekey(key, index, notes, hints = {}) {
 var DEFAULT_REFERENCES_HEADINGS = ["References", "Bibliography", "Works Cited", "\uCC38\uACE0 \uBB38\uD5CC", "\uCC38\uACE0 \uC790\uB8CC"];
 var DEFAULT_SETTINGS = {
   bbtEndpoint: "http://127.0.0.1:23119/better-bibtex",
-  zoteroIndexPath: "80. References/zotero-index.json",
+  // 0.6.5: a neutral folder next to the literature notes (before 0.6.5: "80. References/zotero-index.json", see settings-data.ts).
+  zoteroIndexPath: "References/Zotero/zotero-index.json",
   caywFormat: "pandoc",
   requestTimeoutMs: 2e4,
   attachmentTimeoutMs: 6e4,
@@ -11645,18 +11646,22 @@ function integer(value, fallback, min, max) {
 function flag2(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
+var LEGACY_DEFAULT_INDEX_PATH = "80. References/zotero-index.json";
+function storesIndexPath(raw) {
+  return !!raw && typeof raw === "object" && text4(raw.zoteroIndexPath, "") !== "";
+}
 function text4(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 function defaultCollectConcurrency(concurrency) {
   return concurrency;
 }
-function normalizeSettings(raw) {
+function normalizeSettings(raw, options = {}) {
   const data = raw && typeof raw === "object" ? raw : {};
   const concurrency = integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8);
   return {
     bbtEndpoint: text4(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
-    zoteroIndexPath: text4(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
+    zoteroIndexPath: text4(data.zoteroIndexPath, options.legacyIndex ? LEGACY_DEFAULT_INDEX_PATH : DEFAULT_SETTINGS.zoteroIndexPath),
     caywFormat: text4(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
     requestTimeoutMs: integer(data.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs, 1e3, 18e4),
     attachmentTimeoutMs: integer(data.attachmentTimeoutMs, DEFAULT_SETTINGS.attachmentTimeoutMs, 1e3, 18e4),
@@ -12069,12 +12074,14 @@ var FsVaultReader = class {
   }
 };
 async function readPluginSettings(root, configDir) {
+  const legacyIndex = async (raw2) => !storesIndexPath(raw2) && await fs3.lstat(join2(root, LEGACY_DEFAULT_INDEX_PATH)).then(() => true, () => false);
+  let raw;
   try {
-    const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
-    return { settings: normalizeSettings(raw), present: true };
+    raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
   } catch {
-    return { settings: normalizeSettings({}), present: false };
+    return { settings: normalizeSettings({}, { legacyIndex: await legacyIndex({}) }), present: false };
   }
+  return { settings: normalizeSettings(raw, { legacyIndex: await legacyIndex(raw) }), present: true };
 }
 async function readEnabledPlugins(root, configDir) {
   try {

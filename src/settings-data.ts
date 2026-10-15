@@ -11,6 +11,14 @@ function integer(value: unknown, fallback: number, min: number, max: number): nu
 	return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
 }
 function flag(value: unknown, fallback: boolean): boolean { return typeof value === "boolean" ? value : fallback; }
+
+/** 0.6.5: the default Index path before 0.6.5; an install that never stored an Index path keeps an index already there. */
+export const LEGACY_DEFAULT_INDEX_PATH = "80. References/zotero-index.json";
+
+/** 0.6.5: true when stored settings name an Index path of their own, by the same rule `normalizeSettings` applies. */
+export function storesIndexPath(raw: unknown): boolean {
+	return !!raw && typeof raw === "object" && text((raw as Record<string, unknown>).zoteroIndexPath, "") !== "";
+}
 function text(value: unknown, fallback: string): string { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 
 /**
@@ -20,12 +28,16 @@ function text(value: unknown, fallback: string): string { return typeof value ==
  */
 export function defaultCollectConcurrency(concurrency: number): number { return concurrency; }
 
-export function normalizeSettings(raw: unknown): CmdsZoteroSettings {
+/**
+ * `legacyIndex` (0.6.5): the vault already has an index at `LEGACY_DEFAULT_INDEX_PATH`; settings that store no Index path then
+ * keep that path instead of the new default, so an install that never pressed Save does not build a second index.
+ */
+export function normalizeSettings(raw: unknown, options: { legacyIndex?: boolean } = {}): CmdsZoteroSettings {
 	const data = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
 	const concurrency = integer(data.concurrency, DEFAULT_SETTINGS.concurrency, 1, 8);
 	return {
 		bbtEndpoint: text(data.bbtEndpoint, DEFAULT_SETTINGS.bbtEndpoint),
-		zoteroIndexPath: text(data.zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath),
+		zoteroIndexPath: text(data.zoteroIndexPath, options.legacyIndex ? LEGACY_DEFAULT_INDEX_PATH : DEFAULT_SETTINGS.zoteroIndexPath),
 		caywFormat: text(data.caywFormat, DEFAULT_SETTINGS.caywFormat),
 		requestTimeoutMs: integer(data.requestTimeoutMs, DEFAULT_SETTINGS.requestTimeoutMs, 1000, 180000),
 		attachmentTimeoutMs: integer(data.attachmentTimeoutMs, DEFAULT_SETTINGS.attachmentTimeoutMs, 1000, 180000),

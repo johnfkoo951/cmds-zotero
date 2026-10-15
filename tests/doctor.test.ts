@@ -137,6 +137,6 @@ test("diagnostics --env: request validation, environment checks offline and on a
 	assert.equal(failed.reason, "index-missing");
 	const failedChecks = Object.fromEntries((failed.environment.checks as { id: string; status: string; code?: string; detail: string }[]).map(check => [check.id, check]));
 	assert.equal(failedChecks.index.code, "index-missing");
-	assert.match(failedChecks.index.detail, /80\. References\/zotero-index\.json/, "the configured path stands in for an unknown one");
+	assert.match(failedChecks.index.detail, /References\/Zotero\/zotero-index\.json/, "the configured path stands in for an unknown one");
 	assert.equal(failedChecks.obsidian.code, "obsidian-unavailable");
 });
