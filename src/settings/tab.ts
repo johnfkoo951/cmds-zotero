@@ -17,6 +17,8 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	private draft: SettingsDraft;
 	/** Open inline problems, keyed by control name. */
 	private readonly problems = new Map<string, string>();
+	/** 0.6.4: shows a draft value set outside its control (the style picker) in the last rendered control for that key. */
+	private readonly refreshers = new Map<string, () => void>();
 	private readonly actions: SettingsActions;
 
 	constructor(app: App, private plugin: CMDSZoteroPlugin) {
@@ -35,8 +37,8 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			chooseStyle: async () => {
 				await chooseInstalledStyle(this.plugin, style => {
 					this.draft.bibliographyStyle = style.key;
-					// Obsidian 1.13+ renders the rows from definitions; the older tab is re-rendered here to show the new value.
-					if (!requireApiVersion("1.13.0")) this.render();
+					// Obsidian 1.13+ never calls display() again, so the rendered field is updated in place on every version.
+					this.refreshers.get("bibliographyStyle")?.();
 					new Notice(`${style.title} (${style.key}) renders in Better BibTeX. Save the configuration to use it.`);
 				}, this.draft.bibliographyLocale);
 				return "";
@@ -55,7 +57,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 		this.render();
 	}
 
-	/** Renders the rows from the current draft (0.6.2: the style picker re-renders without dropping unsaved edits). */
+	/** Renders the rows from the current draft (Obsidian before 1.13). */
 	private render(): void {
 		this.problems.clear();
 		const { containerEl } = this;
@@ -139,6 +141,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 				setting.addText(text => {
 					text.setValue(row.field.read(this.draft)).onChange(value => report(row.field.write(this.draft, value)));
 					if (row.placeholder) text.setPlaceholder(row.placeholder);
+					this.refreshers.set(row.field.key, () => { text.setValue(row.field.read(this.draft)); report(null); });
 				});
 				break;
 			case "textarea":
