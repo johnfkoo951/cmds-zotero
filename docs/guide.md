@@ -2,8 +2,8 @@
 Send what you read and mark up in Zotero to Obsidian literature notes. Metadata, highlights and comments, Zotero notes, citations and links back to the source end up in one note, and the text you write yourself stays untouched. Zotero is treated as read-only.
 
 ## Version and release status
-This guide covers **CMDS Zotero 0.6.3**, released on **2026-10-15**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.3) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. **The plugin is not yet listed in Obsidian Community Plugins**; install it manually or with BRAT.
-0.6.3 finds literature notes you moved, names new notes from fixed tokens, imports by search, shows a review list before every batch, adopts notes made by other Zotero plugins, and adds per-note update, rebuild, frontmatter refresh, legacy-key cleanup and merged-item relink. 0.6.2, released the same day, added a citation editor, bibliographies in Zotero's installed styles and locales, Check citations, a references section and a pandoc export kit. 0.6.1 added note layout settings, Insert item content, a richer annotations sidebar, fielded search, Zotero selection commands and Diagnose setup. 0.6.0 made refreshes, startup and batch updates faster, keeps refreshes going past bad items, lets the citation picker wait for you, reorganises the settings tab and adds agent actions; the [changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md) lists every change. It was verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS. Checks of 0.5 on a real library covered the recently read list, creating and updating four literature notes, PDF text extraction for four papers (one of them a scan) and quote location. Group libraries and Windows/Linux are outside the verified scope.
+This guide covers **CMDS Zotero 0.6.4**, released on **2026-10-15**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.4) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. Install it from **Settings → Community plugins → Browse**, manually, or with BRAT.
+0.6.4 readies the plugin for the Community directory: choosing an installed style now updates the settings field on Obsidian 1.13 and later, and commands for the current note appear only while a note is open. 0.6.3 finds literature notes you moved, names new notes from fixed tokens, imports by search, shows a review list before every batch, adopts notes made by other Zotero plugins, and adds per-note update, rebuild, frontmatter refresh, legacy-key cleanup and merged-item relink. 0.6.2, released the same day, added a citation editor, bibliographies in Zotero's installed styles and locales, Check citations, a references section and a pandoc export kit. 0.6.1 added note layout settings, Insert item content, a richer annotations sidebar, fielded search, Zotero selection commands and Diagnose setup. 0.6.0 made refreshes, startup and batch updates faster, keeps refreshes going past bad items, lets the citation picker wait for you, reorganises the settings tab and adds agent actions; the [changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md) lists every change. It was verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS. Checks of 0.5 on a real library covered the recently read list, creating and updating four literature notes, PDF text extraction for four papers (one of them a scan) and quote location. Group libraries and Windows/Linux are outside the verified scope.
 Coming from 0.6.1, four things look different with the default settings: citekey problems are underlined in the editor, a copied bibliography keeps the style's own order, **Update all owned literature notes** first shows a review list, and literature notes you moved out of the output folder are updated where they are. New notes keep the names and folders 0.6.1 gave them.
 
 ## Requirements and terms
@@ -14,8 +14,10 @@ Coming from 0.6.1, four things look different with the default settings: citekey
 A **citekey** such as `Example2026` is a citation label, not a permanent identifier. The plugin identifies an item by library type, local library ID and Zotero item key. Attachments and annotations have their own keys; a parent item is not a PDF.
 
 ## Installation
+**Community plugins**: open **Settings → Community plugins → Browse**, search for **CMDS Zotero**, select **Install**, then **Enable**.
+
 **Manual**
-1. Download `main.js`, `manifest.json` and `styles.css` from the [0.6.3 release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.3).
+1. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/johnfkoo951/cmds-zotero/releases/latest).
 2. Put the three files in `<vault>/.obsidian/plugins/cmds-zotero/`.
 3. Reload Obsidian and enable **CMDS Zotero** under **Settings → Community plugins**.
 
@@ -241,10 +243,10 @@ The Hookmark commands only copy links to the clipboard. They do not change Hookm
 
 ## Data and privacy
 - The plugin asks the local BBT for metadata, citations, bibliographies, attachments and annotations, and reading history. It never changes Zotero settings, the database, citekeys or library records.
-- Importing image annotations reads Zotero's cached images outside the vault and copies them into the image folder. Choosing a bibliography style reads the list of styles in Zotero's `styles` folder, read-only.
+- Importing image annotations, or inserting one as a callout from the annotations sidebar or Search annotations, reads Zotero's cached image outside the vault and copies it into the image folder. Choosing a bibliography style reads the list of styles in Zotero's `styles` folder, read-only.
 - In the vault it writes settings, the index, literature notes, image copies, export kits you ask for and private files under `.cmds-zotero/` (bibliography, note map, backups, PDF text caches). It creates `.cmds-zotero/.gitignore` first so the folder stays out of git. PDF text caches hold full paper text; do not share them.
 - The index and note map can contain bibliographic data, private paths and annotations. Keep them out of public repositories.
-- For agent requests the plugin runs `git` read-only (`ls-files`, `check-ignore`) to report whether private files are ignored. It runs nothing else; the export kit leaves running pandoc to you.
+- For agent requests and the **Diagnose setup** and **Diagnose index and links** commands, when the vault is a Git repository, the plugin runs `git` read-only (`ls-files`, `check-ignore`) to report whether private files are ignored. It runs nothing else; the export kit leaves running pandoc to you.
 - No telemetry, own HTTP server or self-updater.
 
 ## Troubleshooting

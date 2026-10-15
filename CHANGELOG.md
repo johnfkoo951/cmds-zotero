@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.4 — 2026-10-15
+
+Ready for the Obsidian Community directory. No setting, command ID or note format changes.
+
+- *Choose an installed style* (Settings → Bibliography and references) now shows the picked style in the *Bibliography style* field on Obsidian 1.13 and later. Before, Save stored the new style but the field kept showing the old one.
+- Check citations in current note, Copy bibliography for current note, Insert or update references section, Export pandoc kit for current note, Copy CSL-JSON for cited sources and Write pandoc bibliography sidecar for current note are offered only while a Markdown note is open, instead of failing with "Open a Markdown note first".
+- The references sidebar drops a pending refresh when it closes, and a failing cross-vault note-map update shows its notice once per index instead of after every pause in typing.
+- README: install from Settings → Community plugins. The disclosures now name every file read outside the vault (Zotero's `styles` folder for the installed CSL styles; annotation images, which are also copied when you insert an image annotation as a callout), say when the read-only `git` check runs, and state that only loopback Better BibTeX endpoints are accepted.
+- The committed agent-CLI core (`scripts/ingest-core.mjs`, not part of the installed plugin) carries the license notice of the `yaml` package it bundles.
+
 ## 0.6.3 — 2026-10-15
 
 Importing and updating at scale: notes found wherever they moved, file-name patterns, batches by search with a review list, adopting notes from other plugins, and per-note repairs. Zotero stays read-only and every change to an existing note is previewed and backed up first. With the default settings new notes keep 0.6.2's names and folders. Two things behave differently: *Update all owned literature notes* first shows a review list, and literature notes you moved out of the literature folder that still carry their CMDS identity are now updated where they are.
