@@ -115,7 +115,7 @@ export class ReferencesController {
 	/** "Insert/update references section": previewed; a new block is appended at the end after a backup of the note. */
 	async insertReferencesSection(): Promise<void> {
 		const file = this.activeFile();
-		const text = await this.plugin.app.vault.read(file);
+		const text = await this.plugin.readSaved(file);
 		const { index, state } = await this.snapshot();
 		if (!index) throw new Error("No saved index yet. Refresh the citekey index first.");
 		const cited = this.resolveCited(withoutReferencesBlock(text), index.entries, state.loaded);
@@ -213,7 +213,7 @@ export class ReferencesController {
 	 */
 	async exportKit(): Promise<void> {
 		const file = this.activeFile();
-		const source = await this.plugin.app.vault.read(file);
+		const source = await this.plugin.readSaved(file);
 		const { index } = await this.snapshot();
 		if (!index) throw new Error("No saved index yet. Refresh the citekey index first.");
 		const original = citedKeySet(withoutReferencesBlock(source));

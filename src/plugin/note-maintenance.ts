@@ -28,7 +28,7 @@ interface NoteState { file: TFile; text: string; frontmatter: Record<string, unk
 
 async function readActive(plugin: CMDSZoteroPlugin): Promise<NoteState> {
 	const file = activeNote(plugin);
-	const text = await plugin.app.vault.read(file);
+	const text = await plugin.readSaved(file);
 	const parsed = parseNoteText(text, yaml);
 	if (parsed.frontmatterParse === "error") throw new Error("The note's frontmatter does not parse; fix it first.");
 	return { file, text, frontmatter: parsed.frontmatter ?? {} };

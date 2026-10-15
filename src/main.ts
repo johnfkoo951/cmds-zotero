@@ -181,6 +181,15 @@ export default class CMDSZoteroPlugin extends Plugin {
 		return file instanceof TFile && file.extension === "md" ? file : null;
 	}
 
+	/**
+	 * 0.6.4: a note's text as its editor shows it. Open editors of the file are saved first (what autosave would write a
+	 * moment later), so a preview built from the disk text includes what was just typed.
+	 */
+	async readSaved(file: TFile): Promise<string> {
+		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) if (leaf.view instanceof MarkdownView && leaf.view.file === file) await leaf.view.save();
+		return this.app.vault.read(file);
+	}
+
 	private refreshViews(): void {
 		this.citations.refreshEditors(); // 0.6.2: citekey marks and rendered citations follow the index and the settings
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_REFERENCES)) if (leaf.view instanceof ReferencesView) void leaf.view.render();
