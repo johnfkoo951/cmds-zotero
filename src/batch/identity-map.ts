@@ -85,9 +85,13 @@ export class IdentityMap {
 		if (this.covers(path)) this.set(path, this.identityOf(path, text));
 	}
 
-	/** A note changed, appeared or disappeared (a vault event): it is read again before the next answer. */
+	/**
+	 * A note changed, appeared or disappeared (a vault event): it is read again before the next answer. Only Markdown
+	 * notes carry an identity (the listing is Markdown only); 0.6.5: other files, such as the index and its temporary file
+	 * inside the default output folder, are never read, so a refresh during a batch cannot fail it.
+	 */
 	noteChanged(path: string): void {
-		if (this.covers(path)) this.changed.add(path);
+		if (path.endsWith(".md") && this.covers(path)) this.changed.add(path);
 	}
 
 	/** A folder was renamed or deleted: the listing and every note below the folder are read again before the next answer. */

@@ -134,6 +134,21 @@ test("an unreadable note fails every answer while it stays unreadable, like the 
 	assert.deepEqual(await map.pathsFor("1:ITEM0029"), ["Lit/n29.md"], "the first map recovers without a reported change too");
 });
 
+test("0.6.5: events for files that are not notes (the index and its temporary file in the folder) are never read", async () => {
+	const state = vault({ "References/Zotero/a.md": note("1:AAAA0001") });
+	const map = await IdentityMap.build("References/Zotero", state.source);
+	state.reads.length = 0;
+	state.failing.add("References/Zotero/zotero-index.json.0f1e2d3c.tmp");
+	map.noteChanged("References/Zotero/zotero-index.json.0f1e2d3c.tmp");
+	map.noteChanged("References/Zotero/zotero-index.json");
+	map.noteChanged("References/Zotero/images/figure.png");
+	assert.deepEqual(await map.pathsFor("1:AAAA0001"), ["References/Zotero/a.md"], "a vanished temporary file fails no answer");
+	assert.deepEqual(state.reads, [], "nothing but Markdown notes is read");
+	map.noteChanged("References/Zotero/a.md");
+	assert.deepEqual(await map.pathsFor("1:AAAA0001"), ["References/Zotero/a.md"]);
+	assert.deepEqual(state.reads, ["References/Zotero/a.md"]);
+});
+
 test("an unsafe folder is refused when the map is built", async () => {
 	await assert.rejects(IdentityMap.build("Lit/", vault({}).source), /Unsafe vault path/);
 	await assert.rejects(IdentityMap.build("", vault({}).source), /Unsafe vault path/);
