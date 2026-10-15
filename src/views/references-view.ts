@@ -165,7 +165,15 @@ export class ReferencesView extends ItemView {
 		await this.plugin.run(() => this.plugin.bibliography.copyBibliography(resolved, this.format ?? { style: this.plugin.settings.bibliographyStyle, locale: this.plugin.settings.bibliographyLocale }));
 	}
 
-	onClose(): Promise<void> { this.contentEl.empty(); this.status = null; return Promise.resolve(); }
+	onClose(): Promise<void> {
+		// 0.6.4: a refresh scheduled just before closing never renders into the closed view, and renders still waiting on
+		// the note or Better BibTeX see a newer generation and stop.
+		this.refresh.cancel();
+		this.generation++;
+		this.contentEl.empty();
+		this.status = null;
+		return Promise.resolve();
+	}
 
 	// 0.5 R4: the shared status line in the header, updated by the plugin without a full re-render.
 	renderStatus(line: string): void { this.status?.setText(line); }

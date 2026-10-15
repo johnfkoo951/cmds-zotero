@@ -16,6 +16,8 @@ const STARTUP_IDLE_TIMEOUT_MS = 2000;
  */
 export class IndexController {
 	private mapTimer: number | undefined;
+	/** 0.6.4: the snapshot whose map publication last failed; its Notice is shown once, later pauses retry silently. */
+	private mapFailure: ZoteroIndex | null = null;
 	private readonly state = new WarmState();
 	/** 0.6 OPT-03: the startup warm-up's idle callback and the timer that ends the deferral of a stale collection. */
 	private startupIdle: { idle: boolean; id: number } | null = null;
@@ -150,7 +152,13 @@ export class IndexController {
 	private publishMapSoon(): void {
 		if (this.mapTimer !== undefined) window.clearTimeout(this.mapTimer);
 		this.mapTimer = window.setTimeout(() => {
-			if (this.plugin.active && this.plugin.lastIndex) void this.plugin.links.publishIfChanged(this.plugin.lastIndex).catch(() => { new Notice("Could not update cross-vault note map. Refresh the index to retry."); });
+			const index = this.plugin.lastIndex;
+			if (!this.plugin.active || !index) return;
+			void this.plugin.links.publishIfChanged(index).catch(() => {
+				if (this.mapFailure === index) return;
+				this.mapFailure = index;
+				new Notice("Could not update cross-vault note map. Refresh the index to retry.");
+			});
 		}, 500);
 	}
 
