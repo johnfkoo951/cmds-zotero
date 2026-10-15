@@ -6,8 +6,10 @@ Ready for the Obsidian Community directory. No setting, command ID or note forma
 
 - *Choose an installed style* (Settings → Bibliography and references) now shows the picked style in the *Bibliography style* field on Obsidian 1.13 and later. Before, Save stored the new style but the field kept showing the old one.
 - Check citations in current note, Copy bibliography for current note, Insert or update references section, Export pandoc kit for current note, Copy CSL-JSON for cited sources and Write pandoc bibliography sidecar for current note are offered only while a Markdown note is open, instead of failing with "Open a Markdown note first".
+- Update, rebuild, adopt and the frontmatter patches of the current note, Insert or update references section and Export pandoc kit save the note's open editor before reading it, so the preview includes what you just typed.
 - The references sidebar drops a pending refresh when it closes, and a failing cross-vault note-map update shows its notice once per index instead of after every pause in typing.
-- README: install from Settings → Community plugins. The disclosures now name every file read outside the vault (Zotero's `styles` folder for the installed CSL styles; annotation images, which are also copied when you insert an image annotation as a callout), say when the read-only `git` check runs, and state that only loopback Better BibTeX endpoints are accepted.
+- The *Image folder* description says it also receives images of image annotations inserted as callouts from the annotations sidebar.
+- README: install from Settings → Community plugins. The disclosures now name every file read outside the vault (Zotero's `styles` folder for the installed CSL styles; annotation images, which are also copied when you insert an image annotation as a callout) and say that the plugin writes nothing outside it, when the read-only `git` check runs, that only loopback Better BibTeX endpoints are accepted, what the `obsidian://cmds-zotero` link opens, and that the repository scripts are not part of the plugin.
 - The committed agent-CLI core (`scripts/ingest-core.mjs`, not part of the installed plugin) carries the license notice of the `yaml` package it bundles.
 
 ## 0.6.3 — 2026-10-15
