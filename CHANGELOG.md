@@ -4,7 +4,7 @@
 
 Ready for the Obsidian Community directory. No setting, command ID or note format changes.
 
-- *Choose an installed style* (Settings → Bibliography and references) now shows the picked style in the *Bibliography style* field on Obsidian 1.13 and later. Before, Save stored the new style but the field kept showing the old one.
+- *Choose an installed style* (Settings → Bibliography and references) now shows the picked style in the *Bibliography style* field on Obsidian 1.13 and later. Before, Save stored the new style but the field kept showing the old one. On the same versions the settings tab now starts from the stored settings each time it opens: a style saved by *Choose bibliography style from installed styles* while settings were closed is no longer overwritten by the next Save (since 0.6.2).
 - Check citations in current note, Copy bibliography for current note, Insert or update references section, Export pandoc kit for current note, Copy CSL-JSON for cited sources and Write pandoc bibliography sidecar for current note are offered only while a Markdown note is open, instead of failing with "Open a Markdown note first".
 - Update, rebuild, adopt and the frontmatter patches of the current note, Insert or update references section and Export pandoc kit save the note's open editor before reading it, so the preview includes what you just typed.
 - The references sidebar drops a pending refresh when it closes, and a failing cross-vault note-map update shows its notice once per index instead of after every pause in typing.
