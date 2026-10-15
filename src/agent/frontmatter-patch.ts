@@ -2,8 +2,9 @@
 /**
  * Line-level frontmatter patch for `reconcile --apply`. Replaces or appends the allowed hub key lines inside the
  * leading `---` block and leaves every other byte of the note untouched (comments, quoting style, folded scalars,
- * list layout, trailing whitespace, CRLF, BOM). It never parses YAML: the caller verifies the result with its YAML
- * library before and after the write. Pure: no `obsidian` import.
+ * list layout, trailing whitespace, CRLF, BOM). It never parses YAML (so not FileManager.processFrontMatter, which
+ * re-serialises the whole block): the caller verifies the result with its YAML library before and after the write.
+ * Pure: no `obsidian` import.
  */
 import { HUB_WRITABLE_KEYS } from "./types";
 

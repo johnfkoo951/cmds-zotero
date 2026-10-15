@@ -2,8 +2,9 @@
  * 0.6.3 per-note frontmatter line patches (frontmatter-refresh, legacy-key-cleanup, merged-item-relink, adopt): the R8
  * line patch (`agent/frontmatter-patch.ts`) generalised to the literature-note keys. Only the lines of the keys being set
  * or removed change; every other byte of the note (other keys, comments, quoting, CRLF, BOM, the body) stays. A refreshed
- * key keeps its quoting style and its list layout. YAML is never re-serialised: the host verifies the patched text with
- * its YAML parser (`verifyFrontmatterEdit`) before and after writing. Pure module: no `obsidian` import.
+ * key keeps its quoting style and its list layout. YAML is never re-serialised (so not FileManager.processFrontMatter, which
+ * rewrites the whole block): the host verifies the patched text with its YAML parser (`verifyFrontmatterEdit`) before and
+ * after writing. Pure module: no `obsidian` import.
  */
 import { LEGACY_LITERATURE_KEYS, LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
 import { doubleQuoted, hasQuotedKeyLine, keyLineIndexes, readFrontmatterBlock, serializeScalar, splitValue } from "./agent/frontmatter-patch";

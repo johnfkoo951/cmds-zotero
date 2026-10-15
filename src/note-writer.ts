@@ -529,7 +529,7 @@ export function annotationTagsLine(tags: readonly string[], settings: Pick<CmdsZ
 	return `Tags: ${parts.join(" ")}`;
 }
 
-/** 0.6.1 G21: the body of an image annotation whose image was not copied (no cached image, or the sidebar). */
+/** 0.6.1 G21: the body of an image annotation whose image was not copied (no cached image, or a failed copy). */
 export const IMAGE_NOT_CACHED = "Image not available in Zotero's cache; open it in Zotero.";
 
 /** 0.6.1: the body of an image annotation inserted without its image (insert-item-content). */

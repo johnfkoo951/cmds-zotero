@@ -60,6 +60,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	/** Renders the rows from the current draft (Obsidian before 1.13). */
 	private render(): void {
 		this.problems.clear();
+		this.refreshers.clear();
 		const { containerEl } = this;
 		containerEl.empty();
 		for (const section of this.sections.filter(item => !item.advanced)) this.renderSection(containerEl, section);
@@ -85,6 +86,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 
 	hide(): void {
 		this.reset();
+		this.refreshers.clear();
 		super.hide();
 	}
 

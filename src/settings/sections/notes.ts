@@ -31,7 +31,7 @@ export const notesSection: SectionDefinition = {
 		section.text(notePatternField("noteFolderPattern")).setName("New note subfolder")
 			.setDesc("Subfolder of the output folder for new literature notes, from the same tokens, with / between levels (for example {itemType} or {collection}). Empty puts new notes directly in the output folder.")
 			.setPlaceholder("{collection}");
-		section.text(vaultPathField("imageFolder")).setName("Image folder").setDesc("Vault-relative destination for explicitly imported annotation images.");
+		section.text(vaultPathField("imageFolder")).setName("Image folder").setDesc("Vault-relative folder for annotation images copied by imports and by image callouts inserted from the annotations sidebar.");
 		section.textArea(tagsField("excludedTags")).setName("Excluded tags").setDesc("Zotero tags left out of imported literature notes, one per line (case-insensitive). An empty list keeps every tag; the default is obscite.");
 	},
 };
