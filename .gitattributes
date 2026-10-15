@@ -1,0 +1,2 @@
+# Generated offline core of the agent command-line tool (npm run build:core); the plugin does not load it.
+scripts/ingest-core.mjs linguist-generated=true

@@ -13,14 +13,11 @@ export interface JoinAuthorOptions {
 	etAlThreshold?: number;
 }
 
-// TODO(user): this is the rule that decides how author names read in rendered citations; rewrite it to taste.
-// Open choices:
-//   - Korean names: "김민지" is often stored as one field; Korean style usually writes the full name (김민지) rather than a
-//     surname, and joins with "·" or "와/과" instead of "&". Should Hangul names switch the conjunction automatically?
-//   - Ampersand vs "and"/"와": APA uses "&" inside parentheses and "and" in running text (narrative citations).
-//   - The et-al threshold: APA 7 uses "et al." from three authors; Chicago author-date from four; some fields from two.
-//   - Same-surname disambiguation: two different "Kim, 2020" sources usually get initials ("M. Kim, 2020") or "2020a/b".
-// The default below is the plain APA-like rule: 1 → "Kim", 2 → "Kim & Lee", 3+ → "Kim et al.".
+/**
+ * The author part of an author-date citation, APA-like: 1 → "Kim", 2 → "Kim & Lee", 3+ → "Kim et al.". Not covered,
+ * since only index fields are available: Hangul conjunctions ("·", "와/과"), "and" in narrative citations, per-style
+ * et-al thresholds (Chicago author-date: four) and same-surname disambiguation ("M. Kim", "2020a").
+ */
 export function joinAuthorNames(names: readonly string[], options: JoinAuthorOptions = {}): string {
 	const conjunction = options.conjunction ?? "&";
 	const threshold = options.etAlThreshold ?? 3;
