@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "../src/types";
-import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, normalizeTagList, storesIndexPath } from "../src/settings-data";
+import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, normalizeTagList, storesIndexPath, withLegacyIndexPath } from "../src/settings-data";
 import { choiceField, draftOf, endpointField, integerField, linesField, parsePeerVaults, peerVaultsField, secondsField, tagsField, toggleField, vaultPathField, vaultPathProblem } from "../src/settings/fields";
 import { buildSections, controlRows, saveBlocker, type DropdownRowSpec } from "../src/settings/model";
 import { SETTINGS_SECTIONS } from "../src/settings/registry";
@@ -47,6 +47,11 @@ test("0.6.5 Index path: a stored path wins; without one, an index already at the
 		assert.equal(normalizeSettings(raw).zoteroIndexPath, DEFAULT_SETTINGS.zoteroIndexPath, JSON.stringify(raw));
 	}
 	assert.equal(storesIndexPath({ zoteroIndexPath: "80. References/zotero-index.json" }), true);
+	// The kept path is saved once; every other stored key stays as it was.
+	assert.deepEqual(withLegacyIndexPath({ outputFolder: "Notes", concurrency: 3 }), { outputFolder: "Notes", concurrency: 3, zoteroIndexPath: LEGACY_DEFAULT_INDEX_PATH });
+	assert.deepEqual(withLegacyIndexPath(null), { zoteroIndexPath: LEGACY_DEFAULT_INDEX_PATH });
+	assert.deepEqual(withLegacyIndexPath([1]), { zoteroIndexPath: LEGACY_DEFAULT_INDEX_PATH });
+	assert.equal(storesIndexPath(withLegacyIndexPath({})), true, "after the save the stored path wins on every later load");
 });
 
 test("every stored key has exactly one control, with a name and a description", () => {

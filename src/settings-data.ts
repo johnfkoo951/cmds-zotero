@@ -19,6 +19,12 @@ export const LEGACY_DEFAULT_INDEX_PATH = "80. References/zotero-index.json";
 export function storesIndexPath(raw: unknown): boolean {
 	return !!raw && typeof raw === "object" && text((raw as Record<string, unknown>).zoteroIndexPath, "") !== "";
 }
+
+/** 0.6.5: the stored settings with the pre-0.6.5 Index path written in (saved once, so the index never moves later). */
+export function withLegacyIndexPath(raw: unknown): Record<string, unknown> {
+	const data = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+	return { ...data, zoteroIndexPath: LEGACY_DEFAULT_INDEX_PATH };
+}
 function text(value: unknown, fallback: string): string { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 
 /**

@@ -38,7 +38,7 @@ BBT `api.ready`, 필터링된 `item.search`, **BetterBibTeX JSON** 형식의 `it
 
 **로컬 프로세스.** 에이전트 요청과 Diagnose setup·Diagnose index and links 명령을 처리할 때, 볼트 폴더가 Git 저장소이면 플러그인은 볼트에서 `git`을 읽기 전용으로 실행합니다(`ls-files`, `check-ignore`, optional lock 끔). 인덱스와 비공개 캐시가 추적되는지, 무시되는지를 알리기 위해서입니다. 볼트 안의 `.gitignore` 파일은 내용을 읽고, 이 답을 최대 1분 동안 재사용하려고 Git의 index·ignore·설정 파일(`~/.gitconfig`, `~/.config/git/` 또는 `$XDG_CONFIG_HOME/git/` 포함)은 메타데이터(식별 번호·크기·시각)만 확인합니다. `git`은 평소처럼 자기 설정을 읽습니다. 그 밖의 프로그램은 실행하지 않습니다.
 
-**쓰기.** Zotero 원본은 읽기 전용입니다. 라이브러리 수정, citekey PIN, 데이터베이스·환경설정 변경을 하지 않습니다. 플러그인은 현재 볼트의 자기 설정·인덱스와 사용자가 요청한 노트·자산을 기록합니다. Zotero가 실행 중이면 백그라운드에서 *Index path*(기본 `References/Zotero/zotero-index.json`. 설정을 저장한 적이 없고 이전 기본값 `80. References/zotero-index.json`에 인덱스가 이미 있으면 그대로 씀)에 인덱스를 만들고, 오래되면 갱신합니다. 기존 문헌노트를 조용히 다시 쓰지 않습니다. 텔레메트리, 자체 업데이트, 자체 HTTP 서버, 유료 서비스 연동은 없습니다. Hookmark는 별도 라이선스를 가진 선택적 소프트웨어이며 일반 Zotero 링크 사용에 필수가 아닙니다.
+**쓰기.** Zotero 원본은 읽기 전용입니다. 라이브러리 수정, citekey PIN, 데이터베이스·환경설정 변경을 하지 않습니다. 플러그인은 현재 볼트의 자기 설정·인덱스와 사용자가 요청한 노트·자산을 기록합니다. Zotero가 실행 중이면 백그라운드에서 *Index path*(기본 `References/Zotero/zotero-index.json`. 설정을 저장한 적이 없고 이전 기본값 `80. References/zotero-index.json`에 인덱스가 이미 있으면 그 경로를 한 번 저장하고 계속 씀)에 인덱스를 만들고, 오래되면 갱신합니다. 기존 문헌노트를 조용히 다시 쓰지 않습니다. 텔레메트리, 자체 업데이트, 자체 HTTP 서버, 유료 서비스 연동은 없습니다. Hookmark는 별도 라이선스를 가진 선택적 소프트웨어이며 일반 Zotero 링크 사용에 필수가 아닙니다.
 
 ## 소스에서 빌드하거나 cmds-link-zotero에서 옮기기
 

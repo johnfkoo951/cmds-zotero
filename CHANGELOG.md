@@ -5,7 +5,8 @@
 A neutral default for the index. Nothing changes for an install that has saved its settings.
 
 - New installs build the index at `References/Zotero/zotero-index.json`, next to the default literature-note folder, instead of `80. References/zotero-index.json` at the vault root (a numbered folder from the author's own vault).
-- Settings that never stored an *Index path* keep using an index that already exists at `80. References/zotero-index.json`, in the plugin and in the agent CLI's offline mode, so such an install does not build a second index. Press Save configuration to keep a path for good.
+- Settings that never stored an *Index path* keep an index that already exists at `80. References/zotero-index.json`: the plugin saves that path in its settings once, so the index never moves later (the agent CLI's offline mode applies the same rule). In a vault kept in Git that ignores `/80. References/zotero-index.json`, a fresh clone has no index yet; ignore `/References/Zotero/zotero-index.json` as well, or save the old path in Settings on the machine that has the index.
+- Batch updates no longer read files that are not notes inside the output folder, so an index refresh during a batch (the index now lives there by default) cannot fail a note.
 
 ## 0.6.4 — 2026-10-15
 
