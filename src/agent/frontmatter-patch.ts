@@ -122,19 +122,23 @@ export function splitValue(raw: string): { scalar: string; comment: string } | "
 		const end = quotedEnd(value, 0);
 		if (end < 0) return "multiline";
 		const tail = value.slice(end);
-		if (tail && !/^[ \t]*(?:#.*)?$/.test(tail)) return "multiline";
+		if (tail && !/^[ \t]*(?:[ \t]#.*)?$/.test(tail)) return "multiline";
 		return { scalar: value.slice(0, end), comment: tail.trimEnd() ? tail : "" };
 	}
 	const comment = /[ \t]+#/.exec(value);
 	return comment ? { scalar: value.slice(0, comment.index).trimEnd(), comment: value.slice(comment.index) } : { scalar: value.trimEnd(), comment: "" };
 }
 
-function hasContinuation(lines: string[], index: number, emptyValue: boolean): boolean {
-	const next = lines[index + 1];
-	if (next === undefined) return false;
-	const line = next.replace(/\r$/, "");
-	if (/^[ \t]+[^ \t#]/.test(line)) return true;
-	return emptyValue && /^- /.test(line);
+/** The line just past the value of the key at `index`: indented continuation lines, and `-` list items when the value is empty. Blank and comment lines inside a block do not advance `end` on their own. */
+export function valueEnd(lines: readonly string[], index: number, emptyValue: boolean): number {
+	let end = index + 1;
+	for (let j = index + 1; j < lines.length; j++) {
+		const line = lines[j].replace(/\r$/, "");
+		if (/^[ \t]+[^ \t#]/.test(line) || (emptyValue && /^-(?:[ \t]|$)/.test(line))) { end = j + 1; continue; }
+		if (/^[ \t]*(?:#.*)?$/.test(line)) continue;
+		break;
+	}
+	return end;
 }
 
 /**
@@ -166,7 +170,7 @@ export function patchFrontmatterBlock(text: string, changes: PatchChanges): Patc
 		const line = lines[index];
 		const cr = line.endsWith("\r") ? "\r" : "";
 		const split = splitValue(line.slice(key.length + 1, line.length - cr.length));
-		if (split === "multiline" || hasContinuation(lines, index, split.scalar === "")) {
+		if (split === "multiline" || valueEnd(lines, index, split.scalar === "") > index + 1) {
 			return { ok: false, refuse: "multiline-value", key, message: `${key} holds a block scalar, flow collection or multi-line value.` };
 		}
 		lines[index] = `${key}: ${serializeScalar(value)}${split.comment}${cr}`;

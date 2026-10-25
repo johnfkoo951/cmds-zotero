@@ -128,3 +128,88 @@ test("0.6 references-refresh-rerender: a stale snapshot still starts the ordinar
 	assert.deepEqual(calls.warm, [false, false], "during the warm-up backoff nothing is started");
 	assert.deepEqual(calls.batches.map(batch => batch.options), [undefined, { refresh: true }, { refresh: true }]);
 });
+
+test("IMP-CITED-BY-VIEW, IME guard, jump fallback, and referencesFollowActiveNote: false", async () => {
+	const { ReferencesView, TFile } = await loadView();
+	const litFile = Object.assign(new TFile(), { path: "Lit/@doe2020.md", basename: "@doe2020", extension: "md" });
+	const citingA = Object.assign(new TFile(), { path: "Notes/PaperA.md", basename: "PaperA", extension: "md" });
+	const citingB = Object.assign(new TFile(), { path: "Notes/PaperB.md", basename: "PaperB", extension: "md" });
+	const entries = [entry("1:AAAA0001", "doe2020"), entry("1:BBBB0001", "roe2021")];
+	const texts = new Map<unknown, string>([
+		[litFile, "Cites [@roe2021] on line 0."],
+		[citingA, "# Paper A\nFirst cites [@doe2020] here and @doe2020 again."],
+		[citingB, "# Paper B\nLine 1\nCites [[@doe2020]] on line 2."],
+	]);
+	let activeFile: unknown = litFile;
+	const opened: { file: unknown; state: unknown }[] = [];
+	const scrolled: number[] = [];
+	const lastEditor = {
+		setCursor: (pos: { line: number }) => { scrolled.push(pos.line); },
+		scrollIntoView: () => undefined,
+	};
+	const plugin = {
+		settings: { referencesFollowActiveNote: false },
+		statusLine: () => "Zotero connected",
+		indexLoaded: () => true,
+		cachedIndexStale: () => false,
+		cachedIndexAgeMinutes: () => 5,
+		cachedEntries: () => entries,
+		forcedWarmActive: () => false,
+		warmBackoffActive: () => false,
+		warmIndex: () => Promise.resolve(),
+		bibliographyBatch: (items: ZoteroIndexEntry[]) => Promise.resolve(items.map(item => ({ text: `Live ${item.citekey}.`, source: "live" }))),
+		copyCslJson: async () => undefined,
+		run: async (action: () => Promise<void>) => { await action(); },
+		bibliography: { noteFormat: async () => ({ style: "apa", locale: "", styleFrom: "settings", localeFrom: "settings", problems: [] }) },
+		openNote: async () => undefined,
+		openPdf: async () => undefined,
+		copyLink: async () => undefined,
+		entryForFile: (f: unknown) => (f === litFile ? entries[0] : null),
+		lastMarkdownView: () => ({ file: litFile, editor: lastEditor }),
+	};
+	const app = {
+		workspace: {
+			getActiveViewOfType: () => null,
+			getActiveFile: () => activeFile,
+			getLeavesOfType: () => [],
+			getLeaf: () => ({ openFile: async (file: unknown, state: unknown) => { opened.push({ file, state }); } }),
+			on: () => ({}),
+		},
+		vault: {
+			cachedRead: async (f: unknown) => texts.get(f) ?? "",
+			getMarkdownFiles: () => [litFile, citingA, citingB],
+		},
+	};
+	const view = new ReferencesView({ app }, plugin);
+	await view.render();
+
+	// Outgoing row Enter keydown is guarded during IME composition, and falls back to lastMarkdownView when sidebar is focused.
+	const list = find(view.contentEl, node => node.tag === "ol");
+	const rowText = list?.children[0]?.children[0] as unknown as { listeners: Record<string, ((event: unknown) => void)[]> };
+	for (const listener of rowText.listeners.keydown) listener({ key: "Enter", isComposing: true });
+	for (const listener of rowText.listeners.keydown) listener({ key: "Enter", keyCode: 229 });
+	assert.deepEqual(scrolled, [], "IME composition blocks Enter jump");
+	for (const listener of rowText.listeners.keydown) listener({ key: "Enter", isComposing: false });
+	assert.deepEqual(scrolled, [0], "jump falls back to scrolling this.file when sidebar leaf is focused");
+
+	// Cited by in this vault section lists PaperA (2 citations) and PaperB (1 citation), excluding litFile itself.
+	const citedSection = find(view.contentEl, node => (node as unknown as { cls: string[] }).cls.includes("cmds-zotero-cited-by"));
+	assert.ok(citedSection, "renders Cited by in this vault section");
+	assert.equal(citedSection.children[0].text, "Cited by in this vault (2)");
+	const citedItems = citedSection.children[1].children;
+	assert.equal(citedItems.length, 2);
+	assert.match(citedItems[0].children[0].text, /PaperA · 2 citations — First cites \[@doe2020\] here/);
+	assert.match(citedItems[1].children[0].text, /PaperB · 1 citation — Cites \[\[@doe2020\]\] on line 2\./);
+	for (const listener of citedItems[1].children[0].listeners.click) listener();
+	assert.deepEqual(opened, [{ file: citingB, state: { eState: { line: 2 } } }]);
+
+	// When referencesFollowActiveNote is false, ordinary render keeps this.file; refetch updates to the new active file.
+	activeFile = citingA;
+	await view.render();
+	const titleAfterRender = find(view.contentEl, node => (node as unknown as { cls: string[] }).cls.includes("cmds-zotero-sidebar-title"));
+	assert.equal(titleAfterRender?.text, "@doe2020", "keeps pinned file when referencesFollowActiveNote is false");
+	await view.render({ refetch: true });
+	const titleAfterRefetch = find(view.contentEl, node => (node as unknown as { cls: string[] }).cls.includes("cmds-zotero-sidebar-title"));
+	assert.equal(titleAfterRefetch?.text, "PaperA", "refetch updates to active file");
+});
+

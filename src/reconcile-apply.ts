@@ -49,8 +49,8 @@ class ApplyRefusal extends Error {
 
 function framing(text: string): { yaml: string | null; body: string } {
 	const source = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source);
-	return { yaml: match?.[1] ?? null, body: match ? source.slice(match[0].length) : source };
+	const match = /^---\r?\n(?:([\s\S]*?)\r?\n)??---(?:\r?\n|$)/.exec(source);
+	return { yaml: match ? match[1] ?? "" : null, body: match ? source.slice(match[0].length) : source };
 }
 function stable(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;

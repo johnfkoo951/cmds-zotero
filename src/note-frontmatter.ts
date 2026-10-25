@@ -7,7 +7,7 @@
  * after writing. Pure module: no `obsidian` import.
  */
 import { LEGACY_LITERATURE_KEYS, LITERATURE_IDENTITY_KEYS, type LiteratureIdentityKey } from "./agent/types";
-import { doubleQuoted, hasQuotedKeyLine, keyLineIndexes, readFrontmatterBlock, serializeScalar, splitValue } from "./agent/frontmatter-patch";
+import { doubleQuoted, hasQuotedKeyLine, keyLineIndexes, readFrontmatterBlock, serializeScalar, splitValue, valueEnd } from "./agent/frontmatter-patch";
 import type { ZoteroIndexEntry } from "./types";
 import { literatureFrontmatterValues, ownerMarker } from "./note-writer";
 
@@ -34,18 +34,6 @@ export const REFRESH_KEYS: readonly LiteratureIdentityKey[] = LITERATURE_IDENTIT
  * convention uses (for example a `zotero_citekey` that Dataview queries read) is never removed on a guess.
  */
 export const LEGACY_FRONTMATTER_KEYS: readonly string[] = [...LEGACY_LITERATURE_KEYS];
-
-/** The line just past the value of the key at `index`: indented lines, and `- ` items when the value is empty. Blank lines inside a block count. */
-function valueEnd(lines: readonly string[], index: number, emptyValue: boolean): number {
-	let end = index + 1;
-	for (let j = index + 1; j < lines.length; j++) {
-		const line = lines[j].replace(/\r$/, "");
-		if (/^[ \t]+\S/.test(line) || (emptyValue && /^-(?: |$)/.test(line))) { end = j + 1; continue; }
-		if (/^[ \t]*$/.test(line)) continue;
-		break;
-	}
-	return end;
-}
 
 /** Characters a single-quoted YAML scalar cannot hold raw: C0/C1 controls, line and paragraph separators, the byte-order mark. */
 function unsafeInSingleQuotes(value: string): boolean {
@@ -112,7 +100,7 @@ export function editFrontmatterLines(text: string, edit: FrontmatterEdit): EditO
 		if (at.length > 1) return { ok: false, refuse: "duplicate-key", key, message: `${key} appears ${at.length} times in the frontmatter.` };
 		if (hasQuotedKeyLine(lines, key)) return { ok: false, refuse: "quoted-key", key, message: `${key} is written as a quoted key; edit it by hand.` };
 		if (!at.length) return null;
-		const empty = !lines[at[0]].replace(/\r$/, "").slice(key.length + 1).trim();
+		const empty = /^[ \t]*(?:#.*)?$/.test(lines[at[0]].replace(/\r$/, "").slice(key.length + 1));
 		return { at: at[0], end: valueEnd(lines, at[0], empty) };
 	};
 	for (const key of remove) {
@@ -159,7 +147,7 @@ export function frontmatterAndBody(text: string): { yaml: string | null; body: s
 
 function split(text: string): { yaml: string | null; body: string } {
 	const source = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-	const match = /^---\r?\n(?:([\s\S]*?)\r?\n)?---(?:\r?\n|$)/.exec(source);
+	const match = /^---\r?\n(?:([\s\S]*?)\r?\n)??---(?:\r?\n|$)/.exec(source);
 	return { yaml: match ? match[1] ?? "" : null, body: match ? source.slice(match[0].length) : source };
 }
 

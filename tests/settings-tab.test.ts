@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { build } from "esbuild";
 import { DEFAULT_SETTINGS } from "../src/types";
 import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, normalizeTagList, storesIndexPath, withLegacyIndexPath } from "../src/settings-data";
 import { choiceField, draftOf, endpointField, integerField, linesField, parsePeerVaults, peerVaultsField, secondsField, tagsField, toggleField, vaultPathField, vaultPathProblem } from "../src/settings/fields";
@@ -194,3 +195,85 @@ test("save is blocked while any control holds a rejected value", () => {
 	assert.equal(saveBlocker(new Map([["Request timeout", "Enter seconds from 1 to 180."]])), "Fix this value first: Request timeout.");
 	assert.equal(saveBlocker(new Map([["Index path", "x"], ["Peer vaults", "y"]])), "Fix these 2 values first: Index path, Peer vaults.");
 });
+
+test("CmdsZoteroSettingsTab: compositionend updates draft on text/textarea, and empty bibliographyStyle falls back to DEFAULT_SETTINGS on probe", async () => {
+	const mockObsidian = `
+	class FakeEl {
+		constructor() { this.children = []; this.text = ""; }
+		empty() { this.children = []; }
+		createDiv() { const c = new FakeEl(); this.children.push(c); return c; }
+		createEl() { const c = new FakeEl(); this.children.push(c); return c; }
+		hide() {}
+		toggle() {}
+		setText(t) { this.text = t; }
+		setAttr() {}
+	}
+	export class PluginSettingTab {
+		constructor(app, plugin) { this.app = app; this.plugin = plugin; this.containerEl = new FakeEl(); }
+		hide() {}
+	}
+	export class Setting {
+		constructor(container) { this.container = container; this.infoEl = new FakeEl(); Setting.instances.push(this); }
+		setName(n) { this.name = n; return this; }
+		setDesc() { return this; }
+		setHeading() { return this; }
+		addText(cb) {
+			const inputEl = { value: "", listeners: {}, addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); } };
+			const text = { inputEl, setValue(v) { inputEl.value = v; return this; }, onChange(fn) { this.change = fn; return this; }, setPlaceholder() { return this; } };
+			cb(text);
+			this.text = text;
+			return this;
+		}
+		addTextArea(cb) { return this.addText(cb); }
+		addDropdown(cb) { cb({ addOption() { return this; }, setValue() { return this; }, onChange() { return this; } }); return this; }
+		addToggle(cb) { cb({ setValue() { return this; }, onChange() { return this; } }); return this; }
+		addButton(cb) {
+			const btn = { setButtonText(t) { this.label = t; return this; }, setCta() { return this; }, setDisabled() { return this; }, onClick(fn) { this.click = fn; return this; } };
+			cb(btn);
+			this.button = btn;
+			return this;
+		}
+		addExtraButton(cb) { cb({ setIcon() { return this; }, setTooltip() { return this; }, onClick() { return this; }, extraSettingsEl: new FakeEl() }); return this; }
+	}
+	Setting.instances = [];
+	export class Notice {}
+	export class FuzzySuggestModal {}
+	export function requireApiVersion() { return false; }
+	`;
+	const bundled = await build({
+		stdin: { contents: 'export { CmdsZoteroSettingsTab } from "./src/settings/tab"; export { Setting } from "obsidian";', resolveDir: process.cwd(), loader: "ts" },
+		bundle: true, platform: "node", format: "esm", write: false,
+		plugins: [{
+			name: "mock-obsidian",
+			setup(b) {
+				b.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "mock" }));
+				b.onLoad({ filter: /.*/, namespace: "mock" }, () => ({ contents: mockObsidian, loader: "js" }));
+			},
+		}],
+	});
+	const { CmdsZoteroSettingsTab, Setting } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString("base64")}`) as {
+		CmdsZoteroSettingsTab: new (app: unknown, plugin: unknown) => { display(): void };
+		Setting: { instances: { name?: string; text?: { inputEl: { value: string; listeners: Record<string, (() => void)[]> } }; button?: { label?: string; click?: () => Promise<void> } }[] };
+	};
+	const probed: { style: string; locale: string }[] = [];
+	const plugin = {
+		manifest: { name: "CMDS Zotero", version: "0.6.5" },
+		settings: { ...DEFAULT_SETTINGS, bibliographyStyle: "chicago-author-date" },
+		bibliography: { probeFormat: async (fmt: { style: string; locale: string }) => { probed.push(fmt); return null; } },
+		saveSettings: async () => undefined,
+	};
+	Setting.instances.length = 0;
+	const tab = new CmdsZoteroSettingsTab({}, plugin);
+	tab.display();
+
+	const styleSetting = Setting.instances.find(s => s.name === "Bibliography style");
+	assert.ok(styleSetting?.text);
+	styleSetting.text.inputEl.value = "";
+	for (const fn of styleSetting.text.inputEl.listeners.compositionend ?? []) fn();
+
+	const saveSetting = Setting.instances.find(s => s.name === "Save configuration");
+	assert.ok(saveSetting?.button?.click);
+	await saveSetting.button.click();
+	assert.deepEqual(probed, [{ style: DEFAULT_SETTINGS.bibliographyStyle, locale: "" }]);
+});
+

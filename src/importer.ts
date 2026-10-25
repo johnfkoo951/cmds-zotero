@@ -36,6 +36,8 @@ export interface ImportPreview {
 	scope?: SectionGroup[];
 	/** 0.6.3: the previous note text is copied to the private backup folder before the write (rebuild, adopt). */
 	backup?: boolean;
+	/** 0.6.3: recovery mode when an import is blocked by an unowned note (`adopt`) or damaged markers (`rebuild`). */
+	recovery?: "adopt" | "rebuild";
 }
 // 0.5 R5: per-apply choices; ids are applied before writing.
 export interface ApplyOptions { detach?: string[]; reset?: string[] }
@@ -142,8 +144,19 @@ export class ImportService {
 		const { entry, bibliography, settings, imageHashes, related, previous, scope } = inputs;
 		const rendered = renderLiterature(entry, bibliography, settings, previous, imageHashes, { related, noteMarkdown: this.noteMarkdown, ...(scope ? { scope } : {}) });
 		const images = await this.checkImages(rendered.images, imageHashes, rendered.conflicts);
-		const preview: ImportPreview = { ...meta, content: rendered.content, conflicts: [...rendered.conflicts], softConflicts: [...rendered.softConflicts], detached: [...rendered.detached], sections: rendered.sections.map(section => ({ ...section })) };
-		this.snapshots.set(preview, { path: meta.path, content: rendered.content, original, images, conflicts: [...rendered.conflicts], rendered, render: inputs, identities, backup, preview: meta });
+		let recovery: ImportPreview["recovery"];
+		if (!meta.mode && original !== null) {
+			if (!original.includes(ownerMarker(entry.id))) {
+				const parsed = parseNoteText(original, yaml => parseYaml(yaml) as unknown);
+				const basename = (meta.path.split("/").pop() ?? meta.path).replace(/\.md$/i, "");
+				if (parsed.frontmatterParse !== "error" && adoptRefusal({ path: meta.path, basename, frontmatter: parsed.frontmatter }, original) === null) recovery = "adopt";
+			} else if (rendered.conflicts.some(conflict => /^(?:Duplicate|Malformed|Missing) managed /.test(conflict))) {
+				recovery = "rebuild";
+			}
+		}
+		const previewMeta: Snapshot["preview"] = { ...meta, ...(recovery ? { recovery } : {}) };
+		const preview: ImportPreview = { ...previewMeta, content: rendered.content, conflicts: [...rendered.conflicts], softConflicts: [...rendered.softConflicts], detached: [...rendered.detached], sections: rendered.sections.map(section => ({ ...section })) };
+		this.snapshots.set(preview, { path: meta.path, content: rendered.content, original, images, conflicts: [...rendered.conflicts], rendered, render: inputs, identities, backup, preview: previewMeta });
 		return preview;
 	}
 

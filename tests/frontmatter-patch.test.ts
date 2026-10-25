@@ -2,7 +2,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parse } from "yaml";
-import { patchFrontmatterBlock, readFrontmatterBlock, frontmatterText, serializeScalar, type PatchChanges } from "../src/agent/frontmatter-patch";
+import { patchFrontmatterBlock, readFrontmatterBlock, frontmatterText, serializeScalar, valueEnd, type PatchChanges } from "../src/agent/frontmatter-patch";
+import { parseNoteText } from "../src/frontmatter-read";
+import { editFrontmatterLines, frontmatterAndBody, verifyFrontmatterEdit } from "../src/note-frontmatter";
 
 const IDENTITY: PatchChanges = { citekeyProvisional: false, zoteroID: "1:AHNAAAA1", zoteroSelectURI: "zotero://select/library/items/AHNAAAA1", zoteroStatus: "resolved", zoteroCheckedAt: "2026-09-16T10:00:00.000Z" };
 
@@ -172,3 +174,45 @@ test("scalars: booleans and safe strings bare; timestamps, empties, reserved wor
 		assert.equal(parse(`k: ${serializeScalar(value)}`, { version: "1.1" }).k, value, `YAML 1.1: ${JSON.stringify(value)}`);
 	}
 });
+
+test("empty frontmatter parses as {} with ok status and never bridges across a --- horizontal rule in the body", () => {
+	const withRule = "---\n---\nFirst paragraph\n---\nSecond paragraph\n";
+	const parsed = parseNoteText(withRule, text => parse(text));
+	assert.equal(parsed.frontmatterParse, "ok");
+	assert.deepEqual(parsed.frontmatter, {});
+	assert.equal(parsed.body, "First paragraph\n---\nSecond paragraph\n");
+
+	const crlf = "﻿---\r\n---\r\nBody\r\n---\r\nAfter\r\n";
+	const parsedCrlf = parseNoteText(crlf, text => parse(text));
+	assert.equal(parsedCrlf.frontmatterParse, "ok");
+	assert.deepEqual(parsedCrlf.frontmatter, {});
+	assert.equal(parsedCrlf.body, "Body\r\n---\r\nAfter\r\n");
+
+	assert.deepEqual(frontmatterAndBody(withRule), { yaml: "", body: "First paragraph\n---\nSecond paragraph\n" });
+	const bodyWithRule = "Body before rule\n\n---\n\nBody after rule\n";
+	const adopted = editFrontmatterLines(bodyWithRule, { set: { zoteroID: "1:ITEM0001" }, append: true, create: true });
+	assert.ok(adopted.ok);
+	assert.equal(verifyFrontmatterEdit(`---\n---\n${bodyWithRule}`, adopted.text, { set: { zoteroID: "1:ITEM0001" }, append: true, create: true }, text => parse(text)), null);
+});
+
+test("valueEnd and splitValue handle blank/comment lines before continuations, tab/bare list dashes and quotes followed by #", () => {
+	const refuse = (text: string) => {
+		const outcome = patchFrontmatterBlock(text, { zoteroStatus: "resolved" });
+		assert.equal(outcome.ok, false, text);
+		return (outcome as Extract<ReturnType<typeof patchFrontmatterBlock>, { ok: false }>).refuse;
+	};
+	assert.equal(refuse("---\nzoteroStatus: \"resolved\"#notacomment\n---\n"), "multiline-value");
+	assert.equal(refuse("---\nzoteroStatus: 'resolved'#notacomment\n---\n"), "multiline-value");
+	assert.equal(refuse("---\nzoteroStatus: plain\n\n  # comment\n  continued\n---\n"), "multiline-value");
+	assert.equal(refuse("---\nzoteroStatus:\n  # comment\n- item\n---\n"), "multiline-value");
+	assert.equal(refuse("---\nzoteroStatus:\n-\titem\n---\n"), "multiline-value");
+	assert.equal(refuse("---\nzoteroStatus:\n-\n---\n"), "multiline-value");
+
+	const okQuotedComment = patchFrontmatterBlock("---\nzoteroStatus: \"not-found\" # comment\n---\n", { zoteroStatus: "resolved" });
+	assert.ok(okQuotedComment.ok);
+	assert.equal(okQuotedComment.text, "---\nzoteroStatus: resolved # comment\n---\n");
+
+	const lines = ["authors: # comment", "  # inner comment", "", "- Smith, A", "  # trailing comment", "", "year: 2026"];
+	assert.equal(valueEnd(lines, 0, true), 4, "blank and comment lines after the list stay outside end");
+});
+

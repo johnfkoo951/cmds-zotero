@@ -3,7 +3,9 @@
  * (`[see @key, pp. 33–35; also -@k2, ch. 1]`), the citation under a column, locator edits and merging new keys into the
  * cluster at the cursor. Pure: never imports `obsidian`; columns are UTF-16 offsets into the line, as the editor counts.
  */
-import { KEY } from "./scan";
+
+/** Pandoc citation keys (any Unicode letter, digit or `_`, with internal punctuation). */
+export const UNICODE_KEY = "[\\p{L}\\p{N}_](?:[\\p{L}\\p{N}_:.#$%&+?<>~/-]*[\\p{L}\\p{N}_])?";
 
 /** A pandoc locator: the label as written (`p.`, `pp.`, `chap.` …; empty when a bare number implies a page) and its value. */
 export interface Locator { label: string; value: string }
@@ -34,16 +36,24 @@ export interface CitationCluster {
 	items: CitationItem[];
 }
 
+export interface ComposedCitationItem {
+	citekey: string;
+	prefix?: string;
+	locator?: string;
+	suffix?: string;
+	suppressAuthor?: boolean;
+}
+
 /**
- * Pandoc locator terms (singular and plural, abbreviated or spelled out), longest first so `pp.` wins over `p.`. The edit
- * modal offers `LOCATOR_LABELS`; parsing accepts every term here.
+ * Pandoc locator terms (singular and plural, abbreviated or spelled out), longest first so `pp.` wins over `p.` and
+ * `s.vv.` wins over `s.v.`. The edit modal offers `LOCATOR_LABELS`; parsing accepts every term here.
  */
 const LOCATOR_TERMS = [
 	"pages", "page", "pp.", "p.", "chapters", "chapter", "chaps.", "chap.", "ch.", "sections", "section", "secs.", "sec.", "§§", "§",
 	"figures", "figure", "figs.", "fig.", "paragraphs", "paragraph", "paras.", "para.", "¶¶", "¶", "lines", "line", "ll.", "l.",
 	"notes", "note", "nn.", "n.", "volumes", "volume", "vols.", "vol.", "columns", "column", "cols.", "col.", "books", "book", "bks.", "bk.",
 	"parts", "part", "pts.", "pt.", "verses", "verse", "vv.", "v.", "numbers", "number", "nos.", "no.", "folios", "folio", "fols.", "fol.",
-	"opus", "op.", "sub verbo", "s.v.", "s.vv.",
+	"opus", "op.", "sub verbo", "s.vv.", "s.v.",
 ];
 
 /** Labels the locator modal offers, in this order. */
@@ -57,11 +67,11 @@ export function isPageLocator(locator: Locator): boolean { return PAGE_LABELS.ha
 
 const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const TERM = LOCATOR_TERMS.map(escape).join("|");
-/** One locator value: a number or roman numeral (optionally with a letter), a range, and comma-separated further numbers. */
+/** One locator value: a number or roman numeral (optionally with a letter), a range, and comma-separated further values. */
 const VALUE = "[0-9]+[a-z]?|[ivxlcdmIVXLCDM]+";
-const LOCATOR_VALUE = `(?:${VALUE})(?:\\s*[-–—]\\s*(?:${VALUE}))?(?:\\s*,\\s*[0-9]+[a-z]?(?:\\s*[-–—]\\s*[0-9]+[a-z]?)?)*`;
-// A spelled-out term needs a space before its value (`page 3`, not `page3`); an abbreviation or symbol may touch it (`p.3`, `§2`).
-const LABELLED = new RegExp(`^\\s*,?\\s*(${TERM})(?:(?<=[.§¶])\\s*|\\s+)(${LOCATOR_VALUE})(?![\\p{L}\\p{N}])`, "u");
+const LOCATOR_VALUE = `(?:${VALUE})(?:\\s*[-–—]\\s*(?:${VALUE}))?(?:\\s*,\\s*(?:${VALUE})(?:\\s*[-–—]\\s*(?:${VALUE}))?)*`;
+// A spelled-out term needs a space before its value (`page 3`, not `page3`); an abbreviation or symbol may touch an Arabic digit (`p.3`, `§2`).
+const LABELLED = new RegExp(`^\\s*,?\\s*(${TERM})(?:(?<=[.§¶])\\s*(?=[0-9])|\\s+)(${LOCATOR_VALUE})(?![\\p{L}\\p{N}]|\\.\\p{L})`, "u");
 const UNLABELLED = new RegExp(`^\\s*,\\s*([0-9]+(?:\\s*[-–—]\\s*[0-9]+)?(?:\\s*,\\s*[0-9]+(?:\\s*[-–—]\\s*[0-9]+)?)*)(?![\\p{L}\\p{N}])`, "u");
 
 /** Splits the text after a key into a locator and the rest; `rest` keeps its leading comma or space as written. */
@@ -79,7 +89,7 @@ export function locatorText(locator: Locator | null): string {
 	return locator.label ? `, ${locator.label} ${locator.value.trim()}` : `, ${locator.value.trim()}`;
 }
 
-const ITEM = new RegExp(`^(.*?)(-?)@(${KEY})(.*)$`, "su");
+const ITEM = new RegExp(`^(.*?)(-?)@(${UNICODE_KEY})(.*)$`, "su");
 /** A bracket whose content has no other brackets and that is not a wikilink, an image or a Markdown link. */
 const BRACKET = /\[([^[\]\n]*)\]/g;
 
@@ -123,8 +133,8 @@ export function parseClusters(line: string): CitationCluster[] {
 	return clusters;
 }
 
-const BARE = new RegExp(`(^|[\\s(,])(-?)@(${KEY})`, "gu");
-const WIKILINK = new RegExp(`\\[\\[@(${KEY})(?:[|#][^\\]]*)?\\]\\]`, "g");
+const BARE = new RegExp(`(^|[\\s(,])(-?)@(${UNICODE_KEY})`, "gu");
+const WIKILINK = new RegExp(`\\[\\[@(${UNICODE_KEY})(?:[|#][^\\]]*)?\\]\\]`, "gu");
 const BRACKET_SUFFIX = /^ ?\[([^[\]@\n]*)\]/;
 
 /** Every citation on the line: bracket items, wikilinks and bare `@key` (with a following ` [p. 3]` locator), by column. */
@@ -186,6 +196,32 @@ export function locatorEdit(item: CitationItem, locator: Locator | null): { from
 	const head = `${item.suppressAuthor ? "-" : ""}@${item.citekey}`;
 	if (!next) return { from: item.start, to: item.end, text: item.rest.trim() ? `${head} [${item.rest.replace(/^\s*,?\s*/, "")}]` : head };
 	return { from: item.start, to: item.end, text: `${head} [${locatorText(next).replace(/^, /, "")}${item.rest}]` };
+}
+
+/** Decomposes a parsed cluster into editable items for the citation composer. */
+export function decomposeCluster(cluster: CitationCluster): ComposedCitationItem[] {
+	return cluster.items.map(item => ({
+		citekey: item.citekey,
+		prefix: item.prefix,
+		locator: item.locator ? (item.locator.label ? `${item.locator.label} ${item.locator.value.trim()}` : item.locator.value.trim()) : "",
+		suffix: item.rest.replace(/^\s*,\s*/, "").trim(),
+		suppressAuthor: item.suppressAuthor,
+	}));
+}
+
+/** Formats composed citation items into a pandoc cluster (`[see @a, p. 3, note; -@b]`); empty when no valid citekey is given. */
+export function composeCluster(items: readonly ComposedCitationItem[]): string {
+	const parts: string[] = [];
+	for (const item of items) {
+		const citekey = item.citekey.replace(/^\s*-?@/, "").trim();
+		if (!citekey) continue;
+		const prefix = item.prefix?.trim() ?? "";
+		const locator = item.locator?.replace(/^\s*,\s*/, "").trim() ?? "";
+		const suffix = item.suffix?.replace(/^\s*,\s*/, "").trim() ?? "";
+		const head = `${prefix ? `${prefix} ` : ""}${item.suppressAuthor ? "-" : ""}@${citekey}`;
+		parts.push(`${head}${locator ? `, ${locator}` : ""}${suffix ? `, ${suffix}` : ""}`);
+	}
+	return parts.length ? `[${parts.join("; ")}]` : "";
 }
 
 /** One edit to a line: replace `from`–`to` with `text`, then put the cursor at `cursor` (all columns on that line). */

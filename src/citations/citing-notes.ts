@@ -9,7 +9,13 @@ import { scanCitations } from "./scan";
 export const CITING_READ_CONCURRENCY = 8;
 
 /** One note citing the source: the line of its first citation and how many citations it has. */
-export interface CitingNote<F> { file: F; line: number; count: number }
+export interface CitingNote<F> {
+	file: F;
+	line: number;
+	count: number;
+	snippet: string;
+	lines: number[];
+}
 
 /**
  * The notes among `files` that cite one of `citekeys` ([@key], @key or [[@key]]), read `concurrency` at a time. A note is
@@ -23,7 +29,11 @@ export async function findCitingNotes<F extends { path: string }>(files: readonl
 		const text = await read(file);
 		if (!needles.some(needle => text.includes(needle))) return null;
 		const occurrences = scanCitations(text).filter(item => keys.has(item.citekey));
-		return occurrences.length ? { file, line: occurrences[0].line, count: occurrences.length } : null;
+		if (!occurrences.length) return null;
+		const line = occurrences[0].line;
+		const snippet = (text.split(/\r?\n/)[line] ?? "").trim().slice(0, 140);
+		const lines = [...new Set(occurrences.map(item => item.line))];
+		return { file, line, count: occurrences.length, snippet, lines };
 	});
 	const hits = found.filter((hit): hit is CitingNote<F> => hit !== null);
 	return hits.sort((a, b) => b.count - a.count || a.file.path.localeCompare(b.file.path));

@@ -60,13 +60,13 @@ export function validateEntryStructure(value: unknown): value is ZoteroIndexEntr
 	try {
 		const keys = new Set<string>();
 		for (const attachment of item.attachments) {
-			if (!record(attachment) || !ITEM_KEY.test(attachment.key) || typeof attachment.openURI !== "string" || typeof attachment.title !== "string" || !(attachment.path === null || typeof attachment.path === "string") || !Array.isArray(attachment.annotations)) return false;
+			if (!record(attachment) || !ITEM_KEY.test(attachment.key) || typeof attachment.openURI !== "string" || typeof attachment.title !== "string" || !(attachment.path === null || typeof attachment.path === "string") || (attachment.contentType !== undefined && typeof attachment.contentType !== "string") || (attachment.filename !== undefined && typeof attachment.filename !== "string") || !Array.isArray(attachment.annotations)) return false;
 			const uri = parseZoteroURI(attachment.openURI);
 			if (uri.action !== "open-pdf" || uri.itemKey !== attachment.key || uri.itemKey === item.itemKey || uri.libraryType !== item.libraryType || uri.groupID !== item.groupID || keys.has(attachment.key)) return false;
 			keys.add(attachment.key);
 			for (const annotation of attachment.annotations) {
 				if (!record(annotation) || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachment.key || !positiveInteger(annotation.page) || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags)) return false;
-				if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some(text => typeof text !== "string") || (annotation.imagePath !== undefined && typeof annotation.imagePath !== "string")) return false;
+				if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some(text => typeof text !== "string") || (annotation.imagePath !== undefined && typeof annotation.imagePath !== "string") || (annotation.sortIndex !== undefined && typeof annotation.sortIndex !== "string")) return false;
 				const location = parseZoteroURI(annotation.uri);
 				if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
 			}

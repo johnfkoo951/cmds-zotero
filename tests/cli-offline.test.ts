@@ -4,7 +4,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, renameSync, rmSync, truncateSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { entryHash } from "../src/identity";
+import { probeBbt } from "../src/cli/bbt-direct";
 import { pluginApiVersionsFor } from "../src/cli/core";
 import type { ZoteroIndexEntry } from "../src/types";
 
@@ -235,3 +237,43 @@ test("--config-dir reads the plugin settings and index path from the vault's own
 	}
 	assert.match(run(["--help"]).stdout, /--config-dir/);
 });
+
+test("Bug 37: probeBbt rejects blank readiness strings as invalid-response and attaches transport reason on failure", async () => {
+	const server = createServer((_req, res) => {
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify({ jsonrpc: "2.0", result: { zotero: "  ", betterbibtex: "7.0" }, id: 1 }));
+	});
+	await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+	try {
+		const port = (server.address() as { port: number }).port;
+		const bad = await probeBbt(`http://127.0.0.1:${port}/better-bibtex/json-rpc`, 1000);
+		assert.equal(bad.reachable, false);
+		assert.equal(bad.reason, "invalid-response");
+	} finally {
+		await new Promise<void>(resolve => server.close(() => resolve()));
+	}
+	const refused = await probeBbt("http://127.0.0.1:1/better-bibtex/json-rpc", 500);
+	assert.equal(refused.reachable, false);
+	assert.equal(refused.reason, "connection-refused");
+});
+
+test("CLI accepts --adopt, --rebuild, --scope and --locale and gates import-modes against old hosts", () => {
+	const root = vault();
+	const old = fakeObsidian("old");
+	const gated = spawnSync(process.execPath, [script, "--vault", "Research", "--vault-path", root, "--action", "import", "--adopt", "Notes/paper.md"], { encoding: "utf8", env: old.env });
+	assert.equal(gated.status, 1);
+	assert.equal(JSON.parse(gated.stdout).reason, "plugin-too-old");
+
+	const offlineAdopt = run(["--vault", "Research", "--vault-path", root, "--offline", "--action", "import", "--adopt", "Notes/paper.md", "--scope", "overview,annotations"]);
+	assert.equal(offlineAdopt.status, 1);
+	assert.equal(JSON.parse(offlineAdopt.stdout).reason, "requires-obsidian");
+
+	const badCombo = run(["--vault", "Research", "--vault-path", root, "--offline", "--action", "import", "--citekey", "smith2020", "--adopt", "Notes/paper.md", "--rebuild"]);
+	assert.equal(badCombo.status, 2);
+	assert.match(badCombo.stderr, /cannot be combined/);
+
+	const badLocale = run(["--vault", "Research", "--vault-path", root, "--offline", "--action", "identity", "--citekey", "smith2020", "--locale", "not_a_locale_123"]);
+	assert.equal(badLocale.status, 2);
+	assert.match(badLocale.stderr, /BCP 47 locale/);
+});
+

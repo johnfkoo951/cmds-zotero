@@ -5,8 +5,11 @@ import { bibliographySourceTag, fallbackCitation, referenceHeader, referenceRowT
 import type { BibliographyDetail } from "../bibliography-store"; // 0.5 R12
 import { citedKeySet } from "../citations/cited-keys"; // 0.6.2
 import { referenceRowsFromSet } from "../citations/check";
+import { findCitingNotes } from "../citations/citing-notes";
 import { withoutReferencesBlock } from "../citations/references-block";
 import { formatLabel, type NoteFormat } from "../bibliography/format";
+import { indexDerived } from "../index-derived";
+import { noteIdentity } from "../note-aliases";
 
 export const VIEW_TYPE_REFERENCES = "cmds-zotero-references";
 
@@ -38,11 +41,23 @@ export class ReferencesView extends ItemView {
 		return Promise.resolve();
 	}
 
-	private activeFile(): TFile | null {
+	private activeFile(refetch = false): TFile | null {
+		if (!refetch && !this.plugin.settings.referencesFollowActiveNote && this.file) return this.file;
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (view?.file) return view.file;
 		const file = this.app.workspace.getActiveFile();
 		return file instanceof TFile && file.extension === "md" ? file : this.file;
+	}
+
+	private entryForFile(file: TFile): ZoteroIndexEntry | null {
+		const withHook = this.plugin as { entryForFile?: (file: TFile) => ZoteroIndexEntry | null };
+		if (typeof withHook.entryForFile === "function") return withHook.entryForFile(file);
+		const entries = this.plugin.cachedEntries();
+		if (!entries.length) return null;
+		const fm: Record<string, unknown> | undefined = this.app.metadataCache?.getFileCache(file)?.frontmatter;
+		const derived = indexDerived(entries);
+		const id = noteIdentity(file.basename, fm, derived.aliasIndex);
+		return id ? derived.entryById(id) : null;
 	}
 
 	private async noteText(file: TFile): Promise<string> {
@@ -62,7 +77,7 @@ export class ReferencesView extends ItemView {
 	 */
 	async render(options: { refetch?: boolean } = {}): Promise<void> {
 		const generation = ++this.generation;
-		const file = this.activeFile();
+		const file = this.activeFile(options.refetch === true);
 		this.file = file;
 		const container = this.contentEl;
 		container.empty();
@@ -110,12 +125,41 @@ export class ReferencesView extends ItemView {
 			if (generation !== this.generation) return;
 			details.forEach((detail, index) => { this.showBibliography(slots[index].text, slots[index].entry, detail); });
 		}).catch(() => undefined);
+		const noteEntry = this.entryForFile(file);
+		if (noteEntry) {
+			const files = (this.app.vault.getMarkdownFiles?.() ?? []).filter(candidate => candidate.path !== file.path);
+			const citing = await findCitingNotes(files, [noteEntry.citekey, ...(noteEntry.citekeyHistory ?? [])], candidate => this.noteText(candidate));
+			if (generation !== this.generation) return;
+			const section = container.createDiv({ cls: "cmds-zotero-cited-by" });
+			section.createDiv({ cls: "cmds-zotero-sidebar-title", text: `Cited by in this vault (${citing.length})` });
+			if (!citing.length) {
+				section.createEl("p", { cls: "setting-item-description", text: "No notes in this vault cite this source." });
+			} else {
+				const citedList = section.createEl("ul", { cls: "cmds-zotero-reference-list cmds-zotero-cited-by-list" });
+				for (const hit of citing) {
+					const item = citedList.createEl("li", { cls: "cmds-zotero-reference cmds-zotero-cited-by-item" });
+					const row = item.createDiv({
+						cls: "cmds-zotero-reference-text",
+						text: `${hit.file.basename || hit.file.path} · ${hit.count} citation${hit.count === 1 ? "" : "s"}${hit.snippet ? ` — ${hit.snippet}` : ""}`,
+						attr: { role: "button", tabindex: "0" },
+					});
+					row.addEventListener("click", () => this.jump(hit.line, hit.file));
+					row.addEventListener("keydown", (event: KeyboardEvent) => {
+						if (event.isComposing || (event as { keyCode?: number }).keyCode === 229) return;
+						if (event.key === "Enter") this.jump(hit.line, hit.file);
+					});
+				}
+			}
+		}
 	}
 
 	private renderRow(item: HTMLElement, row: ReferenceRow, state: SnapshotState): HTMLElement {
 		const text = item.createDiv({ cls: "cmds-zotero-reference-text", attr: { role: "button", tabindex: "0" } });
 		text.addEventListener("click", () => this.jump(row.line));
-		text.addEventListener("keydown", event => { if (event.key === "Enter") this.jump(row.line); });
+		text.addEventListener("keydown", (event: KeyboardEvent) => {
+			if (event.isComposing || (event as { keyCode?: number }).keyCode === 229) return;
+			if (event.key === "Enter") this.jump(row.line);
+		});
 		if (this.nocite.has(row.citekey)) item.createSpan({ cls: "cmds-zotero-reference-tag", text: "nocite" });
 		if (row.status === "resolved" && row.entry) {
 			const entry = row.entry;
@@ -151,11 +195,28 @@ export class ReferencesView extends ItemView {
 		button.addEventListener("click", () => { void this.plugin.run(async () => { await run(); }); });
 	}
 
-	private jump(line: number): void {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view || view.file !== this.file) return;
-		view.editor.setCursor({ line, ch: 0 });
-		view.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
+	private jump(line: number, targetFile: TFile | null = this.file): void {
+		if (!targetFile) return;
+		const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (active && active.file === targetFile) {
+			active.editor.setCursor({ line, ch: 0 });
+			active.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
+			return;
+		}
+		const leaf = this.app.workspace.getLeavesOfType?.("markdown").find(item => item.view instanceof MarkdownView && item.view.file === targetFile);
+		if (leaf && leaf.view instanceof MarkdownView) {
+			this.app.workspace.setActiveLeaf?.(leaf, { focus: true });
+			leaf.view.editor.setCursor({ line, ch: 0 });
+			leaf.view.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
+			return;
+		}
+		const last = this.plugin.lastMarkdownView?.();
+		if (last && last.file === targetFile) {
+			last.editor.setCursor({ line, ch: 0 });
+			last.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
+			return;
+		}
+		void this.app.workspace.getLeaf?.(false)?.openFile(targetFile, { eState: { line } });
 	}
 
 	private async copyBibliography(): Promise<void> {

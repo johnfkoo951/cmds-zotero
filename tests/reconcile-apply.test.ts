@@ -293,3 +293,13 @@ test("snapshot exceptions refuse as index-invalid with the message; only a typed
 	assert.equal(gateRefusal.refusedReason, "bbt-unreachable");
 	assert.equal("refusedMessage" in gateRefusal, false);
 });
+
+test("apply preserves a note body containing a --- horizontal rule", async () => {
+	const withRule = "---\ntype: paper-hub\ncitekey: smith2020\ndoi: 10.1000/example\n---\nSection 1\n---\nSection 2\n";
+	const host = fakeHost({ text: withRule });
+	const result = await applyReconcile(host, plan(withRule));
+	assert.equal(result.mode, "applied");
+	assert.equal(result.applied, 1);
+	assert.ok(host.text.endsWith("---\nSection 1\n---\nSection 2\n"));
+});
+

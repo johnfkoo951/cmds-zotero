@@ -141,6 +141,29 @@ test("a note without the owner marker is still refused as a hard conflict (legac
 	assert.equal(render(foreign, entry, { detach: ["overview"], reset: ["overview"] }).conflicts.length, 1);
 });
 
+test("CRLF notes, offline citation reasons and missing citation blocks are handled cleanly (Bug 9, Bug 17)", () => {
+	const initial = render(null).content;
+	const crlf = initial.replace(/\n/g, "\r\n");
+	const updated = render(crlf);
+	assert.deepEqual(updated.conflicts, []);
+	assert.deepEqual(updated.softConflicts, []);
+	const detached = detachSections(crlf, [ID1]);
+	assert.match(detached, new RegExp(`<!-- cmds-zotero:${ID1}:detached -->`));
+	const body1 = state(updated, ID1)?.body ?? "";
+	const reset = resetSections(detached, [ID1], new Map([[ID1, body1]]));
+	assert.match(reset, new RegExp(`<!-- cmds-zotero:${ID1}:${hashText(body1)} -->`));
+	// Offline update (empty bibliography): citation is kept with the offline reason, and a missing citation block is still caught.
+	const offlineKept = renderLiterature(entry, "", DEFAULT_SETTINGS, initial);
+	assert.deepEqual(offlineKept.conflicts, []);
+	assert.equal(state(offlineKept, "citation")?.reason, "bibliography unavailable offline: kept");
+	const offlineDetachedReset = renderLiterature(entry, "", DEFAULT_SETTINGS, detachSections(initial, ["citation"]), new Map(), { reset: ["citation"] });
+	assert.equal(state(offlineDetachedReset, "citation")?.reason, "cannot reset: bibliography unavailable offline");
+	const withoutCitation = initial.replace(/<!-- cmds-zotero:citation:[\s\S]*?<!-- \/cmds-zotero:citation -->\n*/, "");
+	const offlineMissing = renderLiterature(entry, "", DEFAULT_SETTINGS, withoutCitation);
+	assert.deepEqual(offlineMissing.conflicts, ["Missing managed section: citation"]);
+	assert.equal(state(offlineMissing, "citation")?.state, "missing");
+});
+
 // Import service: soft conflicts apply, detach/reset travel with apply, reset backs the note up under the private folder.
 const facade = `export function parseYaml(input) { return Object.fromEntries(input.split('\\n').map(line => { const i = line.indexOf(':'); return [line.slice(0,i),JSON.parse(line.slice(i+1))]; })); }
 export function normalizePath(p) { return p; }

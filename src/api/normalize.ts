@@ -116,8 +116,7 @@ function hasPageIndex(position: unknown): position is { pageIndex: number } {
 	return record(position) && typeof position.pageIndex === "number" && Number.isSafeInteger(position.pageIndex) && position.pageIndex >= 0;
 }
 
-function normalizeAnnotation(raw: Record<string, unknown>, attachment: Attachment): Annotation {
-	const position = annotationPosition(raw);
+function normalizeAnnotation(raw: Record<string, unknown>, attachment: Attachment, position = annotationPosition(raw)): Annotation {
 	if (!hasPageIndex(position)) throw new Error("Invalid annotation position");
 	const fields = annotationFields(raw, attachment);
 	const page = position.pageIndex + 1;
@@ -137,16 +136,23 @@ function normalizeReaderAnnotation(raw: Record<string, unknown>, position: Recor
 
 export function normalizeAttachments(raw: unknown, entry: ZoteroIndexEntry): Attachment[] {
 	if (!Array.isArray(raw)) throw new Error("Expected BBT attachment array");
+	const exportedByKey = new Map<string, Record<string, unknown>>();
+	if (Array.isArray(entry.metadata.attachments)) {
+		for (const item of entry.metadata.attachments) {
+			if (!record(item)) continue;
+			try {
+				const identity = typeof item.select === "string" ? parseZoteroURI(item.select) : parseItemURI(text(item.uri));
+				if (identity.libraryType === entry.libraryType && identity.groupID === entry.groupID && !exportedByKey.has(identity.itemKey)) {
+					exportedByKey.set(identity.itemKey, item);
+				}
+			} catch { /* ignore malformed metadata attachment rows */ }
+		}
+	}
 	return raw.map(value => {
 		if (!record(value) || typeof value.open !== "string" || !(value.path === false || value.path === null || value.path === undefined || typeof value.path === "string")) throw new Error("Malformed BBT attachment");
 		const uri = parseZoteroURI(value.open);
 		if (uri.action !== "open-pdf" || uri.libraryType !== entry.libraryType || uri.groupID !== entry.groupID || uri.itemKey === entry.itemKey) throw new Error("Attachment URI identity mismatch");
-		const exported = Array.isArray(entry.metadata.attachments) ? entry.metadata.attachments.filter(record).find(item => {
-			try {
-				const identity = typeof item.select === "string" ? parseZoteroURI(item.select) : parseItemURI(text(item.uri));
-				return identity.itemKey === uri.itemKey && identity.libraryType === uri.libraryType && identity.groupID === uri.groupID;
-			} catch { return false; }
-		}) : undefined;
+		const exported = exportedByKey.get(uri.itemKey);
 		if (!exported) throw new Error("Attachment does not match the exported parent's attachment identities; refresh again.");
 		const attachment: Attachment = { key: uri.itemKey, openURI: value.open, path: typeof value.path === "string" ? value.path : null, title: text(exported.title), annotations: [] };
 		// BBT JSON keeps `mimeType` for attachments (its `contentType` is dropped by the BBT JSON field filter).
@@ -163,7 +169,7 @@ export function normalizeAttachments(raw: unknown, entry: ZoteroIndexEntry): Att
 			if (!record(annotation)) throw new Error("Invalid annotation");
 			const position = annotationPosition(annotation);
 			if (!pdf && !hasPageIndex(position) && record(position)) readerAnnotations.push(normalizeReaderAnnotation(annotation, position, attachment, entry));
-			else attachment.annotations.push(normalizeAnnotation(annotation, attachment));
+			else attachment.annotations.push(normalizeAnnotation(annotation, attachment, position));
 		}
 		if (readerAnnotations.length) attachment.readerAnnotations = readerAnnotations;
 		return attachment;

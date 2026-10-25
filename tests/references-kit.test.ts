@@ -31,7 +31,7 @@ test("check-citations: unknown, ambiguous, former, no note and nocite rows; nega
 	assert.ok(unloaded.rows.every(row => row.status === "unchecked"));
 });
 
-test("references block: insert at the end, update unedited, keep edited, detached and damaged blocks", () => {
+test("references block: insert at the end, update unedited, keep edited, detached, damaged and CRLF blocks", () => {
 	const note = "# Draft\n\nText [@a1].\n";
 	const inserted = planReferencesSection(note, "Entry A.", "References");
 	assert.equal(inserted.kind, "insert");
@@ -39,6 +39,7 @@ test("references block: insert at the end, update unedited, keep edited, detache
 	assert.ok(first.startsWith("# Draft\n\nText [@a1].\n\n## References\n\n<!-- cmds-zotero-references:"));
 	assert.ok(first.endsWith("Entry A.\n<!-- /cmds-zotero-references -->\n"));
 	assert.equal(planReferencesSection(first, "Entry A.", "References").kind, "unchanged");
+	assert.equal(planReferencesSection(first.replace(/\n/g, "\r\n"), "Entry A.", "References").kind, "unchanged");
 	const updated = planReferencesSection(first, "Entry A.\n\nEntry B.", "References");
 	assert.equal(updated.kind, "update");
 	assert.ok(updated.kind === "update" && updated.text.includes("Entry B.") && updated.text.startsWith("# Draft"));
@@ -51,16 +52,17 @@ test("references block: insert at the end, update unedited, keep edited, detache
 	assert.equal(conflict.kind, "conflict");
 	assert.equal(locateReferencesBlock(first.replace("<!-- /cmds-zotero-references -->", "")).kind, "conflict");
 	assert.equal(locateReferencesBlock(first.replace(/:[a-f0-9]{64}/, ":abc")).kind, "conflict");
-	// Citations inside the block never count.
+	// Citations inside the block never count, including with CRLF line endings.
 	const withCitation = planReferencesSection(note, "Entry mentioning @hidden2000.", "References");
-	assert.deepEqual(citedKeySet(withoutReferencesBlock(withCitation.kind === "insert" ? withCitation.text : "")).keys, ["a1"]);
+	const crlf = (withCitation.kind === "insert" ? withCitation.text : "").replace(/\n/g, "\r\n");
+	assert.deepEqual(citedKeySet(withoutReferencesBlock(crlf)).keys, ["a1"]);
 });
 
-test("export copy: comments, markers, callouts, highlights, block IDs, wikilinks, embeds and former keys", () => {
+test("export copy: comments, markers, callouts, highlights, block IDs, wikilinks, embeds, former keys (including nocite) and CRLF", () => {
 	const source = [
-		"---", "title: Draft", "citekey: own2020", "zoteroID: \"1:ABCD0001\"", "aliases:", "  - x", "---",
+		"---", "title: Draft", "citekey: own2020", "zoteroID: \"1:ABCD0001\"", "nocite: \"@old2019\"", "aliases:", "  - x", "---",
 		"Intro %%hidden%% text. ==Key point== here ^block-1",
-		"See [[@smith2020|Smith]], [[Lit Note]], [[Plain Note#Part|shown]], [[Missing Note]] and ![[figure 1.png|300]].",
+		"See [[@smith2020|Smith]], [[@Lit Note Title]], [[Lit Note]], [[Plain Note#Part|shown]], [[Missing Note]] and ![[figure 1.png|300]].",
 		"Former [@old2019, p. 2] and `[[@code]] %%kept%%`.",
 		"![[Other Note]]",
 		"<!-- cmds-zotero:overview:" + "a".repeat(64) + " -->",
@@ -80,29 +82,29 @@ test("export copy: comments, markers, callouts, highlights, block IDs, wikilinks
 		"## References",
 		"",
 		referencesBlock("Entry."),
-	].join("\n");
-	const resolve = (path: string): LinkTarget => path === "Lit Note" ? { kind: "literature", citekey: "lit2021" }
+	].join("\r\n");
+	const resolve = (path: string): LinkTarget => path === "Lit Note" || path === "@Lit Note Title" ? { kind: "literature", citekey: "lit2021" }
 		: path === "figure 1.png" ? { kind: "image", path: "Assets/figure 1.png" }
 		: path === "Plain Note" || path === "Other Note" ? { kind: "note", path: `${path}.md` } : { kind: "missing" };
 	const { text, report } = sanitizeForExport(source, { resolve, renamed: new Map([["old2019", "new2019"]]) });
 	const lines = text.split("\n");
-	assert.deepEqual(lines.slice(0, 6), ["---", "title: Draft", "aliases:", "  - x", "---", "Intro  text. [Key point]{.mark} here"]);
-	assert.equal(lines[6], "See [@smith2020], [@lit2021], shown, Missing Note and ![](<Assets/figure 1.png>).");
-	assert.equal(lines[7], "Former [@new2019, p. 2] and `[[@code]] %%kept%%`.");
-	assert.equal(lines[8], "Other Note");
-	assert.equal(lines[9], "Generated.");
-	assert.deepEqual(lines.slice(10, 13), ["> **Title here**", "> Body", "> **Note**"]);
-	assert.deepEqual(lines.slice(13, 16), ["```", "[[@fenced]] ==kept== %%kept%%", "```"]);
+	assert.deepEqual(lines.slice(0, 7), ["---", "title: Draft", "nocite: \"@new2019\"", "aliases:", "  - x", "---", "Intro  text. [Key point]{.mark} here"]);
+	assert.equal(lines[7], "See [@smith2020], [@lit2021], [@lit2021], shown, Missing Note and ![](<Assets/figure 1.png>).");
+	assert.equal(lines[8], "Former [@new2019, p. 2] and `[[@code]] %%kept%%`.");
+	assert.equal(lines[9], "Other Note");
+	assert.equal(lines[10], "Generated.");
+	assert.deepEqual(lines.slice(11, 14), ["> **Title here**", "> Body", "> **Note**"]);
+	assert.deepEqual(lines.slice(14, 17), ["```", "[[@fenced]] ==kept== %%kept%%", "```"]);
 	assert.ok(text.includes("<!-- user comment -->"));
 	assert.ok(text.endsWith("## References\n\n::: {#refs}\n:::"));
-	assert.equal(report.citations, 2);
-	assert.deepEqual(report.renamed, [{ from: "old2019", to: "new2019", count: 1 }]);
+	assert.equal(report.citations, 3);
+	assert.deepEqual(report.renamed, [{ from: "old2019", to: "new2019", count: 2 }]);
 	assert.deepEqual(report.unresolved.map(item => item.link), ["[[Missing Note]]"]);
 	assert.deepEqual(report.embedsNotInlined.map(item => item.link), ["![[Other Note]]"]);
 	assert.deepEqual([report.images, report.links, report.comments, report.markers, report.callouts, report.highlights, report.blockIds, report.identityKeys], [1, 1, 2, 2, 2, 1, 1, 2]);
 	assert.equal(report.referencesBlock, true);
 	assert.ok(sanitizeSummary(report).some(line => line.includes("[[Missing Note]] could not be resolved")));
-	assert.deepEqual(withoutIdentityKeys("---\ncitekey: a\ntags:\n  - b\nzotero-key: X\n---").text, "---\ntags:\n  - b\n---");
+	assert.deepEqual(withoutIdentityKeys("---\r\ncitekey: a\r\ntags:\r\n  - b\r\nzotero-key: X\r\n---").text, "---\ntags:\n  - b\n---");
 });
 
 test("export kit: folder names, defaults with ${.} paths, manifest decisions and the command line", () => {

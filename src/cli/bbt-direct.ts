@@ -1,4 +1,4 @@
-import { rpc } from "../api/transport";
+import { BbtTransportError, rpc, transportReasonOf } from "../api/transport";
 import { record } from "../identity";
 import { validateEndpoint } from "../settings-data";
 import type { BbtInfo } from "../agent/types";
@@ -9,9 +9,12 @@ export async function probeBbt(endpoint: string, timeoutMs = 5000): Promise<BbtI
 	try { validated = validateEndpoint(endpoint); } catch (error) { return { reachable: false, error: error instanceof Error ? error.message : "Invalid endpoint", endpointError: "endpoint-not-local" }; }
 	try {
 		const ready = await rpc(validated, "api.ready", [], timeoutMs);
-		if (!record(ready) || typeof ready.zotero !== "string" || typeof ready.betterbibtex !== "string") return { reachable: false, error: "Invalid BBT readiness response" };
+		if (!record(ready) || typeof ready.zotero !== "string" || !ready.zotero.trim() || typeof ready.betterbibtex !== "string" || !ready.betterbibtex.trim()) {
+			throw new BbtTransportError("invalid-response", validated, "Invalid BBT readiness response");
+		}
 		return { reachable: true, zotero: ready.zotero, betterbibtex: ready.betterbibtex };
 	} catch (error) {
-		return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable" };
+		const reason = transportReasonOf(error);
+		return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable", ...(reason ? { reason } : {}) };
 	}
 }

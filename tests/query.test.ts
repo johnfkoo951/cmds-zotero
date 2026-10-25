@@ -87,3 +87,26 @@ test("rankingQuery: an empty field still being typed ranks like the query withou
 	assert.deepEqual(ranked("doe tag:"), ranked("doe"));
 	assert.deepEqual(ranked("doe tag:"), ["doe2021"]);
 });
+
+test("IMP-KOREAN-QUERY-IME: Korean field aliases, Korean has values, and typographic quotes", () => {
+	assert.deepEqual(ids("저자:김민수"), ["kim2019"]);
+	assert.deepEqual(ids("제목:방법론"), ["kim2019"]);
+	assert.deepEqual(ids("연도:2019"), ["kim2019"]);
+	assert.deepEqual(ids("년도:2021"), ["doe2021"]);
+	assert.deepEqual(ids("태그:method"), ["kim2019"]);
+	assert.deepEqual(ids("-태그:draft"), ["kim2019", "old1998"]);
+	assert.deepEqual(ids("컬렉션:방법론/surveys"), ["kim2019"]);
+	assert.deepEqual(ids("폴더:Teaching"), ["doe2021"]);
+	assert.deepEqual(ids("라이브러리:lab"), ["old1998"]);
+	assert.deepEqual(ids("유형:book"), ["doe2021"]);
+	assert.deepEqual(ids("종류:“journal article”"), ["kim2019"]);
+	assert.deepEqual(ids("포함:첨부"), ["kim2019"]);
+	assert.deepEqual(ids("포함:노트"), ["doe2021"]);
+	assert.deepEqual(ids("포함:주석"), ["old1998"]);
+	assert.deepEqual(ids("포함:하이라이트"), ["old1998"]);
+	assert.deepEqual(ids(`${"저자".normalize("NFD")}:김민수`), ["kim2019"]);
+	const parsed = parseQuery("제목:“질적 연구” “exact phrase”");
+	assert.equal(parsed.text, "exact phrase");
+	assert.deepEqual(parsed.terms, [{ field: "title", value: "질적 연구", negate: false }]);
+});
+

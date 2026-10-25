@@ -100,8 +100,17 @@ export class BbtService {
 		}
 	}
 
-	private call(method: string, params: unknown[] = [], timeout = this.settings.requestTimeoutMs, signal?: AbortSignal): Promise<unknown> {
-		return this.withSignal(signal, joined => this.observed(() => rpc(this.settings.bbtEndpoint, method, params, timeout, joined)));
+	private call<T = unknown>(
+		method: string,
+		params: unknown[] = [],
+		timeout = this.settings.requestTimeoutMs,
+		signal?: AbortSignal,
+		options?: { validate?: (result: unknown) => T; counts?: (error: BbtTransportError) => boolean },
+	): Promise<T> {
+		return this.withSignal(signal, joined => this.observed(async () => {
+			const result = await rpc(this.settings.bbtEndpoint, method, params, timeout, joined);
+			return options?.validate ? options.validate(result) : result as T;
+		}, options?.counts));
 	}
 
 	/** 0.5 R12: an optional short `timeoutMs` and caller `signal` (a sidebar's per-render abort) for a pre-batch probe. */
@@ -176,8 +185,13 @@ export class BbtService {
 		const signal = this.controller.signal;
 		const capabilities = await this.readCapabilities(settings, signal);
 		const validPrevious = previous && verifyIndex(previous) ? new Map(previous.entries.map(entry => [entry.id, entry])) : new Map<string, ZoteroIndexEntry>();
+		const optionalProbe = (method: string, params: readonly unknown[]): boolean =>
+			method === "user.groups" || (method === "item.search" && Array.isArray(params[0]) && (params[0] as unknown[]).some(term => Array.isArray(term) && term[0] === "retracted"));
 		return collectIndex({
-			call: (method, params, timeout = settings.requestTimeoutMs) => this.observed(() => rpc(settings.bbtEndpoint, method, params, timeout, signal)),
+			call: (method, params, timeout = settings.requestTimeoutMs) => this.observed(
+				() => rpc(settings.bbtEndpoint, method, params, timeout, signal),
+				optionalProbe(method, params) ? error => error.reason !== "rpc" : undefined,
+			),
 			batch: (calls, timeout) => this.observed(() => rpcBatch(settings.bbtEndpoint, calls, timeout, signal)),
 			signal,
 		}, settings, capabilities, validPrevious);
@@ -187,9 +201,12 @@ export class BbtService {
 	async bibliography(entry: ZoteroIndexEntry, style = this.settings.bibliographyStyle, signal?: AbortSignal, options: BibliographyCallOptions = {}): Promise<string> {
 		if (!verifyEntry(entry)) throw new Error("Bibliography requires a validated item");
 		// 0.5 R12: a caller's signal (per-render abort) joins the service signal; the call stays observed.
-		const output = await this.call("item.bibliography", [[entry.citekey], bibliographyFormat(style, options), entry.libraryID], this.settings.requestTimeoutMs, signal);
-		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
-		return output;
+		return this.call("item.bibliography", [[entry.citekey], bibliographyFormat(style, options), entry.libraryID], this.settings.requestTimeoutMs, signal, {
+			validate: output => {
+				if (typeof output !== "string") throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid BBT bibliography response");
+				return output;
+			},
+		});
 	}
 
 	/**
@@ -199,9 +216,12 @@ export class BbtService {
 	async bibliographyList(citekeys: readonly string[], libraryID: number, style = this.settings.bibliographyStyle, options: BibliographyCallOptions = {}): Promise<string> {
 		if (!citekeys.length) return "";
 		if (!positiveInteger(libraryID)) throw new Error("Bibliography requires a positive library ID");
-		const output = await this.call("item.bibliography", [[...citekeys], bibliographyFormat(style, options), libraryID]);
-		if (typeof output !== "string") throw new Error("Invalid BBT bibliography response");
-		return output;
+		return this.call("item.bibliography", [[...citekeys], bibliographyFormat(style, options), libraryID], this.settings.requestTimeoutMs, undefined, {
+			validate: output => {
+				if (typeof output !== "string") throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid BBT bibliography response");
+				return output;
+			},
+		});
 	}
 
 	/**
@@ -215,11 +235,15 @@ export class BbtService {
 	async recentlyRead(days: number, options: { signal?: AbortSignal; now?: Date } = {}): Promise<RecentRead[]> {
 		const window = clampRecentDays(days);
 		const search = async (terms: unknown[]): Promise<unknown[]> => {
-			let result: unknown;
-			try { result = await this.call("item.search", [terms], this.settings.requestTimeoutMs, options.signal); }
-			catch (error) { throw await this.zotero10Gate(error, options.signal); }
-			if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
-			return result as unknown[];
+			try {
+				return await this.call("item.search", [terms], this.settings.requestTimeoutMs, options.signal, {
+					validate: result => {
+						if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+						return result as unknown[];
+					},
+					counts: error => !isUnknownConditionFault(error, ZOTERO_10_CONDITIONS),
+				});
+			} catch (error) { throw await this.zotero10Gate(error, options.signal); }
 		};
 		const rows = new Map<string, RecentRead>();
 		for (const raw of await search(windowTerms(window))) {
@@ -242,16 +266,18 @@ export class BbtService {
 		for (const [key, day] of proposed) byDay.set(day, [...(byDay.get(day) ?? []), key]);
 		const proposedDays = [...byDay.keys()];
 		const confirmed = await mapBounded(proposedDays, concurrency, async day => keysOf(await search(dayTerms(day))));
+		const confirmedByDay = new Map<string, Set<string>>();
 		const undated = new Set(rows.keys());
 		proposedDays.forEach((day, index) => {
+			confirmedByDay.set(day, confirmed[index]);
 			for (const key of byDay.get(day) ?? []) {
 				const row = rows.get(key);
 				if (row && confirmed[index].has(key)) { row.readOn = day; undated.delete(key); }
 			}
 		});
-		for (let offset = 0; offset < window && undated.size > 0; offset += RECENT_DAY_BATCH) {
-			const daysToProbe = Array.from({ length: Math.min(RECENT_DAY_BATCH, window - offset) }, (_, step) => addDays(today, -(offset + step)));
-			const results = await mapBounded(daysToProbe, concurrency, async day => keysOf(await search(dayTerms(day))));
+		for (let offset = 0; offset <= window && undated.size > 0; offset += RECENT_DAY_BATCH) {
+			const daysToProbe = Array.from({ length: Math.min(RECENT_DAY_BATCH, window + 1 - offset) }, (_, step) => addDays(today, -(offset + step)));
+			const results = await mapBounded(daysToProbe, concurrency, async day => confirmedByDay.get(day) ?? keysOf(await search(dayTerms(day))));
 			results.forEach((found, step) => {
 				for (const key of found) {
 					const row = rows.get(key);
@@ -292,15 +318,23 @@ export class BbtService {
 
 	/** Parent items whose citekey is exactly `citekey`, in every library (a citekey is unique only within one library). */
 	async findByCitekey(citekey: string, signal?: AbortSignal): Promise<Omit<RecentRead, "readOn">[]> {
-		const result = await this.call("item.search", [[["citationKey", "is", citekey]]], this.settings.requestTimeoutMs, signal);
-		if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+		const result = await this.call("item.search", [[["citationKey", "is", citekey]]], this.settings.requestTimeoutMs, signal, {
+			validate: rows => {
+				if (!Array.isArray(rows)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+				return rows as unknown[];
+			},
+		});
 		return result.map(parseRecentItem).filter((row): row is Omit<RecentRead, "readOn"> => row !== null && row.citekey === citekey);
 	}
 
 	/** The item's current citekey in its library (local ID or BBT library name), or null when Zotero no longer has the item. */
 	async currentCitekey(itemKey: string, library: number | string, signal?: AbortSignal): Promise<string | null> {
-		const result = await this.call("item.search", [[["key", "is", itemKey], ["libraryID", "is", library]]], this.settings.requestTimeoutMs, signal);
-		if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+		const result = await this.call("item.search", [[["key", "is", itemKey], ["libraryID", "is", library]]], this.settings.requestTimeoutMs, signal, {
+			validate: rows => {
+				if (!Array.isArray(rows)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid Better BibTeX search response");
+				return rows as unknown[];
+			},
+		});
 		for (const raw of result) {
 			if (!record(raw)) continue;
 			try { if (parseItemURI(text(raw.id)).itemKey !== itemKey) continue; } catch { continue; }
@@ -318,20 +352,28 @@ export class BbtService {
 	async collectEntry(target: FreshTarget, previous?: ZoteroIndexEntry, signal?: AbortSignal): Promise<ZoteroIndexEntry> {
 		const library = target.libraryID ?? target.library;
 		if (!target.citekey || library === undefined || (typeof library === "number" && !positiveInteger(library)) || library === "") throw new Error("A fresh collection needs a citekey and a library");
-		const exportOne = async (citekey: string): Promise<Record<string, unknown> | null> => {
-			let serialized: unknown;
-			try { serialized = await this.call("item.export", [[citekey], "BetterBibTeX JSON", library], this.settings.requestTimeoutMs, signal); }
-			catch (error) {
+		const exportOne = async (citekey: string, counts?: (error: BbtTransportError) => boolean): Promise<Record<string, unknown> | null> => {
+			try {
+				return await this.call("item.export", [[citekey], "BetterBibTeX JSON", library], this.settings.requestTimeoutMs, signal, {
+					validate: serialized => {
+						if (typeof serialized !== "string") throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "BBT export must return a JSON string");
+						let exported: unknown;
+						try { exported = JSON.parse(serialized); }
+						catch { throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid BetterBibTeX JSON export"); }
+						if (!record(exported) || !Array.isArray(exported.items) || exported.items.length !== 1 || !record(exported.items[0])) {
+							throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Better BibTeX did not export exactly one item");
+						}
+						return exported.items[0];
+					},
+					counts,
+				});
+			} catch (error) {
 				// BBT answers an unknown citekey with a JSON-RPC error; anything else is a real fault.
 				if (isBbtTransportError(error) && error.reason === "rpc" && /not found/i.test(error.rpcMessage ?? "")) return null;
 				throw error;
 			}
-			if (typeof serialized !== "string") throw new Error("BBT export must return a JSON string");
-			const exported: unknown = JSON.parse(serialized);
-			if (!record(exported) || !Array.isArray(exported.items) || exported.items.length !== 1 || !record(exported.items[0])) throw new Error("Better BibTeX did not export exactly one item");
-			return exported.items[0];
 		};
-		let raw = await exportOne(target.citekey);
+		let raw = await exportOne(target.citekey, error => !(error.reason === "rpc" && /not found/i.test(error.rpcMessage ?? "")));
 		if (!raw || text(raw.itemKey) !== target.itemKey) {
 			const current = await this.currentCitekey(target.itemKey, library, signal);
 			if (!current) throw new Error(`Zotero no longer has item ${target.itemKey} in library ${String(library)}.`);
@@ -340,7 +382,12 @@ export class BbtService {
 		}
 		const entry = normalizeEntryUnhashed(raw, previous);
 		if (entry.itemKey !== target.itemKey || (target.libraryID !== undefined && entry.libraryID !== target.libraryID) || entry.libraryType !== target.libraryType || (entry.groupID ?? 0) !== (target.groupID ?? 0)) throw new Error("The fresh Better BibTeX export is a different Zotero item; refresh the index.");
-		const attachments = await this.call("item.attachments", [entry.citekey, entry.libraryID], this.settings.attachmentTimeoutMs, signal);
+		const attachments = await this.call("item.attachments", [entry.citekey, entry.libraryID], this.settings.attachmentTimeoutMs, signal, {
+			validate: result => {
+				if (!Array.isArray(result)) throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Expected BBT attachment array");
+				return result as unknown[];
+			},
+		});
 		entry.attachments = normalizeAttachments(attachments, entry);
 		entry.attachmentPath = primaryPdfPath(entry.attachments);
 		entry.attachmentStatus = "complete";
@@ -355,8 +402,11 @@ export class BbtService {
 	async export(citekeys: readonly string[], translator: string, libraryID: number): Promise<string> {
 		if (!citekeys.length) return "";
 		if (!positiveInteger(libraryID)) throw new Error("Bibliography export requires a positive library ID");
-		const output = await this.call("item.export", [[...citekeys], translator, libraryID]);
-		if (typeof output !== "string") throw new Error("Invalid BBT export response");
-		return output;
+		return this.call("item.export", [[...citekeys], translator, libraryID], this.settings.requestTimeoutMs, undefined, {
+			validate: output => {
+				if (typeof output !== "string") throw new BbtTransportError("invalid-response", this.settings.bbtEndpoint, "Invalid BBT export response");
+				return output;
+			},
+		});
 	}
 }

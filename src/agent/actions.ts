@@ -34,8 +34,9 @@ import { extractQuoteCallouts, locateBatch } from "../pdf/locate";
 import type { LocateRequest } from "../pdf/locate";
 import { createHash } from "node:crypto";
 import { bbtErrorPayload, describeBbtError, isZoteroVersionError, mapBounded } from "../api/transport";
+import { canonicalLocale, localeProblem, noteFormat } from "../bibliography/format";
 import { formatIndexAge, IndexRefusalError } from "../index-service";
-import { textLayerReport, textLayerWarning } from "../pdf/text-layer";
+import { textLayerReport, textLayerWarning, type TextLayerSummary } from "../pdf/text-layer";
 import { describeNoteStatus, describeSendOutcome, indexEntryFor, localDay, needsSending, readLabel, type ImportNoteResult, type RecentRead, type RecentReport } from "../recent/recent-reads";
 
 export { findNote };
@@ -44,7 +45,7 @@ export const MAX_CITES_FILES = 2000;
 
 export interface BibliographyProvider {
 	/** Rendered bibliography text or null when the style failed; throws when BBT is unreachable. */
-	(entry: ZoteroIndexEntry, style: string): Promise<string | null>;
+	(entry: ZoteroIndexEntry, style: string, locale?: string): Promise<string | null>;
 }
 
 export interface PdfCacheReader {
@@ -65,9 +66,18 @@ export const AGENT_ACTIONS: readonly AgentAction[] = ["connection", "info", "ref
  * Request features added to existing actions after they shipped (0.6.1: `diagnostics --env`). A host lists the ones it
  * accepts (`service.features`); the CLI refuses a feature an older host does not list (plugin-too-old) instead of sending it.
  */
-export const AGENT_FEATURES: readonly string[] = ["diagnostics-env"];
+export const AGENT_FEATURES: readonly string[] = ["diagnostics-env", "import-modes"];
 export const ACTION_API_VERSION: Readonly<Record<AgentAction, 1 | 2>> = {
 	connection: 1, info: 2, refresh: 1, resolve: 1, identity: 2, cites: 2, reconcile: 2, diagnostics: 1, "pdf-text": 2, locate: 2, recent: 2, import: 2, annotations: 2, citing: 2
+};
+
+export type ImportSectionScope = "overview" | "citation" | "metadata" | "notes" | "annotations";
+export const IMPORT_SECTION_SCOPES: readonly ImportSectionScope[] = ["overview", "citation", "metadata", "notes", "annotations"];
+export type AgentImportResult = ImportNoteResult & {
+	mode?: "import" | "rebuild" | "adopt";
+	repairs?: string[];
+	backup?: string;
+	unverified?: string;
 };
 
 export interface ActionHost {
@@ -94,7 +104,7 @@ export interface ActionHost {
 	/** Live host only: Zotero's reading history with each paper's literature-note state (Zotero must be running). */
 	recentReads?: (days: number) => Promise<RecentReport[]>;
 	/** Live host only: the literature-note import the plugin UI uses; writes only when `request.apply` is true. */
-	importNote?: (request: ImportRequest) => Promise<ImportNoteResult>;
+	importNote?: (request: ImportRequest) => Promise<AgentImportResult>;
 	/** 0.5 R8: YAML codec for the informational `yamlNormalisable` flag on reconcile rows; absent hosts omit the flag. */
 	yaml?: YamlCodec;
 	/**
@@ -122,14 +132,14 @@ export interface CommonRequest { allowStale?: boolean }
 /** 0.6.1: `env` adds the report-only setup checks (`environment.checks`). */
 export interface DiagnosticsRequest extends CommonRequest { env?: boolean }
 export interface ResolveRequest extends Selector, CommonRequest { refresh?: boolean }
-export interface IdentityRequest extends ResolveRequest { rawSource?: string; attachment?: string; style?: string; noBibliography?: boolean }
-export interface CitesRequest extends CommonRequest { path: string; recursive?: boolean; bibliography?: boolean; style?: string; strict?: boolean; /** 0.5 R10 */ format?: BibliographyFormat; out?: string | true; force?: boolean }
+export interface IdentityRequest extends ResolveRequest { rawSource?: string; attachment?: string; style?: string; locale?: string; noBibliography?: boolean }
+export interface CitesRequest extends CommonRequest { path: string; recursive?: boolean; bibliography?: boolean; style?: string; locale?: string; strict?: boolean; /** 0.5 R10 */ format?: BibliographyFormat; out?: string | true; force?: boolean }
 export interface ReconcileRequest extends CommonRequest { folders?: string[]; apply?: boolean; strict?: boolean }
 export interface LocateRequestArgs { path?: string; citekey?: string; itemKey?: string; libraryID?: number; file?: string; quote?: string; attachment?: string }
 export interface RefreshRequest { ifOlderThanMinutes?: number }
 export interface PdfTextRequest { citekey?: string; itemKey?: string; libraryID?: number; file?: string; attachment?: string; pages?: string; force?: boolean }
 export interface RecentRequest { days?: number }
-export interface ImportRequest { citekey?: string; itemKey?: string; libraryID?: number; apply?: boolean; allowStale?: boolean }
+export interface ImportRequest { citekey?: string; itemKey?: string; libraryID?: number; apply?: boolean; allowStale?: boolean; adopt?: string; rebuild?: boolean; scope?: readonly ImportSectionScope[] }
 /** 0.6: exactly one of `citekey`, `itemKey` (with `libraryID`) or `today`. */
 export interface AnnotationsRequest extends CommonRequest, AnnotationFilterRequest { citekey?: string; itemKey?: string; libraryID?: number; today?: boolean; fresh?: boolean }
 /** 0.6: one selector family, exactly as `resolve` takes it. */
@@ -259,13 +269,14 @@ export async function identityAction(host: ActionHost, request: IdentityRequest)
 	const citekeyCurrent = entry?.citekey ?? null;
 	const pdf = pickPdf(entry ?? emptyEntry(), request.attachment);
 	const style = request.style ?? host.settings.bibliographyStyle;
-	let bibliography: { style: string; text: string } | null = null;
+	const locale = request.locale !== undefined ? canonicalLocale(request.locale) : (host.settings.bibliographyLocale ?? "");
+	let bibliography: { style: string; locale?: string; text: string } | null = null;
 	let bibliographyReason: string | undefined = request.noBibliography ? "disabled" : host.bibliographyReason ?? undefined;
 	let bbtError: ReturnType<typeof bbtErrorPayload> = null; // 0.5 R4
 	if (!request.noBibliography && entry && host.bibliography) {
 		try {
-			const text = await host.bibliography(entry, style);
-			if (text) bibliography = { style, text }; else bibliographyReason = "style-error";
+			const text = await host.bibliography(entry, style, locale || undefined);
+			if (text) bibliography = { style, ...(locale ? { locale } : {}), text }; else bibliographyReason = "style-error";
 		} catch (error) { bibliographyReason = "bbt-unreachable"; bbtError = bbtErrorPayload(error); }
 	}
 	const unavailableReason = withheld ? "stale-index" : outcome.status === "unavailable" ? outcome.message : undefined;
@@ -377,7 +388,9 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 	} else if (request.bibliography && !isStructuredFormat(format)) {
 		const bibliography = new Map<string, string>();
 		const hubFull = new Map<string, string>();
-		const style = request.style ?? host.settings.bibliographyStyle;
+		const singleNoteFormat = targets.length === 1 && (request.style === undefined || request.locale === undefined) ? noteFormat(targets[0].frontmatter, host.settings) : null;
+		const style = request.style ?? singleNoteFormat?.style ?? host.settings.bibliographyStyle;
+		const locale = request.locale !== undefined ? canonicalLocale(request.locale) : (singleNoteFormat?.locale ?? host.settings.bibliographyLocale ?? "");
 		const byId = new Map(view.index.entries.map(entry => [entry.id, entry]));
 		// 0.5 R4: after a typed unreachable/timeout/404 fault, BBT is not asked again for the remaining keys (one mapped failure, not N timeouts).
 		let bbtDown = false;
@@ -387,7 +400,7 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 			if (verdict.citeStatus === "resolved" && verdict.entryId && host.bibliography && !bbtDown) {
 				const entry = byId.get(verdict.entryId);
 				if (entry) {
-					try { const text = await host.bibliography(entry, style); if (text) bibliography.set(key, text); }
+					try { const text = await host.bibliography(entry, style, locale || undefined); if (text) bibliography.set(key, text); }
 					catch (error) {
 						referencesReason = "bbt-unreachable";
 						bbtError = bbtErrorPayload(error) ?? bbtError;
@@ -397,7 +410,7 @@ export async function citesAction(host: ActionHost, request: CitesRequest): Prom
 			} else if (verdict.citeStatus === "resolved" && !host.bibliography) referencesReason = host.bibliographyReason ?? "offline";
 			if (verdict.hub) { const line = hubFullCitationLine(await host.reader.readNote(verdict.hub.path)); if (line) hubFull.set(key, line); }
 		}
-		references = referencesPayload(allKeys, verdicts, bibliography, hubFull, { format, heading, style });
+		references = referencesPayload(allKeys, verdicts, bibliography, hubFull, { format, heading, style, ...(locale ? { locale } : {}) });
 	}
 	const diagnostics = citesDiagnostics(files);
 	const payload: Payload = { ...envelope(host, "cites", 2), files, keys, references, ...(referencesReason ? { referencesReason } : {}), ...(referencesReason && bbtError ? { bbtError } : {}), summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
@@ -563,15 +576,16 @@ export async function diagnosticsAction(host: ActionHost, request: DiagnosticsRe
 		const lookups = toRefMaps(buildNoteIndexes(listed), host.vault);
 		const scan = scanOf(host);
 		lookups.skipped = [...new Set([...(lookups.skipped ?? []), ...scan.skipped, ...(scan.truncated ? ["<vault-scan-truncated>"] : [])])];
+		const headings = host.settings.referencesHeadings;
 		const withBodies: (NoteRecord & { body: string })[] = [];
 		for (const note of citing.slice(0, MAX_CITES_FILES)) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
-		const keys = [...new Set(withBodies.flatMap(note => citedKeys(note)))];
+		const keys = [...new Set(withBodies.flatMap(note => citedKeys(note, headings)))];
 		const verdicts = classifyKeys(keys, view.index, lookups, stale, allowStaleNegative);
-		diagnostics.push(...citesDiagnostics(withBodies.map(note => citesForNote(note, verdicts))));
+		diagnostics.push(...citesDiagnostics(withBodies.map(note => citesForNote(note, verdicts, headings))));
 	}
 	if (host.connection.legacyPluginEnabled) diagnostics.push(diagnostic("legacy-plugin-enabled", "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing."));
 	if (host.connection.index.stale) diagnostics.push(diagnostic("index-stale", `The index is ${host.connection.index.ageMinutes} minutes old (limit ${host.connection.index.maxAgeMinutes}).`));
-	if (host.connection.git?.repo && (host.connection.git.indexIgnored === false || host.connection.git.cacheIgnored === false)) diagnostics.push(diagnostic("index-in-git", "The vault is a git repository and the index or the .cmds-zotero cache is not ignored; add both to .gitignore and untrack the index."));
+	if (host.connection.git?.repo && (host.connection.git.indexIgnored === false || host.connection.git.cacheIgnored === false || host.connection.git.indexTracked === true || host.connection.git.cacheTracked === true)) diagnostics.push(diagnostic("index-in-git", "The vault is a git repository and the index or the .cmds-zotero cache is not ignored; add both to .gitignore and untrack the index."));
 	return { ...envelope(host, "diagnostics", 1), generatedAt: view.index.generatedAt, complete: view.index.complete, count: view.index.count, diagnostics, ...environment };
 }
 
@@ -600,7 +614,9 @@ export async function locateTarget(host: ActionHost, request: LocateRequestArgs,
 	const outcome = resolveIndex(host.indexView.index, selector);
 	if (outcome.status !== "resolved" || !outcome.entry) return { failure: { reason: "no-pdf-attachment", message: `Item ${outcome.status}: ${JSON.stringify(selector)}` } };
 	const entry = outcome.entry;
-	const pdf = pickPdf(entry, request.attachment);
+	let pdf: ReturnType<typeof pickPdf>;
+	try { pdf = pickPdf(entry, request.attachment); }
+	catch (error) { return { failure: { reason: "invalid-request", message: error instanceof Error ? error.message : "Invalid attachment." } }; }
 	if (pdf.pdfStatus === "ambiguous") return { failure: { reason: "attachment-ambiguous", message: "Several PDF attachments; pass --attachment KEY.", candidates: pdf.candidates } };
 	if (pdf.pdfStatus === "missing-file" || pdf.pdfStatus === "unavailable") return { failure: { reason: "attachment-file-missing", message: pdf.pdfStatus === "unavailable" ? "Attachment lookup failed at the last refresh; refresh the index." : "The PDF attachment is indexed but its file is not on this machine (not downloaded); this is not evidence that the item has no PDF." } };
 	if (pdf.pdfStatus !== "present" || !pdf.attachmentKey || !pdf.path) return { failure: { reason: "no-pdf-attachment", message: `No PDF attachment is indexed for @${entry.citekey} (pdfStatus ${pdf.pdfStatus}).` } };
@@ -666,11 +682,15 @@ export async function locateAction(host: ActionHost, request: LocateRequestArgs)
 	const verified = verifyCache(found.cache, stat);
 	if (verified === false) return { ...envelope(host, "locate", 2, { reason: "source-changed", message: "The PDF changed after text extraction; re-extract before locating quotes." }), item: target.item, attachment: target.attachment, cache: { path: found.path, sha256: found.cache.sha256, extractedAt: found.cache.extractedAt, pageCount: found.cache.pageCount, verified } };
 	const batch = locateBatch(found.cache.pages, quotes, { openURI: target.attachment.openURI });
+	const cachedLayer: TextLayerSummary = (found.cache as PdfTextCache & { textLayer?: TextLayerSummary }).textLayer ?? textLayerReport(found.cache.pages);
+	const layerKind = cachedLayer.status ?? cachedLayer.textLayer ?? "full";
+	const layerWarning = batch.summary.notFound > 0 && layerKind !== "full" ? textLayerWarning(cachedLayer, found.cache.pageCount) : null;
+	const warnings = layerWarning ? [...batch.warnings, layerWarning] : batch.warnings;
 	return {
 		...envelope(host, "locate", 2),
 		item: target.item, attachment: { key: target.attachment.key, openURI: target.attachment.openURI, ...(target.attachment.key ? {} : { path: target.attachment.path }) },
 		cache: { path: found.path, sha256: found.cache.sha256, extractedAt: found.cache.extractedAt, pageCount: found.cache.pageCount, verified },
-		results: batch.results, summary: batch.summary, warnings: batch.warnings,
+		results: batch.results, summary: batch.summary, warnings,
 	};
 }
 
@@ -680,20 +700,25 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 	const request = value as Record<string, unknown>;
 	const allowed: Record<AgentAction, readonly string[]> = {
 		connection: [], info: [], refresh: ["ifOlderThanMinutes"], resolve: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh"],
-		identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
-		cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale", "env"], // 0.5 R10: format/out/force
+		identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "locale", "noBibliography"],
+		cites: ["path", "recursive", "bibliography", "style", "locale", "strict", "allowStale", "format", "out", "force"], reconcile: ["folders", "apply", "strict", "allowStale"], diagnostics: ["allowStale", "env"], // 0.5 R10: format/out/force
 		"pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"], locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
-		recent: ["days"], import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"],
+		recent: ["days"], import: ["citekey", "itemKey", "libraryID", "apply", "allowStale", "adopt", "rebuild", "scope"],
 		// 0.6
 		annotations: ["citekey", "itemKey", "libraryID", "today", "attachment", "color", "type", "tag", "fresh", "allowStale"],
 		citing: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale"],
 	};
 	for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
-	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh", "env"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
-	for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote", "color", "type", "tag"]) { const value = request[key]; if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`); }
+	for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh", "env", "rebuild"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
+	for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "locale", "path", "file", "pages", "quote", "color", "type", "tag", "adopt"]) { const value = request[key]; if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`); }
+	if ("locale" in request && request.locale !== undefined) {
+		const problem = localeProblem(canonicalLocale(request.locale as string));
+		if (problem) throw new Error(problem);
+	}
 	if ("libraryID" in request && (!Number.isSafeInteger(request.libraryID) || (request.libraryID as number) < 1)) throw new Error("libraryID must be a positive integer.");
 	if ("ifOlderThanMinutes" in request && (!Number.isSafeInteger(request.ifOlderThanMinutes) || (request.ifOlderThanMinutes as number) < 1 || (request.ifOlderThanMinutes as number) > 10080)) throw new Error("ifOlderThanMinutes must be between 1 and 10080.");
 	if ("folders" in request && (!Array.isArray(request.folders) || request.folders.some(folder => typeof folder !== "string" || !folder.trim()))) throw new Error("folders must be an array of non-empty paths.");
+	if ("scope" in request && request.scope !== undefined && (!Array.isArray(request.scope) || !request.scope.length || request.scope.some(group => typeof group !== "string" || !IMPORT_SECTION_SCOPES.includes(group as ImportSectionScope)))) throw new Error(`scope must be a non-empty array of ${IMPORT_SECTION_SCOPES.join(", ")}.`);
 	if (request.itemKey !== undefined && (typeof request.itemKey !== "string" || !/^[A-Z0-9]{8}$/.test(request.itemKey) || request.libraryID === undefined)) throw new Error("itemKey requires eight uppercase letters/digits and libraryID.");
 	if ((request.year !== undefined || request.author !== undefined) && request.title === undefined && request.query === undefined) throw new Error("year and author narrow title or query only.");
 	if (action === "resolve" || action === "identity" || action === "citing") {
@@ -708,7 +733,12 @@ export function validateActionRequest(action: AgentAction, value: unknown): asse
 	if (action === "cites" && (request.format !== undefined || request.out !== undefined || request.force !== undefined) && request.bibliography !== true) throw new Error("format, out and force need bibliography.");
 	if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter(key => request[key] !== undefined).length !== 1) throw new Error("pdf-text requires exactly one target.");
 	if (action === "recent" && request.days !== undefined && (!Number.isSafeInteger(request.days) || (request.days as number) < 1 || (request.days as number) > 365)) throw new Error("days must be an integer between 1 and 365.");
-	if (action === "import" && ["citekey", "itemKey"].filter(key => request[key] !== undefined).length !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID.");
+	if (action === "import") {
+		const selectors = ["citekey", "itemKey"].filter(key => request[key] !== undefined).length;
+		const adopting = typeof request.adopt === "string" && request.adopt.trim().length > 0;
+		if (adopting ? selectors > 1 : selectors !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID (optional with adopt).");
+		if (adopting && request.rebuild === true) throw new Error("adopt and rebuild cannot be combined.");
+	}
 	if (action === "annotations") {
 		if (["citekey", "itemKey"].filter(key => request[key] !== undefined).length + (request.today === true ? 1 : 0) !== 1) throw new Error("annotations requires exactly one selector: citekey, itemKey with libraryID, or today.");
 		const filters = parseAnnotationFilters(request);
@@ -812,10 +842,13 @@ export async function importAction(host: ActionHost, request: ImportRequest): Pr
 	const counts: Record<string, number> = {};
 	for (const section of preview?.sections ?? []) counts[section.state] = (counts[section.state] ?? 0) + 1;
 	const body = {
-		dryRun: request.apply !== true, item: result.item ?? null, fresh: result.fresh === true,
+		dryRun: request.apply !== true, mode: result.mode ?? "import", item: result.item ?? null, fresh: result.fresh === true,
 		note: { path: preview?.path ?? outcome?.path ?? null, existed: preview?.exists ?? false, before: result.before ?? null, ...(result.after ? { after: result.after } : {}) },
 		preview: preview ? { conflicts: preview.conflicts, softConflicts: preview.softConflicts, sections: counts, changes: preview.changes } : null,
+		...(result.repairs?.length ? { repairs: result.repairs } : {}),
 		outcome: outcome ? { ...outcome, summary: describeSendOutcome(outcome) } : null,
+		...(result.backup ? { backup: result.backup } : {}),
+		...(result.unverified ? { unverified: result.unverified } : {}),
 		warnings: result.warnings ?? [],
 	};
 	const refused = (preview?.conflicts.length ?? 0) > 0 || outcome?.status === "refused";
@@ -959,7 +992,12 @@ export async function runAction(host: ActionHost, action: AgentAction, request: 
 	let effectiveHost = host;
 	if ((action === "resolve" || action === "identity") && (request as ResolveRequest).refresh === true) {
 		if (!host.refresh) return { ...envelope(host, action, ACTION_API_VERSION[action], { reason: "requires-obsidian", message: "Explicit refresh requires the live Obsidian host." }), ...(action === "resolve" ? { status: "unavailable" } : {}) };
-		effectiveHost = (await host.refresh({})).host;
+		try { effectiveHost = (await host.refresh({})).host; }
+		catch (error) {
+			if (!(error instanceof IndexRefusalError)) throw error;
+			const bbtError = bbtErrorPayload(error.cause);
+			return { ...envelope(host, action, ACTION_API_VERSION[action], { reason: error.reason, message: error.message }), ...(bbtError ? { bbtError } : {}), ...(action === "resolve" ? { status: "unavailable" } : {}) };
+		}
 	}
 	switch (action) {
 		case "connection": return connectionAction(host);

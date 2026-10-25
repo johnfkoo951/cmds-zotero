@@ -1,4 +1,5 @@
 import { App, Keymap, SuggestModal } from "obsidian";
+import { richTextPlain } from "../annotations/rich-text";
 import { searchAnnotations, type AnnotationSearchRow, type InsertMode } from "../annotations/search";
 
 /** What choosing a row does: insert in one of the formats, or pin the item in the annotations sidebar. */
@@ -21,15 +22,26 @@ export class AnnotationSearchModal extends SuggestModal<AnnotationSearchRow> {
 			{ command: "alt ↵", purpose: "pin in annotations sidebar" },
 		]);
 		for (const modifier of ["Shift", "Mod", "Alt"] as const) {
-			this.scope.register([modifier], "Enter", event => { this.selectActiveSuggestion(event); return false; });
+			this.scope.register([modifier], "Enter", event => {
+				if (event.isComposing || (event as { keyCode?: number }).keyCode === 229) return true;
+				this.selectActiveSuggestion(event);
+				return false;
+			});
 		}
+		this.inputEl?.addEventListener("compositionend", () => {
+			const modal = this as unknown as { onInput?: () => void };
+			if (typeof modal.onInput === "function") modal.onInput();
+			else this.inputEl?.dispatchEvent(new Event("input"));
+		});
 	}
 
 	getSuggestions(query: string): AnnotationSearchRow[] { return searchAnnotations(this.rows, query, this.limit); }
 
 	renderSuggestion(row: AnnotationSearchRow, el: HTMLElement): void {
 		el.createDiv({ text: row.snippet.length > 240 ? `${row.snippet.slice(0, 240)}…` : row.snippet });
-		if (row.annotation.text && row.annotation.comment) el.createEl("small", { cls: "cmds-zotero-annotation-comment", text: row.annotation.comment });
+		const text = richTextPlain(row.annotation.text).trim();
+		const comment = richTextPlain(row.annotation.comment).trim();
+		if (text && comment) el.createEl("small", { cls: "cmds-zotero-annotation-comment", text: comment });
 		el.createEl("small", { cls: "setting-item-description", text: `${row.label} · ${row.entry.title}` });
 	}
 

@@ -4,13 +4,14 @@ import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { describeBbtError, mapBounded } from "../api/transport";
 import { batchProgressText, runBatch, type BatchRun } from "../batch/batch-run";
 import {
-	RECENT_WINDOW_CHOICES, describeNoteStatus, describeSendOutcome, literatureNoteStatus, localDay, needsSending, readLabel, readNoteTexts,
-	type NoteStatus, type RecentRead, type SendOutcome,
+	RECENT_WINDOW_CHOICES, buildReadingQueue, describeNoteStatus, describeSendOutcome, literatureNoteStatus, localDay, needsSending, readLabel, readNoteTexts,
+	type NoteStatus, type ReadingQueueMode, type ReadingQueueRow, type RecentRead, type SendOutcome,
 } from "../recent/recent-reads";
 import type { IdentityMap } from "../batch/identity-map";
 
 interface Row {
 	read: RecentRead;
+	hasRead: boolean;
 	/** Fresh from Zotero when `fresh`, else the saved-index entry; null when neither is available. */
 	entry: ZoteroIndexEntry | null;
 	fresh: boolean;
@@ -23,12 +24,13 @@ interface Row {
 }
 
 /**
- * "Send recently read papers to notes": Zotero's reading history (PDFs opened in its reader), newest first, with the state
- * of each literature note; sending creates the note or refreshes its managed sections so new annotations arrive. Text the
- * user wrote is never replaced (edited generated sections are kept; unowned notes are refused).
+ * "Send recently read papers to notes": Zotero's reading history (PDFs opened in its reader), newest first, plus reading
+ * queue modes for unimported annotations and unannotated PDFs, with the state of each literature note; sending creates the
+ * note or refreshes its managed sections so new annotations arrive. Text the user wrote is never replaced.
  */
 export class RecentReadsModal extends Modal {
 	private days: number;
+	private mode: ReadingQueueMode = "recent";
 	private rows: Row[] = [];
 	private index: ZoteroIndex | null = null;
 	private busy = false;
@@ -47,6 +49,14 @@ export class RecentReadsModal extends Modal {
 		this.modalEl.addClass("cmds-zotero-recent-modal");
 		new Setting(this.contentEl).setName("Recently read in Zotero").setHeading();
 		this.contentEl.createEl("p", { cls: "setting-item-description", text: "Papers whose PDF you opened in Zotero's reader, newest first. Sending creates the literature note, or adds what it is missing (new annotations, notes, metadata); text you wrote is kept." });
+		new Setting(this.contentEl).setName("Queue").addDropdown(dropdown => {
+			dropdown
+				.addOption("recent", "Recently read in Zotero")
+				.addOption("needs-note", "Needs literature note or update")
+				.addOption("unannotated-pdfs", "Unannotated items without a note")
+				.setValue(this.mode)
+				.onChange(value => { this.mode = value as ReadingQueueMode; void this.load(); });
+		});
 		new Setting(this.contentEl).setName("Reading window").addDropdown(dropdown => {
 			const choices = RECENT_WINDOW_CHOICES.includes(this.days) ? RECENT_WINDOW_CHOICES : [...RECENT_WINDOW_CHOICES, this.days].sort((a, b) => a - b);
 			for (const days of choices) dropdown.addOption(String(days), `Last ${days} days`);
@@ -85,42 +95,85 @@ export class RecentReadsModal extends Modal {
 		this.rows = [];
 		this.listEl.empty();
 		this.refreshSendButton();
-		this.setStatus("Reading Zotero's reading history…");
-		let reads: RecentRead[];
-		try { reads = await this.plugin.recentReads(this.days); }
-		catch (error) {
-			if (generation !== this.generation || this.closed) return;
-			this.setStatus(`${describeBbtError(error)} Zotero must be running to list recently read papers; "Import literature note" still works from the saved index.`, true);
-			return;
+		this.setStatus(this.mode === "recent" ? "Reading Zotero's reading history…" : "Building reading queue…");
+		this.index = await this.plugin.savedIndex();
+		let reads: RecentRead[] = [];
+		let readError: unknown = null;
+		if (this.mode !== "unannotated-pdfs") {
+			try { reads = await this.plugin.recentReads(this.days); }
+			catch (error) { readError = error; }
 		}
 		if (generation !== this.generation || this.closed) return;
-		if (!reads.length) { this.setStatus(`No PDF was opened in Zotero's reader in the last ${this.days} days.`); return; }
-		this.index = await this.plugin.savedIndex();
-		const today = localDay(new Date());
-		this.rows = reads.map(read => this.renderRow(read, today));
-		this.setStatus(`${reads.length} recently read paper${reads.length === 1 ? "" : "s"}. Checking their literature notes…`);
-		const notes = this.plugin.literatureNoteFiles();
-		await mapBounded(this.rows, 2, async row => {
+		if (this.mode === "recent") {
+			if (readError) {
+				this.setStatus(`${describeBbtError(readError)} Zotero must be running to list recently read papers; switch the queue or use "Import literature note" to work from the saved index.`, true);
+				return;
+			}
+			if (!reads.length) { this.setStatus(`No PDF was opened in Zotero's reader in the last ${this.days} days.`); return; }
+			const today = localDay(new Date());
+			this.rows = reads.map(read => this.renderRow(read, true, null, today));
+			this.setStatus(`${reads.length} recently read paper${reads.length === 1 ? "" : "s"}. Checking their literature notes…`);
+			const notes = this.plugin.literatureNoteFiles();
+			await mapBounded(this.rows, 2, async row => {
+				if (generation !== this.generation || this.closed) return;
+				await this.inspect(row, notes);
+			});
 			if (generation !== this.generation || this.closed) return;
-			await this.inspect(row, notes);
-		});
+			const waiting = this.rows.filter(row => row.status && needsSending(row.status)).length;
+			const offline = this.rows.filter(row => row.entry && !row.fresh).length;
+			this.setStatus([
+				`${this.rows.length} recently read paper${this.rows.length === 1 ? "" : "s"}; ${waiting ? `${waiting} can be sent` : "every note is up to date"}.`,
+				offline ? `${offline} could not be read fresh from Zotero and use the saved index.` : "",
+			].filter(Boolean).join(" "));
+			this.refreshSendButton();
+			return;
+		}
+		if (!this.index && !reads.length) {
+			this.setStatus(readError ? `${describeBbtError(readError)} No saved index is available.` : "No validated Zotero index is available yet; refresh the index first.", true);
+			return;
+		}
+		const notes = this.plugin.literatureNoteFiles();
+		const statuses = new Map<string, NoteStatus>();
+		for (const entry of this.index?.entries ?? []) {
+			const files = notes.get(entry.id) ?? [];
+			statuses.set(entry.id, literatureNoteStatus(entry, files.length ? await readNoteTexts(files, file => this.app.vault.cachedRead(file)) : [], this.plugin.settings));
+		}
 		if (generation !== this.generation || this.closed) return;
+		const queue: ReadingQueueRow[] = buildReadingQueue(this.index, reads, statuses, this.mode);
+		if (!queue.length) {
+			this.setStatus(this.mode === "needs-note" ? "Every annotated or recently read paper already has an up-to-date literature note." : "No unannotated PDFs without a literature note were found in the index.");
+			return;
+		}
+		const today = localDay(new Date());
+		this.rows = queue.map(item => this.renderRow(
+			item.read ?? { itemKey: item.entry?.itemKey ?? "", libraryType: item.entry?.libraryType ?? "user", ...(item.entry?.groupID !== undefined ? { groupID: item.entry.groupID } : {}), library: "", citekey: item.citekey, title: item.title, year: item.year, authors: item.authors, readOn: item.readOn },
+			item.read !== null,
+			item,
+			today,
+		));
+		if (this.mode === "needs-note" && !readError) {
+			await mapBounded(this.rows, 2, async row => {
+				if (generation !== this.generation || this.closed) return;
+				await this.inspect(row, notes);
+			});
+			if (generation !== this.generation || this.closed) return;
+		}
 		const waiting = this.rows.filter(row => row.status && needsSending(row.status)).length;
-		const offline = this.rows.filter(row => row.entry && !row.fresh).length;
-		this.setStatus([
-			`${this.rows.length} recently read paper${this.rows.length === 1 ? "" : "s"}; ${waiting ? `${waiting} can be sent` : "every note is up to date"}.`,
-			offline ? `${offline} could not be read fresh from Zotero and use the saved index.` : "",
-		].filter(Boolean).join(" "));
+		this.setStatus(`${this.rows.length} paper${this.rows.length === 1 ? "" : "s"} in queue; ${waiting ? `${waiting} selected to send` : "none need sending"}.`);
 		this.refreshSendButton();
 	}
 
-	private renderRow(read: RecentRead, today: string): Row {
+	private renderRow(read: RecentRead, hasRead: boolean, prebuilt: ReadingQueueRow | null, today: string): Row {
 		const setting = new Setting(this.listEl).setName(read.title || `@${read.citekey}`);
 		setting.settingEl.addClass("cmds-zotero-recent-row");
-		const row: Row = { read, entry: null, fresh: false, status: null, problem: null, selected: false, result: null, setting, toggle: null };
+		const entry = prebuilt?.entry ?? null;
+		const status = prebuilt?.status ?? null;
+		const problem = status && (status.state === "foreign" || status.state === "duplicate") ? describeNoteStatus(status) : null;
+		const selected = !!entry && !problem && !!status && needsSending(status);
+		const row: Row = { read, hasRead, entry, fresh: false, status, problem, selected, result: null, setting, toggle: null };
 		setting.addToggle(toggle => {
 			row.toggle = toggle;
-			toggle.setTooltip("Send this paper").setDisabled(true).setValue(false).onChange(value => { row.selected = value; this.refreshSendButton(); });
+			toggle.setTooltip("Send this paper").setDisabled(!row.entry || !!row.problem).setValue(row.selected).onChange(value => { row.selected = value; this.refreshSendButton(); });
 		});
 		setting.addExtraButton(button => button.setIcon("file-text").setTooltip("Open literature note").onClick(() => { void this.openNote(row); }));
 		this.describe(row, today);
@@ -130,7 +183,7 @@ export class RecentReadsModal extends Modal {
 	private describe(row: Row, today = localDay(new Date())): void {
 		const { read } = row;
 		const authors = read.authors.length > 2 ? `${read.authors[0]} et al.` : read.authors.join("; ");
-		const meta = [authors, read.year, `@${read.citekey}`, readLabel(read.readOn, today)].filter(Boolean).join(" · ");
+		const meta = [authors, read.year, `@${read.citekey}`, row.hasRead ? readLabel(read.readOn, today) : ""].filter(Boolean).join(" · ");
 		const state = row.result ?? row.problem ?? (row.status ? `${describeNoteStatus(row.status)}${row.entry && !row.fresh ? " (saved index)" : ""}` : "Checking…");
 		const fragment = createFragment(frag => {
 			frag.createDiv({ text: meta });
@@ -224,7 +277,7 @@ export class RecentReadsModal extends Modal {
 	}
 
 	private async openNote(row: Row): Promise<void> {
-		const path = row.status?.path ?? (row.entry ? this.plugin.literatureNoteFiles().get(row.entry.id)?.[0]?.path : undefined);
+		const path = row.status?.path ?? (row.entry ? (this.index ? this.plugin.links.localFiles(row.entry, this.index)[0]?.path : undefined) ?? this.plugin.literatureNoteFiles().get(row.entry.id)?.[0]?.path : undefined);
 		if (!path) { new Notice("This paper has no literature note yet; send it first."); return; }
 		await this.app.workspace.openLinkText(path, "", true);
 	}

@@ -24,13 +24,13 @@ const LIGATURES: Record<string, string> = { "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl
 
 /** Canonical comparison form: NFC, ligatures expanded, typographic quotes/dashes folded, soft hyphens and line-break hyphenation removed, whitespace collapsed, lower-case. */
 export function normalizeForMatch(value: string): string {
-	return value.normalize("NFC")
+	return value.normalize("NFC").toLowerCase()
 		.replace(/[ﬀ-ﬄæœ]/g, c => LIGATURES[c] ?? c)
 		.replace(/­/g, "")
 		.replace(/(\p{L})-\s*\n\s*(\p{L})/gu, "$1$2")
 		.replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"')
 		.replace(/[‐-―−]/g, "-").replace(/…/g, "...")
-		.replace(/\s+/g, " ").trim().toLowerCase();
+		.replace(/\s+/g, " ").trim();
 }
 
 function tokenize(value: string): string[] { return normalizeForMatch(value).split(" ").filter(Boolean); }
@@ -57,9 +57,17 @@ export function locateQuote(pages: PageText[], quote: string, minScore = 0.6): Q
 	if (exact.length) return exact;
 	// Quotes can straddle a page break: try the join of consecutive pages before falling back to tokens.
 	for (let i = 0; i + 1 < normalized.length; i++) {
-		const joined = `${normalized[i].text} ${normalized[i + 1].text}`;
-		const index = joined.indexOf(needle);
-		if (index >= 0 && index < normalized[i].text.length) exact.push({ page: normalized[i].page.page, pageLabel: normalized[i].page.pageLabel, score: 0.95, snippet: snippetAround(joined, index, needle.length), method: "exact", span: { page: normalized[i + 1].page.page, pageLabel: normalized[i + 1].page.pageLabel } });
+		const left = normalized[i].text;
+		const right = normalized[i + 1].text;
+		const joins = [`${left} ${right}`, ...(/\p{L}-$/u.test(left) ? [`${left.slice(0, -1)}${right}`, `${left}${right}`] : [])];
+		for (const joined of joins) {
+			const limit = joined.startsWith(`${left} `) ? left.length : left.length - 1;
+			const index = joined.indexOf(needle);
+			if (index >= 0 && index < limit) {
+				exact.push({ page: normalized[i].page.page, pageLabel: normalized[i].page.pageLabel, score: 0.95, snippet: snippetAround(joined, index, needle.length), method: "exact", span: { page: normalized[i + 1].page.page, pageLabel: normalized[i + 1].page.pageLabel } });
+				break;
+			}
+		}
 	}
 	if (exact.length) return exact;
 	const want = tokenize(quote);

@@ -6,7 +6,7 @@ import { formatIndexAge } from "../index-service";
 import { PatchPreviewModal } from "../modals/patch-preview";
 import { PickerModal } from "../modals/picker";
 import { ReportModal } from "../modals/report";
-import { AdoptIndex, adoptCandidates, hasBetterNotesSync } from "../note-adopt";
+import { AdoptIndex, adoptCandidates, adoptRefusal, hasBetterNotesSync } from "../note-adopt";
 import { noteIdentity } from "../note-aliases";
 import { editFrontmatterLines, frontmatterAndBody, frontmatterRefreshChanges, legacyKeysIn, mergedItemCandidates, relinkBody, relinkEdit, verifyFrontmatterEdit, type FrontmatterEdit } from "../note-frontmatter";
 import { hashText, ownerMarker } from "../note-writer";
@@ -63,6 +63,8 @@ export async function updateCurrentNote(plugin: CMDSZoteroPlugin, rebuild = fals
 export async function adoptCurrentNote(plugin: CMDSZoteroPlugin): Promise<void> {
 	await plugin.run(async () => {
 		const note = await readActive(plugin);
+		const refusal = adoptRefusal({ path: note.file.path, basename: note.file.basename, frontmatter: note.frontmatter }, note.text);
+		if (refusal) throw new Error(`Not adopted: ${refusal}.`);
 		const index = await plugin.indexing.loadIndexForRead();
 		const match = adoptCandidates({ path: note.file.path, basename: note.file.basename, frontmatter: note.frontmatter }, new AdoptIndex(index.entries));
 		const preview = (entry: ZoteroIndexEntry): void => { void plugin.literature.previewImport(entry, { adoptPath: note.file.path }); };
@@ -151,7 +153,7 @@ export async function relinkMergedItem(plugin: CMDSZoteroPlugin): Promise<void> 
 		if (!found.candidates.length) throw new Error(`Item ${found.oldId} is not in the index and no item carries this note's citekey or DOI.`);
 		const relink = (survivor: ZoteroIndexEntry): void => {
 			void plugin.run(async () => {
-				if (plugin.links.localFiles(survivor, index).some(file => file.path !== note.file.path)) throw new Error(`@${survivor.citekey} already has a literature note; merge the two notes by hand.`);
+				if ((await (await plugin.importer.identityMap()).pathsFor(survivor.id)).some(path => path !== note.file.path)) throw new Error(`@${survivor.citekey} already has a literature note; merge the two notes by hand.`);
 				const edit = relinkEdit(note.frontmatter, survivor);
 				const out = editFrontmatterLines(note.text, edit);
 				if (!out.ok) throw new Error(`The frontmatter cannot be patched line by line: ${out.message}`);

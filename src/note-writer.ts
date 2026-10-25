@@ -176,11 +176,17 @@ export function safeNoteMarkdown(markdown: string): string {
 	const flush = (): void => { if (prose.length) { out.push(rewriteNoteProse(prose.join("\n"))); prose = []; } };
 	for (const line of stripControl(markdown).split("\n")) {
 		const opener = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-		if (fence === null && opener) { flush(); fence = opener[0]; out.push(line); continue; }
-		if (fence !== null) { out.push(line); if (opener && opener[0] === fence) fence = null; continue; }
+		if (fence === null && opener) { flush(); fence = opener; out.push(line); continue; }
+		if (fence !== null) {
+			out.push(line);
+			const closer = /^\s{0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line)?.[1];
+			if (closer && closer[0] === fence[0] && closer.length >= fence.length) fence = null;
+			continue;
+		}
 		prose.push(line);
 	}
 	flush();
+	if (fence !== null) out.push(fence);
 	return out.join("\n")
 		// A converted note must never open or close a managed marker: escaped last, after every rewrite.
 		.replace(/<!--/g, "&lt;!--").replace(/-->/g, "--&gt;")
@@ -228,7 +234,7 @@ export function annotationsInOrder(entry: ZoteroIndexEntry, settings: Partial<La
 export function renderedAnnotation(entry: ZoteroIndexEntry, annotation: Annotation, settings: Partial<LayoutSettings>): Annotation {
 	if (!layoutOf(settings).joinContinuations) return annotation;
 	for (const joined of joinContinuations(readingOrder(entry))) {
-		if (joined.annotation.key === annotation.key || joined.continuations.includes(annotation.key)) return joined.annotation;
+		if (joined.item.attachment.key === annotation.attachmentKey && (joined.annotation.key === annotation.key || joined.continuations.includes(annotation.key))) return joined.annotation;
 	}
 	return annotation;
 }
@@ -355,14 +361,17 @@ export function normalizeLinkTargets(body: string): string {
 		.replace(/(!?\[[^\]\n]*\]\()((?:[^()\n]|\([^()\n]*\))*)(\))/g, (_, open: string, target: string, close: string) => `${open}${basename(target)}${close}`)
 		.replace(/(!?\[\[)([^\]|#\n]*)([^\]\n]*\]\])/g, (_, open: string, target: string, rest: string) => `${open}${basename(target)}${rest}`);
 }
+const lf = (text: string): string => text.replace(/\r\n/g, "\n");
+
 /**
  * A section is unedited when its raw hash matches (the stored hash is always the raw hash), or, failing that, when its
  * link-target-normalized form equals the normalized fresh render — i.e. only link targets differ, which is what Obsidian's
  * automatic link updates produce. Replacing such a body with the fresh render changes link targets only, never user text.
  */
 function sectionUnedited(body: string, hash: string, fresh: string | undefined): boolean {
-	if (hashText(body) === hash) return true;
-	return fresh !== undefined && normalizeLinkTargets(body) === normalizeLinkTargets(fresh);
+	const normalized = lf(body);
+	if (hashText(normalized) === hash) return true;
+	return fresh !== undefined && normalizeLinkTargets(normalized) === normalizeLinkTargets(lf(fresh));
 }
 /** Blockquote every line so multi-line text stays inside a callout. */
 function quoted(body: string): string { return body.split("\n").map(line => `> ${line}`.trimEnd()).join("\n"); }
@@ -376,7 +385,7 @@ export const managedBlock = block;
 // after the marker) which is moved below the block on repair; trailing spaces/tabs before the closing marker and an
 // indented closing marker are tolerated. A `detached` mark freezes the block as user-owned.
 export const DETACHED_MARK = "detached";
-const MANAGED_BLOCK = /<!-- cmds-zotero:([a-zA-Z0-9-]+):([a-f0-9]{64}|detached) -->([^\n]*)\n([\s\S]*?)[ \t]*\n[ \t]*<!-- \/cmds-zotero:\1 -->/g;
+const MANAGED_BLOCK = /<!-- cmds-zotero:([a-zA-Z0-9-]+):([a-f0-9]{64}|detached) -->([^\r\n]*)\r?\n((?:(?!<!-- ?\/?cmds-zotero:)[\s\S])*?)[ \t]*\r?\n[ \t]*<!-- \/cmds-zotero:\1 -->/g;
 const MARKER = /<!-- (\/?)cmds-zotero:([a-zA-Z0-9-]+)/g;
 /** 0.6.3: a fresh copy of the well-formed managed-block pattern (groups: id, mark, tail, body), for the rebuild repair. */
 export function managedBlockPattern(): RegExp { return new RegExp(MANAGED_BLOCK.source, "g"); }
@@ -394,14 +403,18 @@ function withTail(rendered: string, tail: string): string {
 /** Freezes the listed managed blocks as detached (`<!-- cmds-zotero:<id>:detached -->`); other text is untouched. Idempotent. */
 export function detachSections(text: string, ids: Iterable<string>): string {
 	const wanted = new Set(ids);
-	return text.replace(MANAGED_BLOCK, (whole: string, id: string, _mark: string, tail: string, body: string) => wanted.has(id) ? withTail(detachedBlock(id, body), tail) : whole);
+	return text.replace(MANAGED_BLOCK, (whole: string, id: string, _mark: string, tail: string, rawBody: string) => {
+		const body = lf(rawBody);
+		return wanted.has(id) ? withTail(detachedBlock(id, body), tail) : whole;
+	});
 }
 /** Replaces the listed managed or detached blocks with fresh bodies (missing bodies leave the block untouched). */
 export function resetSections(text: string, ids: Iterable<string>, bodies: ReadonlyMap<string, string>): string {
 	const wanted = new Set(ids);
-	return text.replace(MANAGED_BLOCK, (whole: string, id: string, _mark: string, tail: string) => {
+	return text.replace(MANAGED_BLOCK, (whole: string, id: string, _mark: string, tail: string, rawBody: string) => {
+		const body = lf(rawBody);
 		const fresh = bodies.get(id);
-		return wanted.has(id) && fresh !== undefined ? withTail(block(id, fresh), tail) : whole;
+		return wanted.has(id) && fresh !== undefined && body !== lf(fresh) ? withTail(block(id, lf(fresh)), tail) : wanted.has(id) && fresh !== undefined ? withTail(block(id, lf(fresh)), tail) : whole;
 	});
 }
 /**
@@ -450,7 +463,7 @@ function annotationsHeadingLine(content: string, heading: string): RegExpExecArr
 		if (!opening[1].startsWith("annotation-")) from = Math.max(from, end);
 	}
 	const find = (text: string): RegExpExecArray | null => {
-		const line = new RegExp(`^## ${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*$`, "gm");
+		const line = new RegExp(`^## ${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \t]*\\r?$`, "gm");
 		line.lastIndex = from;
 		for (let match = line.exec(content); match; match = line.exec(content)) {
 			const at = match.index;
@@ -468,8 +481,8 @@ function spliceAnnotations(content: string, blocks: string[], heading: string): 
 		const found = annotationsHeadingLine(content, heading);
 		if (found) at = found.index + found[0].length;
 	}
-	if (at < 0) return `${content.replace(/\n*$/, "\n")}\n${joined}\n`;
-	return `${content.slice(0, at)}\n\n${joined}${content.slice(at).replace(/^\n*(?=[^\n])/, "\n\n").replace(/^\n*$/, "\n")}`;
+	if (at < 0) return `${content.replace(/(?:\r?\n)*$/, "\n")}\n${joined}\n`;
+	return `${content.slice(0, at).replace(/\r$/, "")}\n\n${joined}${content.slice(at).replace(/^(?:\r?\n)*(?=[^\r\n])/, "\n\n").replace(/^(?:\r?\n)*$/, "\n")}`;
 }
 function encodedPath(path: string): string { return path.split("/").map(encodeURIComponent).join("/"); }
 function key(value: string): string {
@@ -768,7 +781,7 @@ export function literatureSections(entry: ZoteroIndexEntry, bibliography: string
 		if (seen.has(id)) continue;
 		seen.add(id);
 		let image: string | undefined;
-		if (a.imagePath) {
+		if (a.imagePath && (!context.scope || context.scope.includes("annotations"))) {
 			image = annotationImagePath(settings.imageFolder, entry, attachment.key, a, imageHashes.get(a.imagePath));
 			images.push({ source: a.imagePath, path: image });
 		}
@@ -794,8 +807,9 @@ function updateManagedSections(entry: ZoteroIndexEntry, previous: string, sectio
 	const lineOf = (offset: number): number => previous.slice(0, offset).split("\n").length;
 	// A joined continuation is still in Zotero; its older block of its own is kept, under a reason that says why.
 	const joinedInto = layout.joinContinuations ? continuationHeads(entry) : new Map<string, string>();
-	const gone = (id: string): string => joinedInto.has(id) ? "joined into the previous highlight" : "no longer in Zotero";
-	let content = previous.replace(MANAGED_BLOCK, (whole: string, id: string, mark: string, tail: string, body: string, offset: number) => {
+	const gone = (id: string): string => id === "citation" ? "bibliography unavailable offline" : joinedInto.has(id) ? "joined into the previous highlight" : "no longer in Zotero";
+	let content = previous.replace(MANAGED_BLOCK, (whole: string, id: string, mark: string, tail: string, rawBody: string, offset: number) => {
+		const body = lf(rawBody);
 		const line = lineOf(offset);
 		consumed.add(offset);
 		consumed.add(offset + whole.lastIndexOf("<!-- /cmds-zotero:"));
@@ -856,9 +870,15 @@ function updateManagedSections(entry: ZoteroIndexEntry, previous: string, sectio
 	}
 	const rawCount = (previous.match(/<!-- \/?cmds-zotero:/g) ?? []).length;
 	if (rawCount !== strayCount) conflicts.push("Malformed managed markers without a section ID");
+	for (const id of ["overview", "citation", "metadata", "notes"] as const) {
+		if (!matched.has(id) && !malformed.has(id) && inScope(id)) {
+			conflicts.push(`Missing managed section: ${id}`);
+			report.push({ id, state: "missing", reason: "managed block not found", body: "" });
+		}
+	}
 	const additions: { id: string; text: string }[] = [];
-	for (const [id, body] of sections) if (!matched.has(id) && !malformed.has(id) && inScope(id)) {
-		if (id.startsWith("annotation-") && !previous.includes(`cmds-zotero:${id}:`)) {
+	for (const [id, body] of sections) if (id.startsWith("annotation-") && !matched.has(id) && !malformed.has(id) && inScope(id)) {
+		if (!previous.includes(`cmds-zotero:${id}:`)) {
 			additions.push({ id, text: block(id, body) });
 			report.push({ id, state: "fresh", reason: "new annotation", body });
 		} else {

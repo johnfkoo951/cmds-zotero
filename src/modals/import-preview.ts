@@ -14,7 +14,14 @@ const HEADINGS: Record<NonNullable<ImportPreview["mode"]>, string> = { import: "
  * preview again without asking Zotero (`revise`).
  */
 export class ImportPreviewModal extends Modal {
-	constructor(app: App, private preview: ImportPreview, private apply: (choices: ApplyChoices, preview: ImportPreview) => Promise<void>, private revise?: (preview: ImportPreview, scope: SectionGroup[] | undefined) => Promise<ImportPreview>) { super(app); }
+	private readonly choices = { detach: new Set<string>(), reset: new Set<string>() };
+	constructor(
+		app: App,
+		private preview: ImportPreview,
+		private apply: (choices: ApplyChoices, preview: ImportPreview) => Promise<void>,
+		private revise?: (preview: ImportPreview, scope: SectionGroup[] | undefined) => Promise<ImportPreview>,
+		private onRecover?: (recovery: NonNullable<ImportPreview["recovery"]>, preview: ImportPreview) => Promise<void> | void,
+	) { super(app); }
 	onOpen(): void { this.render(); }
 
 	private render(): void {
@@ -46,7 +53,6 @@ export class ImportPreviewModal extends Modal {
 		const labels: Record<SectionState, string> = { fresh: "new", unchanged: "refreshed", edited: "edited (preserved)", detached: "detached", malformed: "malformed", missing: "missing" };
 		const summary = [...counts].map(([state, count]) => `${count} ${labels[state]}`).join(", ");
 		this.contentEl.createDiv({ cls: "cmds-zotero-section-summary", text: `${this.preview.sections.length} managed sections${summary ? `: ${summary}` : ""}` });
-		const choices = { detach: new Set<string>(), reset: new Set<string>() };
 		const list = this.contentEl.createDiv({ cls: "cmds-zotero-section-list" });
 		for (const section of this.preview.sections) {
 			const item = list.createDiv({ cls: ["cmds-zotero-section", `cmds-zotero-section-${section.state}`] });
@@ -55,10 +61,15 @@ export class ImportPreviewModal extends Modal {
 				row.addDropdown(dropdown => {
 					if (section.state === "edited") dropdown.addOption("keep", "Keep this time").addOption("detach", "Detach (keep mine, never update)");
 					else dropdown.addOption("keep", "Keep detached");
-					dropdown.addOption("reset", "Reset from Zotero (backup kept)").setValue("keep").onChange(value => {
-						choices.detach.delete(section.id); choices.reset.delete(section.id);
-						if (value === "detach") choices.detach.add(section.id);
-						if (value === "reset") choices.reset.add(section.id);
+					const currentChoice = this.choices.detach.has(section.id) && section.state === "edited"
+						? "detach"
+						: this.choices.reset.has(section.id)
+							? "reset"
+							: "keep";
+					dropdown.addOption("reset", "Reset from Zotero (backup kept)").setValue(currentChoice).onChange(value => {
+						this.choices.detach.delete(section.id); this.choices.reset.delete(section.id);
+						if (value === "detach") this.choices.detach.add(section.id);
+						if (value === "reset") this.choices.reset.add(section.id);
 					});
 				});
 			}
@@ -69,12 +80,22 @@ export class ImportPreviewModal extends Modal {
 			}
 		}
 		const label = mode === "adopt" ? "Adopt note" : mode === "rebuild" ? "Rebuild note" : "Apply import";
-		new Setting(this.contentEl).addButton(button => button.setButtonText("Cancel").onClick(() => this.close()))
-			.addButton(button => button.setButtonText(label).setCta().setDisabled(blocked).onClick(async () => {
-				button.setDisabled(true); status.setText("Writing…");
-				try { await this.apply({ detach: [...choices.detach], reset: [...choices.reset] }, this.preview); this.close(); }
-				catch (error) { status.setText(error instanceof Error ? error.message : "Import failed."); status.addClass("cmds-zotero-error"); button.setDisabled(false); }
+		const footer = new Setting(this.contentEl).addButton(button => button.setButtonText("Cancel").onClick(() => this.close()));
+		const recovery = this.preview.recovery;
+		const onRecover = this.onRecover;
+		if (recovery && onRecover) {
+			const recoveryLabel = recovery === "adopt" ? "Adopt existing note instead…" : "Preview marker repair (Rebuild)…";
+			footer.addButton(button => button.setButtonText(recoveryLabel).onClick(async () => {
+				button.setDisabled(true);
+				this.close();
+				await onRecover(recovery, this.preview);
 			}));
+		}
+		footer.addButton(button => button.setButtonText(label).setCta().setDisabled(blocked).onClick(async () => {
+			button.setDisabled(true); status.setText("Writing…");
+			try { await this.apply({ detach: [...this.choices.detach], reset: [...this.choices.reset] }, this.preview); this.close(); }
+			catch (error) { status.setText(error instanceof Error ? error.message : "Import failed."); status.addClass("cmds-zotero-error"); button.setDisabled(false); }
+		}));
 	}
 
 	/** 0.6.3 selective-update-scope: one toggle per section group; at least one stays on. */

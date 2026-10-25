@@ -141,7 +141,13 @@ export function isDirectoryCovered(gitignoreText: string, dir: string): boolean 
 	if (path === "") return false;
 	const rules = parseGitignore(gitignoreText);
 	if (ignoredByRules(rules, path, true)) return true;
-	return verdict(rules, `${path}/`, true) === true;
+	const probe = `${path}/`;
+	let covered = false;
+	for (const rule of rules) {
+		if (rule.negated) { covered = false; continue; }
+		if (!rule.dirOnly && rule.regex.test(probe)) covered = true;
+	}
+	return covered;
 }
 
 /**

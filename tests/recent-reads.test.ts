@@ -8,8 +8,8 @@ import { normalizeAttachments, normalizeEntry } from "../src/api/normalize";
 import { entryHash } from "../src/identity";
 import { ownerMarker } from "../src/note-writer";
 import {
-	addDays, clampRecentDays, dayTerms, daysBetween, describeNoteStatus, describeSendOutcome, indexEntryFor, literatureNoteStatus, localDay, needsSending,
-	noteAnnotationIDs, orderRecent, parseRecentItem, readLabel, readNoteTexts, recentKey, sendOutcome, windowTerms,
+	addDays, buildReadingQueue, clampRecentDays, dayTerms, daysBetween, describeNoteStatus, describeSendOutcome, indexEntryFor, literatureNoteStatus, localDay, needsSending,
+	noteAnnotationIDs, orderRecent, parseRecentItem, readLabel, readNoteTexts, recentKey, sendOutcome, windowTerms, type NoteStatus, type RecentRead,
 } from "../src/recent/recent-reads";
 
 // Synthetic records only (AGENTS.md): no real library data.
@@ -355,4 +355,42 @@ test("0.6 STRUCT-02: readNoteTexts reads every note concurrently and keeps the i
 	assert.deepEqual(texts, [{ path: "b.md", text: "text of b.md" }, { path: "a.md", text: "text of a.md" }]);
 	assert.deepEqual(order, ["a.md", "b.md"], "reads overlap");
 	assert.deepEqual(await readNoteTexts([], async () => "never"), []);
+});
+
+test("buildReadingQueue supports recent, needs-note and unannotated-pdfs modes, and literatureNoteStatus recognizes moved owned notes", () => {
+	const behindEntry = { ...entryWith(["JKLM2345", "NPQR2345"]), id: "1:BEHIND01", itemKey: "BEHIND01", citekey: "Behind2026", title: "Behind paper" };
+	const noneAnnotatedEntry = { ...entryWith(["JKLM2345"]), id: "1:NONEANN1", itemKey: "NONEANN1", citekey: "Annotated2026", title: "Annotated paper" };
+	const currentEntry = { ...entryWith(["JKLM2345"]), id: "1:CURR0001", itemKey: "CURR0001", citekey: "Current2026", title: "Current paper" };
+	const unannotatedPdfEntry = { ...entryWith([]), id: "1:UNANNOT1", itemKey: "UNANNOT1", citekey: "Unannotated2026", title: "Unannotated PDF" };
+	const noPdfEntry: ZoteroIndexEntry = { ...entryWith([]), id: "1:NOPDF001", itemKey: "NOPDF001", citekey: "NoPdf2026", title: "No PDF", attachmentPath: "", attachments: [] };
+	const index = {
+		schemaVersion: 2 as const, generatedAt: "2026-10-12T00:00:00Z", source: "better-bibtex" as const, count: 5,
+		entries: [behindEntry, noneAnnotatedEntry, currentEntry, unannotatedPdfEntry, noPdfEntry],
+		capabilities: { zotero: "10", betterbibtex: "7", metadata: true, attachments: true, annotations: true, bibliography: true },
+		diagnostics: [], complete: true,
+	};
+	const reads: RecentRead[] = [
+		{ itemKey: "CURR0001", libraryType: "user", library: "My Library", citekey: "Current2026", title: "Current paper", year: "2026", authors: ["Author, Example"], readOn: "2026-10-12" },
+		{ itemKey: "BEHIND01", libraryType: "user", library: "My Library", citekey: "Behind2026", title: "Behind paper", year: "2026", authors: ["Author, Example"], readOn: "2026-10-10" },
+	];
+	const statuses = new Map<string, NoteStatus>([
+		[behindEntry.id, { state: "behind", path: "Moved/Behind.md", missing: 1, orphaned: 0, annotations: 2 }],
+		[noneAnnotatedEntry.id, { state: "none", path: null, missing: 1, orphaned: 0, annotations: 1 }],
+		[currentEntry.id, { state: "current", path: "References/Zotero/@Current2026.md", missing: 0, orphaned: 0, annotations: 1 }],
+		[unannotatedPdfEntry.id, { state: "none", path: null, missing: 0, orphaned: 0, annotations: 0 }],
+	]);
+	assert.deepEqual(buildReadingQueue(index, reads, statuses, "recent").map(r => r.citekey), ["Current2026", "Behind2026"]);
+	assert.deepEqual(buildReadingQueue(index, reads, statuses, "needs-note").map(r => r.citekey), ["Behind2026", "Annotated2026"]);
+	assert.deepEqual(buildReadingQueue(index, reads, statuses, "unannotated-pdfs").map(r => r.citekey), ["Unannotated2026"]);
+	// Bug 13: moved note outside outputFolder with ownerMarker is recognized; a paper hub without ownerMarker outside outputFolder is ignored.
+	const movedStatus = literatureNoteStatus(
+		currentEntry,
+		[
+			{ path: "Projects/Moved.md", text: `${ownerMarker(currentEntry.id)}\n<!-- cmds-zotero:annotation-EFGH2345-JKLM2345:${"a".repeat(64)} -->\nx\n<!-- /cmds-zotero:annotation-EFGH2345-JKLM2345 -->` },
+			{ path: "Hubs/hub.md", text: "---\ntype: paper-hub\n---\nhub" },
+		],
+		DEFAULT_SETTINGS,
+	);
+	assert.equal(movedStatus.state, "current");
+	assert.equal(movedStatus.path, "Projects/Moved.md");
 });

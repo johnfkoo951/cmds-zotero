@@ -26,10 +26,20 @@ export interface ParsedQuery {
 
 /** Field names and their aliases; a prefix not listed here is plain text. */
 const FIELDS: Readonly<Record<string, QueryField>> = {
-	author: "author", au: "author", title: "title", ti: "title", year: "year", tag: "tag",
-	col: "col", collection: "col", lib: "lib", library: "lib", type: "type", has: "has",
+	author: "author", au: "author", 저자: "author",
+	title: "title", ti: "title", 제목: "title",
+	year: "year", 연도: "year", 년도: "year",
+	tag: "tag", 태그: "tag",
+	col: "col", collection: "col", 컬렉션: "col", 폴더: "col",
+	lib: "lib", library: "lib", 라이브러리: "lib",
+	type: "type", 유형: "type", 종류: "type",
+	has: "has", 포함: "has",
 };
-const HAS: Readonly<Record<string, HasValue>> = { pdf: "pdf", note: "note", notes: "note", annotation: "annotations", annotations: "annotations", annot: "annotations" };
+const HAS: Readonly<Record<string, HasValue>> = {
+	pdf: "pdf", 첨부: "pdf",
+	note: "note", notes: "note", 노트: "note",
+	annotation: "annotations", annotations: "annotations", annot: "annotations", 주석: "annotations", 하이라이트: "annotations",
+};
 
 /** The field prefixes the pickers advertise (one name per field). */
 export const QUERY_FIELDS: readonly string[] = ["author", "title", "year", "tag", "col", "lib", "type", "has"];
@@ -45,7 +55,7 @@ function tokenize(input: string): { raw: string; quoted: boolean }[] {
 	let inQuote = false;
 	let started = false;
 	for (const char of input) {
-		if (char === '"') { inQuote = !inQuote; quoted = true; started = true; continue; }
+		if (char === '"' || char === "“" || char === "”") { inQuote = !inQuote; quoted = true; started = true; continue; }
 		if (!inQuote && /\s/.test(char)) {
 			if (started) tokens.push({ raw: current, quoted });
 			current = ""; quoted = false; started = false;
@@ -92,8 +102,8 @@ function parse(input: string): ParsedQuery & { dropped: number } {
 	const text: string[] = [];
 	let dropped = 0;
 	for (const token of tokenize(input)) {
-		const match = /^(-?)([A-Za-z]+):([\s\S]*)$/.exec(token.raw);
-		const field = match ? FIELDS[match[2].toLowerCase()] : undefined;
+		const match = /^(-?)([\p{L}]+):([\s\S]*)$/u.exec(token.raw);
+		const field = match ? FIELDS[fold(match[2])] : undefined;
 		if (!match || !field) { if (token.raw) text.push(token.raw); continue; }
 		if (!match[3].trim()) { dropped++; continue; }
 		const term = termOf(field, match[3], match[1] === "-");

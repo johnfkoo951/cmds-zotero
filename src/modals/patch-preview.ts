@@ -45,10 +45,18 @@ export class ScopeQueryModal extends Modal {
 		this.contentEl.createEl("p", { text: "Items of the saved index that match, for example col:methods, tag:method, type:book or year:2020-. Only items without a literature note are imported; a review list comes first." });
 		const status = this.contentEl.createDiv({ cls: "cmds-zotero-status", attr: { role: "status", "aria-live": "polite" } });
 		let query = "";
+		const update = (value: string): void => {
+			query = value;
+			status.setText(value.trim() ? `${this.count(value)} matching items` : "");
+		};
 		const go = (): void => { if (!query.trim()) { status.setText("Enter a search."); return; } this.close(); this.submit(query); };
 		new Setting(this.contentEl).setName("Search").addText(text => {
-			text.setPlaceholder("For example tag:method").onChange(value => { query = value; status.setText(value.trim() ? `${this.count(value)} matching items` : ""); });
-			text.inputEl.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); go(); } });
+			text.setPlaceholder("For example tag:method").onChange(update);
+			text.inputEl.addEventListener("compositionend", () => update(text.inputEl.value));
+			text.inputEl.addEventListener("keydown", event => {
+				if (event.isComposing || (event as { keyCode?: number }).keyCode === 229) return;
+				if (event.key === "Enter") { event.preventDefault(); go(); }
+			});
 			window.setTimeout(() => text.inputEl.focus(), 0);
 		});
 		new Setting(this.contentEl).addButton(button => button.setButtonText("Cancel").onClick(() => this.close()))

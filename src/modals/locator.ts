@@ -21,7 +21,11 @@ export class LocatorModal extends Modal {
 		});
 		new Setting(this.contentEl).setName("Value").setDesc("For example 33, 33–35 or xii.").addText(text => {
 			text.setValue(value).onChange(next => { value = next; });
-			text.inputEl.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); this.submit(label, value); } });
+			text.inputEl.addEventListener("compositionend", () => { value = text.inputEl.value; });
+			text.inputEl.addEventListener("keydown", event => {
+				if (event.isComposing || (event as { keyCode?: number }).keyCode === 229) return;
+				if (event.key === "Enter") { event.preventDefault(); this.submit(label, value); }
+			});
 			window.setTimeout(() => text.inputEl.focus(), 0);
 		});
 		new Setting(this.contentEl)

@@ -111,3 +111,57 @@ test("0.6 OPT-13: unreachableRecently counts only 'Zotero is not answering' fail
 	assert.equal(unreachableRecently({ ok: false, at: new Date(now + 1000), reason: "timeout" }, now), false, "a clock that went backwards does not suppress probes");
 	assert.equal(unreachableRecently({ ok: false, at: at(5000), reason: "timeout" }, now, 1000), false);
 });
+
+test("IndexController.refreshIndex and loadIndexForRead start warm backoff and mark the generation announced on non-cancelled errors", async () => {
+	const { build } = await import("esbuild");
+	const bundled = await build({
+		entryPoints: ["src/plugin/index-controller.ts"],
+		bundle: true, platform: "node", format: "esm", write: false,
+		plugins: [{
+			name: "mock-obsidian",
+			setup(b) {
+				b.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "mock" }));
+				b.onLoad({ filter: /.*/, namespace: "mock" }, () => ({
+					contents: `export const notices = []; export class Notice { constructor(msg) { notices.push(msg); } hide() {} } export class TAbstractFile {} export class TFile extends TAbstractFile {} export class TFolder extends TAbstractFile {}`,
+				}));
+			},
+		}],
+	});
+	const mod = await import("data:text/javascript;base64," + Buffer.from(bundled.outputFiles[0].text).toString("base64"));
+	const { IndexController } = mod;
+
+	let failWith: Error = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+	let ensureCalls = 0;
+	const makePlugin = () => ({
+		active: true,
+		lastIndex: null as { generatedAt: string } | null,
+		settings: { bbtEndpoint: "http://127.0.0.1:23119/better-bibtex/json-rpc" },
+		index: { isStale: () => true, ageMinutes: () => null },
+		cachedIndexAgeMinutes: () => null,
+		publish: async () => {},
+		run: async (fn: () => Promise<void>) => fn(),
+		service: {
+			peekIndex: async () => null,
+			ensureIndex: async () => { ensureCalls++; throw failWith; },
+		},
+	});
+
+	const plugin1 = makePlugin();
+	const controller1 = new IndexController(plugin1);
+	await assert.rejects(controller1.loadIndexForRead(), /not reachable/);
+	assert.equal(controller1.warmBackoffActive(), true, "loadIndexForRead failure starts warm backoff");
+	const callsAfterLoad = ensureCalls;
+	await controller1.warmIndex(false);
+	assert.equal(ensureCalls, callsAfterLoad, "background warmIndex backs off after loadIndexForRead failure");
+
+	const plugin2 = makePlugin();
+	const controller2 = new IndexController(plugin2);
+	await assert.rejects(controller2.refreshIndex(), /not reachable/);
+	assert.equal(controller2.warmBackoffActive(), true, "refreshIndex failure starts warm backoff");
+
+	const plugin3 = makePlugin();
+	const controller3 = new IndexController(plugin3);
+	failWith = new Error("BBT collection cancelled");
+	await assert.rejects(controller3.refreshIndex(), /cancelled/);
+	assert.equal(controller3.warmBackoffActive(), false, "cancelled refresh does not start warm backoff");
+});

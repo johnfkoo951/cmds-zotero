@@ -106,6 +106,7 @@ export async function adoptExistingNotes(plugin: CMDSZoteroPlugin): Promise<void
 		const identities = await plugin.importer.identityMap();
 		const rows: ReviewRow<AdoptRow | null>[] = [];
 		const claimed = new Map<string, string>();
+		const pending: { file: TFile; match: ReturnType<typeof adoptCandidates> }[] = [];
 		for (const file of plugin.app.vault.getMarkdownFiles().sort((a, b) => a.path.localeCompare(b.path))) {
 			const frontmatter = plugin.app.metadataCache.getFileCache(file)?.frontmatter ?? null;
 			const note = { path: file.path, basename: file.basename, frontmatter };
@@ -113,18 +114,26 @@ export async function adoptExistingNotes(plugin: CMDSZoteroPlugin): Promise<void
 			if (!match.candidates.length) continue;
 			const why = adoptRefusal(note);
 			if (why) continue; // hubs, Raw Sources, Bookends and Better Notes notes are not literature notes to adopt
-			if (match.candidates.length > 1) { rows.push(reviewRow(file.path, file.path, match.candidates.map(entry => `@${entry.citekey}`).join(", "), "skip", "several items match: use Adopt current note as literature note to choose", null)); continue; }
-			const entry = match.candidates[0];
 			const text = await plugin.app.vault.cachedRead(file);
 			const refusal = adoptRefusal(note, text);
-			if (refusal) { if (!linked.has(file.path)) rows.push(reviewRow(file.path, file.path, `@${entry.citekey}`, "skip", refusal, null)); continue; }
+			if (refusal) { if (!linked.has(file.path)) rows.push(reviewRow(file.path, file.path, match.candidates.map(entry => `@${entry.citekey}`).join(", "), "skip", refusal, null)); continue; }
+			if (match.candidates.length > 1) { rows.push(reviewRow(file.path, file.path, match.candidates.map(entry => `@${entry.citekey}`).join(", "), "skip", "several items match: use Adopt current note as literature note to choose", null)); continue; }
+			const entry = match.candidates[0];
 			const existing = (await identities.pathsFor(entry.id)).filter(path => path !== file.path);
 			if (existing.length) { rows.push(reviewRow(file.path, file.path, `@${entry.citekey}`, "skip", `the item already has a literature note: ${existing.join(", ")}`, null)); continue; }
+			pending.push({ file, match });
+		}
+		for (const { file, match } of pending) {
+			if (match.strength === "strong" && !claimed.has(match.candidates[0].id)) claimed.set(match.candidates[0].id, file.path);
+		}
+		for (const { file, match } of pending) {
+			const entry = match.candidates[0];
 			const first = claimed.get(entry.id);
-			if (first) { rows.push(reviewRow(file.path, file.path, `@${entry.citekey}`, "skip", `${first} matches the same item`, null)); continue; }
+			if (first && first !== file.path) { rows.push(reviewRow(file.path, file.path, `@${entry.citekey}`, "skip", `${first} matches the same item`, null)); continue; }
 			claimed.set(entry.id, file.path);
 			rows.push(reviewRow(file.path, file.path, `@${entry.citekey} · ${entry.title}`, "adopt", `${match.evidence.join(", ")}${match.strength === "doi" ? " (DOI only: check it)" : ""}`, { path: file.path, entry }, match.strength === "strong"));
 		}
+		rows.sort((a, b) => a.key.localeCompare(b.key));
 		if (!rows.length) throw new Error("No notes outside CMDS Zotero match an item of the index by Zotero link, key, citekey or DOI.");
 		new BatchReviewModal(plugin.app, "Adopt existing literature notes", rows, chosen => {
 			void plugin.run(() => runAdopt(plugin, index, chosen.flatMap(row => row.item ? [row.item] : [])));
@@ -143,12 +152,18 @@ async function runAdopt(plugin: CMDSZoteroPlugin, index: ZoteroIndex, rows: Adop
 	try {
 		const run = await runBatch(rows, {
 			concurrency: plugin.settings.concurrency,
-			prepare: async row => offline ? row.entry : (await plugin.literature.freshEntry(row.entry)).entry,
+			prepare: async row => {
+				if (offline) return { entry: row.entry, fresh: false };
+				const current = await plugin.literature.freshEntry(row.entry);
+				if (current.fresh) await plugin.bibliography.bibliographyDetail(current.entry).catch(() => undefined);
+				return current;
+			},
 			cancelled: () => batch.cancelled,
 			onItem: (row, position) => { batch.update(progress(position), row.path); },
 			apply: async (row, prepared) => {
 				try {
-					const preview = await plugin.importer.adoptPreview(prepared.ok ? prepared.value : row.entry, row.path, index, { identities: batch.identities, ...(offline ? { offline: true } : {}) });
+					const current = prepared.ok ? prepared.value : { entry: row.entry, fresh: false };
+					const preview = await plugin.importer.adoptPreview(current.entry, row.path, index, { identities: batch.identities, offline: !current.fresh });
 					if (preview.conflicts.length) { skipped.push(`${row.path}: ${preview.conflicts.join("; ")}`); return; }
 					const result = await plugin.importer.apply(preview);
 					if (result.conflicts.length) { skipped.push(`${row.path}: ${result.conflicts.join("; ")}`); return; }

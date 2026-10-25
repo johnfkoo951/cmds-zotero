@@ -84,6 +84,16 @@ test("0.6.3 ImportService: patterns, moved notes, scope, rebuild and adopt", asy
 		const zotlit = "---\ntitle: My ZotLit note\nzotero-key: ITEM0002\n---\n\n# Reading notes\n\nMine.\n";
 		await vault.create("ZotLit/Example2027.md", zotlit);
 		const second: ZoteroIndexEntry = { ...entry, id: "user:1:ITEM0002", itemKey: "ITEM0002", citekey: "Example2027", zoteroSelectURI: "zotero://select/library/items/ITEM0002" };
+		// Priority 3 recovery: an unowned existing note in the target path offers recovery: "adopt"; a damaged owned note offers recovery: "rebuild".
+		await vault.create("References/Zotero/@Example2027.md", zotlit);
+		const blockedAdopt = await service.preview(second);
+		assert.equal(blockedAdopt.recovery, "adopt");
+		vault.files.delete("References/Zotero/@Example2027.md"); vault.data.delete("References/Zotero/@Example2027.md");
+		const damagedAgain = vault.data.get("Projects/Moved.md").replace("<!-- /cmds-zotero:citation -->", "");
+		vault.data.set("Projects/Moved.md", damagedAgain);
+		const blockedRebuild = await service.preview(entry);
+		assert.equal(blockedRebuild.recovery, "rebuild");
+		await service.apply(await service.preview(entry, undefined, { rebuild: true }));
 		const adopt = await service.adoptPreview(second, "ZotLit/Example2027.md");
 		assert.equal(adopt.mode, "adopt");
 		assert.deepEqual(adopt.conflicts, []);

@@ -1,7 +1,7 @@
 // 0.6.1 annotation-card-actions: citations, scoped keys, identity links and the annotation data view. Pure.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CARD_ACTIONS, annotationData, annotationDataText, citationFor, citationPage, identityLinkFor, pagePosition, scopedKey } from "../src/annotations/card-actions";
+import { ANNOTATION_CARD_ACTIONS, CARD_ACTIONS, annotationData, annotationDataText, citationFor, citationPage, identityLinkFor, pagePosition, scopedKey } from "../src/annotations/card-actions";
 import { parseProtocolRequest } from "../src/protocol";
 import type { Annotation, ZoteroIndexEntry } from "../src/types";
 
@@ -54,5 +54,6 @@ test("annotation data: the normalized annotation with its item and attachment, n
 	const text = annotationDataText(note(), { key: "ATTA2345", title: "Main PDF", contentType: "application/pdf" }, user);
 	assert.deepEqual(JSON.parse(text).attachment, { key: "ATTA2345", title: "Main PDF", contentType: "application/pdf" });
 	assert.ok(!/"path"/.test(text));
-	assert.deepEqual(CARD_ACTIONS.map(action => action.id), ["copy-citation", "copy-citation-link", "copy-callout", "copy-bibliography", "copy-annotation-key", "copy-item-key", "copy-identity-link", "show-data"]);
+	assert.equal(ANNOTATION_CARD_ACTIONS, CARD_ACTIONS);
+	assert.deepEqual(CARD_ACTIONS.map(action => action.id), ["copy-citation", "copy-citation-link", "copy-quote", "copy-callout", "copy-bibliography", "copy-annotation-key", "copy-item-key", "copy-identity-link", "show-data"]);
 });

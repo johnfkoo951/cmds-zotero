@@ -121,6 +121,14 @@ test("code fences in Zotero notes are passed through unchanged", () => {
 	assert.match(out, /^### Title$/m);
 	assert.match(out, /```python\n# comment\n\[x\]\(javascript:y\)\n```/, "code inside the fence is the user's code");
 	assert.match(out, /^### After$/m);
+	// Bug 18: 4-backtick fence is not closed by 3 backticks or a fence line with an info string, and an unclosed fence is closed.
+	const nested = safeNoteMarkdown("````md\n```js\n# inside\n```\n````\n# Outside");
+	assert.match(nested, /# inside/);
+	assert.match(nested, /^### Outside$/m);
+	const withInfoInside = safeNoteMarkdown("```\n```notacloser\n```\n[bad](javascript:alert(1))");
+	assert.doesNotMatch(withInfoInside, /javascript:/);
+	const unclosed = safeNoteMarkdown("```python\nx = 1");
+	assert.match(unclosed, /```python\nx = 1\n```$/);
 });
 
 test("a closing and an opening marker glued on one line never swallow the new block", () => {

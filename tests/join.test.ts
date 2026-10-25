@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS, type Annotation, type ZoteroIndexEntry } from "../src/types";
 import { displayPageLabel, isContinuation, joinContinuations } from "../src/annotations/join";
-import { continuationHeads, ownerMarker, readingOrder, renderLiterature } from "../src/note-writer";
+import { continuationHeads, ownerMarker, readingOrder, renderedAnnotation, renderLiterature } from "../src/note-writer";
 import { describeNoteStatus, literatureNoteStatus, needsSending } from "../src/recent/recent-reads";
 import { normalizeSettings } from "../src/settings-data";
 import { GOLDEN_BIBLIOGRAPHY, GOLDEN_ENTRIES, GOLDEN_IMAGE_HASHES, GOLDEN_RELATED } from "./fixtures/note-golden";
@@ -51,6 +51,19 @@ test("no join across attachments; the page label spans only when pages differ an
 	assert.equal(displayPageLabel({ page: 0, pageLabel: "" }), "1");
 	assert.equal(isContinuation({ comment: "  +x" }), true);
 	assert.equal(isContinuation({ comment: "x+" }), false);
+	// Bug 34: whitespace-only text is not joinable, and renderedAnnotation checks attachmentKey.
+	const blankText = joinContinuations(items([a("WSL1"), a("WSL2", { text: "   ", comment: "+ blank" })]));
+	assert.equal(blankText.length, 2);
+	const twoAttachments: ZoteroIndexEntry = {
+		...base,
+		attachments: [
+			{ ...base.attachments[0], key: "ATTACH01", annotations: [a("SAMEKEY1", { attachmentKey: "ATTACH01" }), a("CONTKEY1", { attachmentKey: "ATTACH01", comment: "+" })] },
+			{ ...base.attachments[0], key: "ATTACH02", annotations: [a("SAMEKEY1", { attachmentKey: "ATTACH02", text: "Other attachment text" })] },
+		],
+	};
+	const otherAnnot = twoAttachments.attachments[1].annotations[0];
+	assert.equal(renderedAnnotation(twoAttachments, otherAnnot, ON).text, "Other attachment text");
+	assert.equal(renderedAnnotation(twoAttachments, twoAttachments.attachments[0].annotations[0], ON).text, "Text SAMEKEY1 … Text CONTKEY1");
 });
 
 test("in a note: off by default (0.6.0 output), on renders one block under the first annotation's ID", () => {

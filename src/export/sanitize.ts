@@ -32,7 +32,7 @@ export const IDENTITY_KEYS: readonly string[] = ["zoteroID", "zoteroSelectURI", 
 
 /** The frontmatter block without the identity keys (each key line and its indented continuation lines). */
 export function withoutIdentityKeys(frontmatter: string): { text: string; removed: number } {
-	const lines = frontmatter.split("\n");
+	const lines = frontmatter.replace(/\r\n/g, "\n").split("\n");
 	const kept: string[] = [];
 	let skipping = false;
 	let removed = 0;
@@ -72,14 +72,14 @@ export interface SanitizeReport {
 }
 
 const DROP = "\u0000";
-const PLUGIN_MARKER = /^<!-- \/?cmds-zotero(?:-[a-z]+)?(?::[^\n]*?)? -->$/;
+const PLUGIN_MARKER = /^<!-- \/?cmds-zotero(?:-[a-z]+)?(?::[^\r\n]*?)? -->$/;
 const WIKILINK = /(!?)\[\[([^[\]\n]+?)\]\]/g;
 const HIGHLIGHT = /==([^=\n](?:[^\n]*?[^=\n])?)==/g;
 const CALLOUT = /^((?:[ \t]*>)+)[ \t]*\[!([A-Za-z0-9_-]+)\][+-]?[ \t]*(.*)$/;
 const BLOCK_ID = /(^|[ \t])\^[A-Za-z0-9-]+[ \t]*$/;
 const IMAGE = /\.(?:png|jpe?g|gif|svg|webp|bmp|avif|tiff?)$/i;
 
-function lineAt(text: string, offset: number): number { return text.slice(0, offset).split("\n").length; }
+function lineAt(text: string, offset: number): number { return text.slice(0, offset).split(/\r?\n/).length; }
 
 function display(target: string, alias: string | undefined): string {
 	if (alias !== undefined && alias.trim()) return alias.trim();
@@ -96,13 +96,13 @@ function transformProse(segment: string, offset: number, source: string, options
 		const alias = aliasParts.length ? aliasParts.join("|") : undefined;
 		const target = rawTarget.trim();
 		const line = lineAt(source, offset + at);
+		const path = target.split("#")[0].trim();
+		const resolved: LinkTarget = path ? options.resolve(path) : { kind: "note", path: "" };
+		if (resolved.kind === "literature") { report.citations++; return `[@${resolved.citekey}]`; }
 		if (target.startsWith("@")) {
 			const key = target.slice(1).split("#")[0].trim();
 			if (key) { report.citations++; return `[@${key}]`; }
 		}
-		const path = target.split("#")[0].trim();
-		const resolved: LinkTarget = path ? options.resolve(path) : { kind: "note", path: "" };
-		if (resolved.kind === "literature") { report.citations++; return `[@${resolved.citekey}]`; }
 		if (bang && (resolved.kind === "image" || (resolved.kind === "missing" && IMAGE.test(path)))) {
 			if (resolved.kind === "missing") { report.unresolved.push({ link: whole, line }); return display(target, alias); }
 			report.images++;
@@ -120,8 +120,10 @@ function transformProse(segment: string, offset: number, source: string, options
 function rewriteRenamed(text: string, renamed: ReadonlyMap<string, string>, report: SanitizeReport): string {
 	if (!renamed.size) return text;
 	const set = citedKeySet(text);
-	const byLine = new Map<number, typeof set.occurrences>();
-	for (const occurrence of set.occurrences) if (renamed.has(occurrence.citekey)) byLine.set(occurrence.line, [...(byLine.get(occurrence.line) ?? []), occurrence]);
+	const byLine = new Map<number, { citekey: string; line: number; column: number }[]>();
+	for (const occurrence of [...set.occurrences, ...set.nocite]) {
+		if (renamed.has(occurrence.citekey)) byLine.set(occurrence.line, [...(byLine.get(occurrence.line) ?? []), occurrence]);
+	}
 	if (!byLine.size) return text;
 	const counts = new Map<string, number>();
 	const lines = text.split("\n");
@@ -144,7 +146,7 @@ function rewriteRenamed(text: string, renamed: ReadonlyMap<string, string>, repo
 /** The cleaned copy and what was changed. */
 export function sanitizeForExport(source: string, options: SanitizeOptions): { text: string; report: SanitizeReport } {
 	const report: SanitizeReport = { citations: 0, renamed: [], unresolved: [], embedsNotInlined: [], images: 0, links: 0, comments: 0, markers: 0, callouts: 0, highlights: 0, blockIds: 0, identityKeys: 0, referencesBlock: false };
-	let text = source;
+	let text = source.replace(/\r\n/g, "\n");
 	const block = locateReferencesBlock(text);
 	if (block.kind === "found") {
 		text = `${text.slice(0, block.start)}::: {#refs}\n:::${text.slice(block.end)}`;

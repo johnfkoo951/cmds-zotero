@@ -16,7 +16,7 @@ import type { PdfTextService } from "../pdf/extract";
 import { hashLocalPdf } from "../pdf/file-hash";
 import { applyReconcile } from "../reconcile-apply";
 import { indexEntryFor, literatureNoteStatus, readNoteTexts, type RecentReport } from "../recent/recent-reads";
-import type { ZoteroIndex } from "../types";
+import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory, relativePath } from "../vault-storage";
 
 /**
@@ -44,7 +44,7 @@ export async function agentHost(plugin: CMDSZoteroPlugin, action: AgentAction, r
 		vault: plugin.app.vault.getName(), now, connection, settings: plugin.settings,
 		indexView: index ? { index, ageMinutes: connection.index.ageMinutes ?? Number.POSITIVE_INFINITY, stale: connection.index.stale !== false } : null,
 		indexFailure: index ? null : indexExists ? { reason: "index-invalid", message: "The index file exists but failed validation; run refresh explicitly." } : { reason: "index-missing", message: "No validated Zotero index is available; run refresh explicitly." }, reader,
-		bibliography: (entry, style) => plugin.bibliography.bibliographyForStyle(entry, style), bibliographyReason: null,
+		bibliography: (entry, style, locale) => (plugin.bibliography as { bibliographyForStyle(entry: ZoteroIndexEntry, style: string, locale?: string): Promise<string> }).bibliographyForStyle(entry, style, locale), bibliographyReason: null,
 		vaultLinks: (entry, current) => plugin.links.find(entry, current),
 		pdfCache: {
 			list: async dir => { await assertVaultBoundary(plugin.app, dir); return (await adapter.exists(dir)) ? (await adapter.list(dir)).files.map(path => path.split("/").pop() ?? path) : []; },

@@ -6,14 +6,14 @@
  */
 import type { ZoteroIndexEntry } from "../types";
 import { ITEM_KEY } from "../uris";
-import { KEY } from "./scan";
+import { UNICODE_KEY } from "./cluster";
 
 export type PastedRef =
 	| { kind: "item"; libraryType: "user" | "group"; groupID?: number; itemKey: string; text: string }
 	| { kind: "library-item"; libraryID: number; itemKey: string; text: string }
 	| { kind: "citekey"; citekey: string; text: string };
 
-const LINK = new RegExp(`^<?zotero://select/(?:(library)/items/([A-Z0-9]{8})|groups/([1-9]\\d*)/items/([A-Z0-9]{8})|items/([1-9]\\d*)_([A-Z0-9]{8})|items/@(${KEY}))>?$`);
+const LINK = new RegExp(`^<?zotero://select/(?:(library)/items/([A-Z0-9]{8})|groups/([1-9]\\d*)/items/([A-Z0-9]{8})|items/([1-9]\\d*)_([A-Z0-9]{8})|items/@(${UNICODE_KEY}))>?$`, "u");
 
 /**
  * The Zotero item links of a pasted or dropped text, or null when the text is anything else: only text made entirely of

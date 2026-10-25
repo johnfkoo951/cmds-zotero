@@ -115,13 +115,19 @@ test('find() links every peer path with a Hookmark-native address and orders hub
   await fs.rm(path.join(peerRoot,'custom-config'),{recursive:true,force:true});
   await fs.writeFile(path.join(peerRoot,'.obsidian/community-plugins.json'),'{broken');
 
-  // A missing peer file or an absolute path is reported once per vault; rows validated before it are kept.
+  // A missing peer file or an absolute path is reported once per vault; all other valid rows (before and after) are kept,
+  // and filesystem ENOENT messages are sanitized so absolute paths are never exposed.
   await fs.rm(path.join(peerRoot,peerPaths[1]));
   const partial=await links.find(entry,index);
   assert.equal(partial.warnings.length,1);
-  assert.ok(partial.links.some((l:{path:string})=>l.path===peerPaths[0]));
-  await fs.writeFile(path.join(peerRoot,'.cmds-zotero/note-map.json'),JSON.stringify({version:1,vault:'Wiki Vault',generatedAt:'x',indexGeneratedAt:'y',notes:{[id]:[peerPaths[3],'/etc/passwd']}}));
+  assert.doesNotMatch(partial.warnings[0],/^Wiki Vault: E[A-Z]+:/);
+  assert.ok(!partial.warnings[0].includes(peerRoot),'absolute path is never exposed in warnings');
+  assert.deepEqual(partial.links.filter((l:{vault:string})=>l.vault==='Wiki Vault').map((l:{path:string})=>l.path),[
+    peerPaths[2],peerPaths[3],peerPaths[0],
+  ],'valid peer notes after a missing note are still returned');
+  await fs.writeFile(path.join(peerRoot,'.cmds-zotero/note-map.json'),JSON.stringify({version:1,vault:'Wiki Vault',generatedAt:'x',indexGeneratedAt:'y',notes:{[id]:['/etc/passwd',peerPaths[3]]}}));
   const absolute=await links.find(entry,index);
+  assert.equal(absolute.warnings.length,1);
   assert.match(absolute.warnings[0],/vault-relative/);
   assert.deepEqual(absolute.links.filter((l:{vault:string})=>l.vault==='Wiki Vault').map((l:{path:string})=>l.path),[peerPaths[3]]);
   await fs.rm(root,{recursive:true,force:true});

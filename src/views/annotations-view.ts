@@ -21,6 +21,7 @@ import {
 } from "../annotations/view-state";
 import { LiveOverlay, sourceLabel } from "../annotations/overlay";
 import { CARD_ACTIONS, annotationDataText, citationFor, identityLinkFor, scopedKey, type CardActionId } from "../annotations/card-actions";
+import { annotationInsertText } from "../annotations/search";
 import { ReportModal } from "../modals/report";
 import { ANNOTATION_DRAG_TYPE, dragPayload, encodeDragPayload } from "../annotations/drag-payload";
 import { annotationText } from "../plugin/annotation-insert";
@@ -350,7 +351,9 @@ export class AnnotationsView extends ItemView {
 		if (following) header.createDiv({ cls: "setting-item-description cmds-zotero-selection-follow", text: following });
 		const search = toolbar.createEl("input", { type: "search", placeholder: "Filter text, comment, tag, page", attr: { "aria-label": "Filter annotations" } });
 		search.value = this.facets.query;
-		search.addEventListener("input", () => { this.facets.query = search.value; this.filterSoon(); });
+		const onSearch = (): void => { this.facets.query = search.value; this.filterSoon(); };
+		search.addEventListener("input", onSearch);
+		search.addEventListener("compositionend", onSearch);
 		// One warm-up per render; skipped while the plugin backs off after a failed refresh.
 		if (!this.plugin.indexLoaded() && !this.plugin.warmBackoffActive()) void this.plugin.warmIndex();
 		const list = container.createDiv({ cls: "cmds-zotero-annotation-list" });
@@ -438,7 +441,7 @@ export class AnnotationsView extends ItemView {
 	private renderList(list: HTMLElement, rows: AnnotationRow[]): void {
 		const entry = this.entry;
 		if (!entry) return;
-		this.continuations = new Set(this.plugin.settings.joinContinuations ? joinContinuations(readingOrder(entry)).flatMap(joined => joined.continuations) : []);
+		this.continuations = new Set(this.plugin.settings.joinContinuations ? joinContinuations(readingOrder(entry)).flatMap(joined => joined.continuations.map(key => `${joined.item.attachment.key}:${key}`)) : []);
 		this.sections = groupAnnotations(sortAnnotations(rows, this.sort), this.group, entry.attachments.length);
 		for (const section of this.sections) {
 			const heading = section.heading === null ? null : list.createEl("h6", { text: section.heading });
@@ -473,7 +476,7 @@ export class AnnotationsView extends ItemView {
 		head.createSpan({ cls: "cmds-zotero-annotation-chip" });
 		head.createSpan({ text: `${annotation.type || "highlight"} · p. ${annotation.pageLabel || annotation.page}` });
 		if (annotation.imagePath) head.createSpan({ cls: "cmds-zotero-annotation-image", text: "image" });
-		if (this.continuations.has(annotation.key)) head.createSpan({ cls: "cmds-zotero-annotation-continuation", text: "continues the previous highlight", attr: { "aria-label": "Joined to the highlight before it in the note" } });
+		if (this.continuations.has(`${attachment.key}:${annotation.key}`)) head.createSpan({ cls: "cmds-zotero-annotation-continuation", text: "continues the previous highlight", attr: { "aria-label": "Joined to the highlight before it in the note" } });
 		// 0.6.1 RICH-TEXT: Zotero's rich-text tags are read, not shown (their text stays; the DOM gets text only).
 		if (annotation.text) card.createDiv({ cls: "cmds-zotero-annotation-text", text: richTextPlain(annotation.text) });
 		else if ((annotation.type || "").toLowerCase() === "image" && !annotation.imagePath) card.createDiv({ cls: "cmds-zotero-annotation-text", text: IMAGE_NOT_CACHED });
@@ -500,6 +503,26 @@ export class AnnotationsView extends ItemView {
 		});
 		card.addEventListener("focusin", focus);
 		card.addEventListener("click", focus);
+		card.addEventListener("keydown", (event: KeyboardEvent) => {
+			if (event.isComposing || (event as { keyCode?: number }).keyCode === 229) return;
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+				event.preventDefault?.();
+				const visible = this.groups.flatMap(group => group.cards).filter(item => this.isCardVisible(item));
+				const index = visible.indexOf(card);
+				if (index < 0) return;
+				const next = visible[index + (event.key === "ArrowDown" ? 1 : -1)];
+				if (!next) return;
+				if (typeof next.focus === "function") next.focus();
+				else (next as unknown as { dispatch?: (type: string) => void }).dispatch?.("focusin");
+				return;
+			}
+			if (event.key === "Enter" && (!event.target || event.target === card)) {
+				event.preventDefault?.();
+				focus();
+				if (this.plugin.lastMarkdownView()) void this.plugin.run(() => this.insert(entry, attachment, annotation));
+				else if (typeof window !== "undefined" && typeof window.open === "function") window.open(uri);
+			}
+		});
 		card.addEventListener("contextmenu", (event: MouseEvent) => { event.preventDefault(); focus(); this.cardMenu(entry, attachment, annotation).showAtMouseEvent(event); });
 		const actions = card.createDiv({ cls: "cmds-zotero-reference-actions" });
 		const uri = annotationURI(annotation, entry);
@@ -537,11 +560,19 @@ export class AnnotationsView extends ItemView {
 		await this.runCardAction(id, card.entry, card.attachment, card.annotation);
 	}
 
+	private isCardVisible(card: HTMLElement): boolean {
+		const classes = (card as unknown as { classes?: Set<string> }).classes;
+		if (classes instanceof Set) return !classes.has(FILTERED_OUT);
+		if (typeof card.hasClass === "function") return !card.hasClass(FILTERED_OUT);
+		return !card.classList?.contains(FILTERED_OUT);
+	}
+
 	private async runCardAction(id: CardActionId, entry: ZoteroIndexEntry, attachment: Attachment, annotation: Annotation): Promise<void> {
 		const copy = async (text: string, what: string): Promise<void> => { await navigator.clipboard.writeText(text); new Notice(`${what} copied.`); };
 		switch (id) {
 			case "copy-citation": return copy(citationFor(renderedAnnotation(entry, annotation, this.plugin.settings), entry), "Citation");
 			case "copy-citation-link": return copy(citationFor(renderedAnnotation(entry, annotation, this.plugin.settings), entry, { link: true }), "Citation");
+			case "copy-quote": return copy(annotationInsertText("quote", annotation, entry, this.plugin.settings), "Quote");
 			case "copy-callout": return copy(this.callout(entry, annotation), "Callout");
 			case "copy-bibliography": {
 				const text = await this.plugin.bibliographyFor(entry);

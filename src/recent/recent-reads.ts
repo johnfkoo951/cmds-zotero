@@ -4,7 +4,7 @@
  * parent item, so a search returns citable parents (CSL JSON plus citekey and library name).
  * Pure module: no `obsidian` import, so `tsx --test` loads it.
  */
-import type { ItemIdentity, ZoteroIndexEntry } from "../types";
+import type { ItemIdentity, ZoteroIndex, ZoteroIndexEntry } from "../types";
 import { parseItemURI, text } from "../api/normalize";
 import { record } from "../identity";
 import { continuationHeads, ownerMarker } from "../note-writer";
@@ -166,13 +166,16 @@ export function noteAnnotationIDs(text: string): Set<string> {
 /**
  * Compares a literature note's annotation blocks with the item's annotations; no BBT call and no write. With
  * `joinContinuations` a continuation counts as present when its own (older) block or its chain head's block is there.
+ * When `outputFolder` is given, notes outside that folder count only when they carry the item's `ownerMarker`.
  */
-export function literatureNoteStatus(entry: ZoteroIndexEntry, notes: readonly { path: string; text: string }[], settings: { joinContinuations?: boolean } = {}): NoteStatus {
+export function literatureNoteStatus(entry: ZoteroIndexEntry, notes: readonly { path: string; text: string }[], settings: { joinContinuations?: boolean; outputFolder?: string } = {}): NoteStatus {
+	const folder = settings.outputFolder?.trim().replace(/^\/+|\/+$/g, "");
+	const relevant = folder ? notes.filter(note => note.path.startsWith(`${folder}/`) || note.text.includes(ownerMarker(entry.id))) : notes;
 	const expected = new Set(entry.attachments.flatMap(attachment => attachment.annotations.map(annotation => `annotation-${attachment.key}-${annotation.key}`)));
 	const base = { missing: 0, orphaned: 0, annotations: expected.size };
-	if (!notes.length) return { ...base, state: "none", path: null, missing: expected.size };
-	if (notes.length > 1) return { ...base, state: "duplicate", path: null };
-	const [note] = notes;
+	if (!relevant.length) return { ...base, state: "none", path: null, missing: expected.size };
+	if (relevant.length > 1) return { ...base, state: "duplicate", path: null };
+	const [note] = relevant;
 	if (!note.text.includes(ownerMarker(entry.id))) return { ...base, state: "foreign", path: note.path };
 	const present = noteAnnotationIDs(note.text);
 	const heads = settings.joinContinuations === true ? continuationHeads(entry) : new Map<string, string>();
@@ -196,6 +199,122 @@ export function describeNoteStatus(status: NoteStatus): string {
 
 /** Rows that sending would change by default: no note yet, or new annotations waiting. */
 export function needsSending(status: NoteStatus): boolean { return status.state === "none" || status.state === "behind"; }
+
+export type ReadingQueueMode = "recent" | "needs-note" | "unannotated-pdfs";
+
+export interface ReadingQueueRow {
+	entry: ZoteroIndexEntry | null;
+	read: RecentRead | null;
+	citekey: string;
+	title: string;
+	year: string;
+	authors: string[];
+	readOn: string | null;
+	status: NoteStatus;
+}
+
+function queueStatus(entry: ZoteroIndexEntry | null, read: RecentRead | null, statuses: ReadonlyMap<string, NoteStatus>): NoteStatus {
+	if (entry) {
+		const found = statuses.get(entry.id) ?? statuses.get(recentKey(entry));
+		if (found) return found;
+		return literatureNoteStatus(entry, []);
+	}
+	if (read) {
+		const found = statuses.get(recentKey(read));
+		if (found) return found;
+	}
+	return { state: "none", path: null, missing: 0, orphaned: 0, annotations: 0 };
+}
+
+/**
+ * Reading queue rows for one of the three triage modes:
+ * - `"recent"`: items from `reads` in `orderRecent` order.
+ * - `"needs-note"`: items from `reads` plus `index.entries` with annotations (`annotations > 0`) where `needsSending(status)` holds,
+ *   deduplicated by item identity, ordered with `"behind"` and recent `readOn` first.
+ * - `"unannotated-pdfs"`: `index.entries` that have a PDF attachment (`entry.attachmentPath` or `entry.attachments.some(a => a.path)`)
+ *   with 0 annotations and `status.state === "none"`.
+ */
+export function buildReadingQueue(index: ZoteroIndex | null, reads: readonly RecentRead[], statuses: ReadonlyMap<string, NoteStatus>, mode: ReadingQueueMode): ReadingQueueRow[] {
+	const entries = index?.entries ?? [];
+	const orderedReads = orderRecent(reads);
+	const readByKey = new Map<string, RecentRead>();
+	for (const read of orderedReads) {
+		const key = recentKey(read);
+		if (!readByKey.has(key)) readByKey.set(key, read);
+	}
+	const fromRead = (read: RecentRead): ReadingQueueRow => {
+		const entry = entries.length ? indexEntryFor(read, entries) : null;
+		const status = queueStatus(entry, read, statuses);
+		return {
+			entry,
+			read,
+			citekey: entry?.citekey || read.citekey,
+			title: entry?.title || read.title,
+			year: entry?.year || read.year,
+			authors: entry?.authors.length ? entry.authors : read.authors,
+			readOn: read.readOn,
+			status,
+		};
+	};
+	const fromEntry = (entry: ZoteroIndexEntry): ReadingQueueRow => {
+		const read = readByKey.get(recentKey(entry)) ?? null;
+		const status = queueStatus(entry, read, statuses);
+		return {
+			entry,
+			read,
+			citekey: entry.citekey,
+			title: entry.title,
+			year: entry.year,
+			authors: entry.authors,
+			readOn: read?.readOn ?? null,
+			status,
+		};
+	};
+	if (mode === "recent") {
+		return [...readByKey.values()].map(fromRead);
+	}
+	if (mode === "needs-note") {
+		const seen = new Set<string>();
+		const rows: ReadingQueueRow[] = [];
+		for (const read of readByKey.values()) {
+			const row = fromRead(read);
+			const identity = row.entry ? row.entry.id : recentKey(read);
+			if (seen.has(identity)) continue;
+			seen.add(identity);
+			if (needsSending(row.status)) rows.push(row);
+		}
+		for (const entry of entries) {
+			if (seen.has(entry.id)) continue;
+			const row = fromEntry(entry);
+			seen.add(entry.id);
+			const annotationCount = entry.attachments.reduce((sum, attachment) => sum + attachment.annotations.length, 0);
+			if ((row.status.annotations > 0 || annotationCount > 0) && needsSending(row.status)) rows.push(row);
+		}
+		return rows.sort((a, b) => {
+			const aBehind = a.status.state === "behind" ? 0 : 1;
+			const bBehind = b.status.state === "behind" ? 0 : 1;
+			if (aBehind !== bBehind) return aBehind - bBehind;
+			if (a.readOn !== b.readOn) {
+				if (a.readOn === null) return 1;
+				if (b.readOn === null) return -1;
+				return a.readOn < b.readOn ? 1 : -1;
+			}
+			return a.title.localeCompare(b.title) || a.citekey.localeCompare(b.citekey);
+		});
+	}
+	const seen = new Set<string>();
+	const rows: ReadingQueueRow[] = [];
+	for (const entry of entries) {
+		if (seen.has(entry.id)) continue;
+		seen.add(entry.id);
+		const hasPdf = Boolean(entry.attachmentPath) || entry.attachments.some(a => Boolean(a.path));
+		if (!hasPdf) continue;
+		const annotationCount = entry.attachments.reduce((sum, a) => sum + a.annotations.length, 0);
+		const row = fromEntry(entry);
+		if (annotationCount === 0 && row.status.annotations === 0 && row.status.state === "none") rows.push(row);
+	}
+	return orderRecent(rows);
+}
 
 /** What sending one item to its literature note did; shared by the recent-reads modal and the agent `import` action. */
 export interface SendOutcome {
@@ -268,10 +387,14 @@ export interface ImportNoteResult {
 	failure?: { reason: string; message: string; candidates?: unknown[]; bbtError?: { reason: string; endpoint: string } };
 	item?: { id: string; citekey: string; title: string; year: string; libraryID: number; itemKey: string };
 	fresh?: boolean;
+	mode?: "import" | "rebuild" | "adopt";
 	/** Note state before the import, and after it when `apply` wrote. */
 	before?: NoteStatus;
 	after?: NoteStatus;
 	preview?: { path: string; exists: boolean; conflicts: string[]; softConflicts: string[]; sections: { id: string; state: string }[]; changes: boolean };
+	repairs?: string[];
+	backup?: string;
+	unverified?: string;
 	/** Null on a dry run. */
 	outcome?: SendOutcome | null;
 	warnings?: string[];

@@ -90,6 +90,9 @@ test("directory coverage accepts dir/, dir/** and dir/* forms", () => {
 	assert.equal(isDirectoryCovered(`${CACHE_DIR}/*.json\n`, CACHE_DIR), false);
 	assert.equal(isDirectoryCovered("*.json\n", CACHE_DIR), false);
 	assert.equal(isDirectoryCovered(`${CACHE_DIR}/\n!${CACHE_DIR}/\n`, CACHE_DIR), false);
+	assert.equal(isDirectoryCovered(`${CACHE_DIR}/*\n!${CACHE_DIR}/pdf-text/\n`, CACHE_DIR), false);
+	assert.equal(isDirectoryCovered(`${CACHE_DIR}/**\n!${CACHE_DIR}/note-map.json\n`, CACHE_DIR), false);
+	assert.equal(isDirectoryCovered(`${CACHE_DIR}/*\n!${CACHE_DIR}/keep.json\n${CACHE_DIR}/**\n`, CACHE_DIR), true);
 	assert.equal(isDirectoryCovered("", CACHE_DIR), false);
 });
 

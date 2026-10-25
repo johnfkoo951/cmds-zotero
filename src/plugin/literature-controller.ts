@@ -6,10 +6,12 @@ import type { IdentityMap } from "../batch/identity-map";
 import { formatIndexAge, resolveInIndex } from "../index-service";
 import type CMDSZoteroPlugin from "../main";
 import { ImportPreviewModal } from "../modals/import-preview";
+import type { ImportPreview } from "../importer";
 import { ReportModal } from "../modals/report";
 import { ownershipSummary, partitionOwnedNotes, type OwnedPartition } from "../note-ownership"; // 0.5 R14
 import { reviewRow, unchangedReason, type ChangedSince, type ReviewRow } from "../batch/plan";
-import { hasBetterNotesSync } from "../note-adopt";
+import { adoptRefusal, hasBetterNotesSync } from "../note-adopt";
+import type { SectionGroup } from "../note-writer";
 import { BatchReviewModal } from "../modals/batch-review";
 import { freshTargetOf, freshTargetOfRead, indexEntryFor, literatureNoteStatus, readNoteTexts, sendOutcome, type ImportNoteResult, type RecentRead, type SendOutcome } from "../recent/recent-reads";
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
@@ -79,15 +81,26 @@ export class LiteratureController {
 		catch (error) { return { entry: null, fresh: false, error }; }
 	}
 
-	/** Literature notes in the output folder keyed by their frontmatter `zoteroID` (metadata cache; no file reads). */
+	/** Literature notes in the output folder and moved/adopted notes outside it keyed by `zoteroID` (metadata cache; no file reads). */
 	literatureNoteFiles(): Map<string, TFile[]> {
 		const prefix = `${this.plugin.settings.outputFolder.replace(/\/+$/, "")}/`;
 		const notes = new Map<string, TFile[]>();
+		const add = (id: string, file: TFile): void => {
+			const list = notes.get(id);
+			if (!list) notes.set(id, [file]);
+			else if (!list.some(other => other.path === file.path)) list.push(file);
+		};
 		for (const file of this.plugin.app.vault.getMarkdownFiles()) {
-			if (!file.path.startsWith(prefix)) continue;
-			const id: unknown = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter?.zoteroID;
+			const frontmatter = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter;
+			const id: unknown = frontmatter?.zoteroID;
 			if (typeof id !== "string") continue;
-			notes.set(id, [...(notes.get(id) ?? []), file]);
+			if (!file.path.startsWith(prefix) && adoptRefusal({ path: file.path, basename: file.basename, frontmatter: frontmatter ?? null }) !== null) continue;
+			add(id, file);
+		}
+		if (this.plugin.lastIndex) {
+			for (const [id, files] of this.plugin.links.localFilesByEntry(this.plugin.lastIndex)) {
+				for (const file of files) if (file.path.startsWith(prefix)) add(id, file);
+			}
 		}
 		return notes;
 	}
@@ -128,6 +141,7 @@ export class LiteratureController {
 	 * request is refused unless `allowStale` (then the saved index is used and the payload warns).
 	 */
 	async importForAgent(request: ImportRequest, index: ZoteroIndex | null): Promise<ImportNoteResult> {
+		const ext = request as ImportRequest & { adopt?: string; rebuild?: boolean; scope?: SectionGroup[] };
 		let entry: ZoteroIndexEntry | null = null;
 		if (index) {
 			const resolution = resolveInIndex(index, request.itemKey ?? request.citekey ?? "", request.itemKey ? { itemKey: request.itemKey, libraryID: request.libraryID } : undefined);
@@ -146,19 +160,43 @@ export class LiteratureController {
 		// 0.6 OPT-02: one identity map serves the note state before the import and the preview, so both see the same notes.
 		const identities = await this.plugin.importer.identityMap();
 		const before = literatureNoteStatus(target, await readNoteTexts((await identities.pathsFor(target.id)).map(path => ({ path })), note => this.readNote(note.path)), this.plugin.settings);
-		const preview = await this.plugin.importer.preview(target, index ?? undefined, { identities, ...(found.fresh || !this.isOfflineError(found.error) ? {} : { offline: true }) });
+		const offline = found.fresh || !this.isOfflineError(found.error) ? {} : { offline: true };
+		let preview: ImportPreview;
+		try {
+			preview = ext.adopt
+				? await this.plugin.importer.adoptPreview(target, ext.adopt, index ?? undefined, { identities, ...offline })
+				: await this.plugin.importer.preview(target, index ?? undefined, {
+					identities,
+					...offline,
+					...(ext.rebuild ? { rebuild: true } : {}),
+					...(ext.scope ? { scope: ext.scope } : {}),
+				});
+		} catch (error) {
+			return { failure: { reason: "invalid-request", message: error instanceof Error ? error.message : "The import preview failed." } };
+		}
+		const mode = preview.mode ?? (ext.adopt ? "adopt" : ext.rebuild ? "rebuild" : "import");
 		const existing = this.plugin.app.vault.getAbstractFileByPath(preview.path);
 		const original = existing instanceof TFile ? await this.plugin.app.vault.read(existing) : null;
 		const report = { path: preview.path, exists: preview.exists, conflicts: [...preview.conflicts], softConflicts: [...preview.softConflicts], sections: preview.sections.map(section => ({ id: section.id, state: section.state })), changes: original !== preview.content };
 		const item = { id: target.id, citekey: target.citekey, title: target.title, year: target.year, libraryID: target.libraryID, itemKey: target.itemKey };
-		const warnings = found.fresh ? [] : [`${describeBbtError(found.error)} Imported from the saved index (${formatIndexAge(this.plugin.index.ageMinutes(index))} old); annotations made since then are missing.`];
-		if (request.apply !== true || preview.conflicts.length) return { item, fresh: found.fresh, before, preview: report, outcome: null, warnings };
+		const warnings = [
+			...(found.fresh ? [] : [`${describeBbtError(found.error)} Imported from the saved index (${formatIndexAge(this.plugin.index.ageMinutes(index))} old); annotations made since then are missing.`]),
+			...(preview.warnings ?? []),
+		];
+		const extras = { mode, ...(preview.repairs ? { repairs: [...preview.repairs] } : {}) };
+		if (request.apply !== true || preview.conflicts.length) return { item, fresh: found.fresh, ...extras, before, preview: report, outcome: null, warnings };
 		const result = await this.plugin.importer.apply(preview);
 		const outcome = sendOutcome(preview, result);
 		if (outcome.status !== "refused") this.plugin.indexing.noteChanged(outcome.path);
 		const written = this.plugin.app.vault.getAbstractFileByPath(result.path);
 		const after = outcome.status !== "refused" && written instanceof TFile ? literatureNoteStatus(target, await readNoteTexts([written], file => this.plugin.app.vault.read(file)), this.plugin.settings) : undefined;
-		return { item, fresh: found.fresh, before, preview: report, outcome, ...(after ? { after } : {}), warnings };
+		return {
+			item, fresh: found.fresh, ...extras, before, preview: report, outcome,
+			...(after ? { after } : {}),
+			...(result.backup ? { backup: result.backup } : {}),
+			...(result.unverified ? { unverified: result.unverified } : {}),
+			warnings,
+		};
 	}
 
 	/** The text of the note at `path`; "" when no note is there any more. */
@@ -192,7 +230,7 @@ export class LiteratureController {
 				this.plugin.indexing.noteChanged(result.path);
 				const done = shown.mode === "adopt" ? "Note adopted as a literature note." : shown.mode === "rebuild" ? "Literature note rebuilt." : "Literature note imported.";
 				new Notice([result.preserved.length ? `${done} Edited sections kept: ${result.preserved.join(", ")}.` : `${done} User-written sections were preserved.`, result.backup ? `Backup: ${result.backup}.` : "", result.unverified ?? ""].filter(Boolean).join(" "));
-			}, (shown, scope) => this.plugin.importer.revise(shown, scope)).open();
+			}, (shown, scope) => this.plugin.importer.revise(shown, scope), (recovery, shown) => this.previewImport(current.entry, recovery === "adopt" ? { adoptPath: shown.path } : { rebuild: true, expectPath: shown.path })).open();
 		});
 	}
 

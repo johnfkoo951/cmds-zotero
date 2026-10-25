@@ -24,7 +24,7 @@ export function isContinuation(a: Pick<Annotation, "comment">): boolean { return
 /** Highlights and underlines with text: the only annotations a chain can hold. */
 function joinable(a: Annotation): boolean {
 	const type = (a.type || "highlight").toLowerCase();
-	return (type === "highlight" || type === "underline") && !!a.text && !a.imagePath;
+	return (type === "highlight" || type === "underline") && Boolean(a.text.trim()) && !a.imagePath;
 }
 const isImage = (a: Annotation): boolean => (a.type || "").toLowerCase() === "image" || !!a.imagePath;
 

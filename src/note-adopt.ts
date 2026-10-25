@@ -112,12 +112,16 @@ export function adoptIdentityEdit(frontmatter: Record<string, unknown> | null, e
 	const fm = frontmatter ?? {};
 	const wanted: [string, string][] = [["zoteroID", entry.id], ["zoteroSelectURI", entry.zoteroSelectURI], ["zotero-key", entry.itemKey], ["citekey", entry.citekey]];
 	const set: Record<string, string> = {};
+	const sameSelect = (uri: unknown): boolean => {
+		const parsed = selectIdentity(uri);
+		return !!parsed && parsed.itemKey === entry.itemKey && parsed.libraryType === entry.libraryType && (parsed.groupID ?? 0) === (entry.groupID ?? 0);
+	};
 	for (const [key, value] of wanted) {
-		if (!(key in fm) || fm[key] === null || fm[key] === "") { if (value) set[key] = value; continue; }
 		const raw = fm[key];
 		const current = typeof raw === "string" ? raw.trim() : raw;
+		if (!(key in fm) || current === null || current === undefined || current === "") { if (value) set[key] = value; continue; }
 		if (key === "citekey") continue; // a citekey the note already has is kept (it may be a former key of the item)
-		if (key === "zoteroSelectURI" ? selectIdentity(current)?.itemKey !== entry.itemKey : current !== value) return { refuse: `${key} in the note names another item (${typeof current === "string" ? current : JSON.stringify(current)})` };
+		if (key === "zoteroSelectURI" ? !sameSelect(current) : current !== value) return { refuse: `${key} in the note names another item (${typeof current === "string" ? current : JSON.stringify(current)})` };
 	}
 	// An empty key line (`zoteroID:`) cannot be appended twice: it is replaced instead (the R8 patch keeps its position).
 	return { edit: { set, append: true, create: true } };

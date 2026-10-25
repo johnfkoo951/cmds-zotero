@@ -36,6 +36,7 @@ export function registerCitationCommands(plugin: CMDSZoteroPlugin): void {
 	}) });
 	plugin.addCommand({ id: "citation-actions", name: "Citation actions at cursor", editorCallback: atCursor((editor, context) => citations.showCitationActions(editor, context)) });
 	plugin.addCommand({ id: "edit-citation-locator", name: "Edit citation locator", editorCallback: atCursor(editor => { citations.editLocator(editor); }) });
+	plugin.addCommand({ id: "compose-citation", name: "Compose or edit citation cluster", editorCallback: atCursor(editor => { citations.composeCitation(editor); }) });
 	plugin.addCommand({ id: "fix-renamed-citekey", name: "Fix renamed citekey in this note", editorCallback: atCursor((editor, context) => citations.fixRenamedCitekey(editor, context)) });
 	plugin.addCommand({ id: "insert-citation-from-index", name: "Insert citation from the literature index", editorCallback: (editor, context) => { citations.insertFromPicker(editor, context, plugin.settings.citationFormat); } });
 	for (const format of CITATION_FORMATS) {

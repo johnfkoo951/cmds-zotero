@@ -2,7 +2,10 @@ import { Editor, Notice, TFile } from "obsidian";
 import { EXPORT_TRANSLATORS, defaultSidecarPath, groupEntriesByLibrary, mergeExports, type StructuredExport } from "../agent/cites-core"; // 0.5 R10
 import { describeBbtError, mapBounded } from "../api/transport";
 import { BibliographyStore, type BibliographyDetail } from "../bibliography-store"; // 0.5 R12
-import { resolveReferenceRows, resolvedEntries, countBibliographySources, fallbackCitation, type BibliographySourceCounts } from "../citations/reference-rows"; // 0.5 R10
+import { referenceRowsFromSet } from "../citations/check";
+import { citedKeySet } from "../citations/cited-keys";
+import { resolvedEntries, countBibliographySources, fallbackCitation, type BibliographySourceCounts } from "../citations/reference-rows"; // 0.5 R10
+import { withoutReferencesBlock } from "../citations/references-block";
 import { listInstalledStyles, type InstalledStyle, type StyleListing } from "../bibliography/csl-styles"; // 0.6.2
 import { copyListNotice, entriesHtml, formatKey, noteFormat, orderEntries, probeProblem, splitTextBibliography, type BibliographyFormat, type BibliographyOrder, type NoteFormat } from "../bibliography/format"; // 0.6.2
 import { markdownLink } from "../uris";
@@ -285,7 +288,7 @@ export class BibliographyController {
 		if (!(file instanceof TFile) || file.extension !== "md") throw new Error("Open a Markdown note first.");
 		const text = view?.file === file ? view.editor.getValue() : await this.plugin.app.vault.cachedRead(file);
 		await this.plugin.indexing.loadIndexForRead();
-		return { file, entries: resolvedEntries(resolveReferenceRows(text, this.plugin.cachedEntries(), this.plugin.indexLoaded())) };
+		return { file, entries: resolvedEntries(referenceRowsFromSet(citedKeySet(withoutReferencesBlock(text)), this.plugin.cachedEntries(), this.plugin.indexLoaded())) };
 	}
 
 	/** CSL-JSON for the entries: one BBT `item.export` per library, merged into one array with `abstract`/`note` removed. */

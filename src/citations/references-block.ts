@@ -16,12 +16,13 @@ import { createHash } from "crypto";
 export const REFERENCES_DETACHED = "detached";
 const OPENING = /<!-- cmds-zotero-references:([a-f0-9]{64}|detached) -->/g;
 const CLOSING = /<!-- \/cmds-zotero-references -->/g;
-const ANY_MARKER = /<!-- \/?cmds-zotero-references(?::[^\n]*?)? -->/g;
+const ANY_MARKER = /<!-- \/?cmds-zotero-references(?::[^\r\n]*?)? -->/g;
 
 const hash = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 export function referencesBlock(body: string): string {
-	return `<!-- cmds-zotero-references:${hash(body)} -->\n${body}\n<!-- /cmds-zotero-references -->`;
+	const normalized = body.replace(/\r\n/g, "\n");
+	return `<!-- cmds-zotero-references:${hash(normalized)} -->\n${normalized}\n<!-- /cmds-zotero-references -->`;
 }
 
 export type BlockLocation =
@@ -29,7 +30,7 @@ export type BlockLocation =
 	| { kind: "found"; start: number; end: number; mark: string; body: string; line: number }
 	| { kind: "conflict"; message: string; line: number };
 
-const lineOf = (text: string, offset: number): number => text.slice(0, offset).split("\n").length - 1;
+const lineOf = (text: string, offset: number): number => text.slice(0, offset).split(/\r?\n/).length - 1;
 
 /** The one references block of a note, or why it cannot be used (duplicate, unclosed or stray marker). */
 export function locateReferencesBlock(text: string): BlockLocation {
@@ -49,8 +50,9 @@ export function locateReferencesBlock(text: string): BlockLocation {
 	if (!closing || closing.index < opening.index) return { kind: "conflict", message: "The references block is not closed (the closing marker is missing or comes first).", line: lineOf(text, opening.index) };
 	const after = opening.index + opening[0].length;
 	const inner = text.slice(after, closing.index);
-	if (!inner.startsWith("\n")) return { kind: "conflict", message: "Text follows the opening references marker on its line; move it below the block.", line: lineOf(text, opening.index) };
-	const body = inner.slice(1).replace(/[ \t]*\n[ \t]*$/, "");
+	const leadingBreak = /^\r?\n/.exec(inner);
+	if (!leadingBreak) return { kind: "conflict", message: "Text follows the opening references marker on its line; move it below the block.", line: lineOf(text, opening.index) };
+	const body = inner.slice(leadingBreak[0].length).replace(/[ \t]*\r?\n[ \t]*$/, "").replace(/\r\n/g, "\n");
 	return { kind: "found", start: opening.index, end: closing.index + closing[0].length, mark: opening[1], body, line: lineOf(text, opening.index) };
 }
 
@@ -67,26 +69,27 @@ export type ReferencesPlan =
  * an unedited block in place, or leave the note alone (unchanged, edited, detached, conflict).
  */
 export function planReferencesSection(text: string, body: string, heading: string): ReferencesPlan {
+	const normalizedBody = body.replace(/\r\n/g, "\n");
 	const found = locateReferencesBlock(text);
 	if (found.kind === "conflict") return found;
 	if (found.kind === "none") {
 		const base = text.replace(/\s*$/, "");
 		const title = heading.trim() || "References";
 		const prefix = base ? `${base}\n\n` : "";
-		const next = `${prefix}## ${title}\n\n${referencesBlock(body)}\n`;
+		const next = `${prefix}## ${title}\n\n${referencesBlock(normalizedBody)}\n`;
 		return { kind: "insert", text: next, line: lineOf(next, next.lastIndexOf("<!-- cmds-zotero-references:")) };
 	}
 	if (found.mark === REFERENCES_DETACHED) return { kind: "detached", line: found.line };
 	if (hash(found.body) !== found.mark) return { kind: "edited", line: found.line };
-	if (found.body === body) return { kind: "unchanged", line: found.line };
-	return { kind: "update", text: `${text.slice(0, found.start)}${referencesBlock(body)}${text.slice(found.end)}`, line: found.line };
+	if (found.body === normalizedBody) return { kind: "unchanged", line: found.line };
+	return { kind: "update", text: `${text.slice(0, found.start)}${referencesBlock(normalizedBody)}${text.slice(found.end)}`, line: found.line };
 }
 
 /** The note with its references block (markers and body) blanked to spaces, so citations inside it are never counted. */
 export function withoutReferencesBlock(text: string): string {
 	const found = locateReferencesBlock(text);
 	if (found.kind !== "found") return text;
-	return text.slice(0, found.start) + text.slice(found.start, found.end).replace(/[^\n]/g, " ") + text.slice(found.end);
+	return text.slice(0, found.start) + text.slice(found.start, found.end).replace(/[^\r\n]/g, " ") + text.slice(found.end);
 }
 
 /** The block body: entries as paragraphs; a list of keys that could not be rendered is not part of it. */

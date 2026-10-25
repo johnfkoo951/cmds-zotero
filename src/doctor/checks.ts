@@ -44,7 +44,10 @@ function flagged(id: DoctorCheck["id"], title: string, code: DiagnosticCode, det
 	return { id, status: DIAGNOSTIC_CODES[code], title, detail, code, ...(paths?.length ? { paths: paths.slice(0, MAX_PATHS) } : {}) };
 }
 
-function plural(count: number, word: string): string { return `${count} ${word}${count === 1 ? "" : "s"}`; }
+function plural(count: number, word: string): string {
+	if (count === 1) return `${count} ${word}`;
+	return `${count} ${word.endsWith("y") ? `${word.slice(0, -1)}ies` : `${word}s`}`;
+}
 
 function zoteroCheck(bbt: DoctorFacts["bbt"]): DoctorCheck {
 	const title = "Zotero and Better BibTeX";

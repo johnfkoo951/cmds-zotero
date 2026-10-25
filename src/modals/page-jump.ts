@@ -5,7 +5,10 @@ export class PageJumpModal extends Modal {
 	onOpen(): void {
 		new Setting(this.contentEl).setName("Source PDF page").setHeading();
 		let page = "1";
-		new Setting(this.contentEl).setName("Citekey").addText(text => text.setValue(this.citekey).onChange(value => { this.citekey = value.trim(); }));
+		new Setting(this.contentEl).setName("Citekey").addText(text => {
+			text.setValue(this.citekey).onChange(value => { this.citekey = value.trim(); });
+			text.inputEl.addEventListener("compositionend", () => { this.citekey = text.inputEl.value.trim(); });
+		});
 		new Setting(this.contentEl).setName("Page number").setDesc("PDF page position, starting at 1; not the printed page label.").addText(text => {
 			text.inputEl.type = "number";
 			text.inputEl.min = "1";

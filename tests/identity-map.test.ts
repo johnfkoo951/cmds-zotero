@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parse } from "yaml";
 import { IdentityMap, noteZoteroID, type IdentitySource } from "../src/batch/identity-map";
+import { ownerMarker } from "../src/note-writer";
 
 // Synthetic notes only (AGENTS.md).
 const parseYaml = (yaml: string): unknown => parse(yaml) as unknown;
@@ -152,4 +153,15 @@ test("0.6.5: events for files that are not notes (the index and its temporary fi
 test("an unsafe folder is refused when the map is built", async () => {
 	await assert.rejects(IdentityMap.build("Lit/", vault({}).source), /Unsafe vault path/);
 	await assert.rejects(IdentityMap.build("", vault({}).source), /Unsafe vault path/);
+});
+
+test("pre-0.5 owned notes inside outputFolder without zoteroID resolve by ownerMarker(id)", async () => {
+	const id = "1:LEGACY01";
+	const legacyNote = `---\ntype: "zotero"\nzotero-key: "LEGACY01"\nzotero-library-id: 1\ncitekey: "Legacy2024"\n---\n\n${ownerMarker(id)}\n`;
+	const state = vault({ "Lit/@Legacy2024.md": legacyNote, "Outside/@Legacy2024.md": legacyNote });
+	const map = await IdentityMap.build("Lit", state.source);
+	assert.deepEqual(await map.pathsFor(id), ["Lit/@Legacy2024.md"]);
+	// Updating the note to include zoteroID replaces the ownerMarker mapping without duplicating paths.
+	map.noteWritten("Lit/@Legacy2024.md", note(id, ownerMarker(id)));
+	assert.deepEqual(await map.pathsFor(id), ["Lit/@Legacy2024.md"]);
 });

@@ -196,6 +196,11 @@ test("structure checks match the full check except for the hash, and sealing has
 	assert.equal(sealEntry(built), true);
 	assert.equal(built.contentHash, entryHash(built));
 	assert.ok(validateEntry(built));
+	for (const badAttachment of [{ ...built.attachments[0], contentType: 123 }, { ...built.attachments[0], filename: true }, { ...built.attachments[0], annotations: [{ ...built.attachments[0].annotations[0], sortIndex: 42 }] }]) {
+		const invalidEntry = { ...built, attachments: [badAttachment as never] };
+		assert.equal(validateEntryStructure(invalidEntry), false);
+		assert.equal(validateEntry(invalidEntry), false);
+	}
 
 	const invalid = normalizeEntryUnhashed(rawItem(3));
 	invalid.attachmentPath = "/synthetic/missing.pdf";
@@ -281,4 +286,43 @@ test("0.6 OPT-10: attachment reads go out in batches of collectConcurrency reque
 			assert.equal(api.peak.get("item.export"), concurrency, `concurrency ${concurrency}: item.export calls in flight`);
 		} finally { bbt.dispose(); await api.close(); }
 	}
+});
+
+test("a non-forced caller joining a failing forced flight receives a stale-fallback when cached, and normalizeAttachments parses string positions once", async () => {
+	const entry = normalizeEntryUnhashed(rawItem(1));
+	const stringPosAttachments = [{ open: `zotero://open-pdf/library/items/${key("B", 1)}`, path: `/synthetic/${key("B", 1)}.pdf`, annotations: [{ key: key("C", 1), parentItem: key("B", 1), annotationType: "highlight", annotationText: "Synthetic", annotationComment: "", annotationColor: "#ffd400", annotationPageLabel: "1", annotationPosition: JSON.stringify({ pageIndex: 0 }), version: 1, tags: [], dateModified: "2026-03-01T10:00:00Z" }] }];
+	const origParse = JSON.parse;
+	let parses = 0;
+	JSON.parse = ((text: string, reviver?: (this: unknown, key: string, value: unknown) => unknown) => { parses++; return origParse(text, reviver); }) as typeof JSON.parse;
+	try {
+		const normalized = normalizeAttachments(stringPosAttachments, entry);
+		assert.equal(normalized[0].annotations[0].page, 1);
+		assert.equal(parses, 1, "string annotationPosition is parsed once");
+	} finally { JSON.parse = origParse; }
+
+	assert.ok(sealEntry(entry));
+	const validIndex: ZoteroIndex = { schemaVersion: 2, generatedAt: new Date(Date.now() - 120_000).toISOString(), source: "better-bibtex", count: 1, entries: [entry], capabilities: { zotero: "8", betterbibtex: "9", metadata: true, attachments: true, annotations: true, bibliography: true }, diagnostics: [], complete: true };
+	let shouldFail = false;
+	let releaseCollect!: () => void;
+	const service = new IndexService(
+		{ collect: async () => { await new Promise<void>(resolve => { releaseCollect = resolve; }); if (shouldFail) throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }); return validIndex; } } as unknown as BbtService,
+		{ read: async () => null, writeValidated: async () => {} },
+		() => 1,
+	);
+	const firstFlight = service.refresh({ force: true });
+	await new Promise(resolve => setImmediate(resolve));
+	releaseCollect();
+	await firstFlight;
+
+	shouldFail = true;
+	const forced = service.refresh({ force: true });
+	const joinedNonForced = service.refresh({ force: false });
+	await new Promise(resolve => setImmediate(resolve));
+	releaseCollect();
+	await assert.rejects(forced, /ECONNREFUSED/);
+	const fallback = await joinedNonForced;
+	assert.equal(fallback.refreshed, false);
+	assert.equal(fallback.reason, "stale-fallback");
+	assert.equal(fallback.failure, "bbt-unreachable");
+	assert.equal(fallback.index, validIndex);
 });

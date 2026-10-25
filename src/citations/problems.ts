@@ -7,7 +7,7 @@
  * cannot prove absence (AGENTS.md).
  */
 import type { ZoteroIndexEntry } from "../types";
-import { scanCitations } from "./scan";
+import { UNICODE_KEY } from "./cluster";
 
 export type CitekeyProblem = "unknown" | "ambiguous" | "former";
 
@@ -33,22 +33,37 @@ export interface RenameLine { line: number; before: string; after: string; count
 
 export interface RenamePlan { oldKey: string; newKey: string; lines: RenameLine[]; count: number }
 
+const RENAME_CITATION = new RegExp(`\\[\\[@(${UNICODE_KEY})(?:[|#][^\\]]*)?\\]\\]|(^|[\\s\\[;(,\\-])-?@(${UNICODE_KEY})`, "gu");
+
 /**
- * Every body citation of `oldKey` in `text` (`[@old]`, `@old`, `-@old`, `[[@old]]`, the forms `scanCitations` finds; code
+ * Every body citation of `oldKey` in `text` (`[@old]`, `@old`, `-@old`, `[[@old]]`, including Unicode citekeys; code
  * blocks and frontmatter are skipped) and the lines with `newKey` instead. Other text, including other keys that start
  * with the old one, is untouched.
  */
 export function renamePlan(text: string, oldKey: string, newKey: string): RenamePlan {
 	const lines = text.split(/\r?\n/);
 	const columns = new Map<number, number[]>();
-	for (const occurrence of scanCitations(text)) {
-		if (occurrence.citekey !== oldKey) continue;
-		const line = lines[occurrence.line];
-		const at = line.indexOf(`@${oldKey}`, occurrence.column);
-		if (at < 0) continue;
-		const list = columns.get(occurrence.line) ?? [];
-		list.push(at + 1);
-		columns.set(occurrence.line, list);
+	let fenced = false;
+	let frontmatter = lines[0]?.trim() === "---";
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index];
+		if (frontmatter) { if (index > 0 && line.trim() === "---") frontmatter = false; continue; }
+		if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
+		if (fenced) continue;
+		RENAME_CITATION.lastIndex = 0;
+		let match: RegExpExecArray | null;
+		while ((match = RENAME_CITATION.exec(line)) !== null) {
+			const citekey = match[1] ?? match[3];
+			const prefix = match[1] ? "" : (match[2] ?? "");
+			const column = match.index + prefix.length;
+			if (!match[1] && column >= 2 && line[column - 1] === "[" && line[column - 2] === "[") continue;
+			if (citekey !== oldKey) continue;
+			const at = line.indexOf(`@${oldKey}`, column);
+			if (at < 0) continue;
+			const list = columns.get(index) ?? [];
+			list.push(at + 1);
+			columns.set(index, list);
+		}
 	}
 	const planned: RenameLine[] = [];
 	let count = 0;

@@ -144,9 +144,10 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 		if (typeof serialized !== "string") throw new ExportMismatchError("BBT export must return a JSON string");
 		const exported: unknown = JSON.parse(serialized);
 		if (!record(exported) || !Array.isArray(exported.items)) throw new ExportMismatchError("Invalid BetterBibTeX JSON export envelope");
+		const expectedLibraryID = plan.libraryID ?? (record(exported.items[0]) && positiveInteger(exported.items[0].libraryID) ? exported.items[0].libraryID : undefined);
 		const wanted = new Map(items.map(item => [item.citekey, item]));
 		const entries = exported.items.map(item => {
-			if (!record(item) || !positiveInteger(item.libraryID) || (plan.libraryID !== undefined && item.libraryID !== plan.libraryID)) throw new ExportMismatchError("Exported library identity mismatch");
+			if (!record(item) || !positiveInteger(item.libraryID) || (expectedLibraryID !== undefined && item.libraryID !== expectedLibraryID)) throw new ExportMismatchError("Exported library identity mismatch");
 			const entry = normalizeEntryUnhashed(item, previous.get(`${item.libraryID}:${text(item.itemKey)}`));
 			const searched = wanted.get(entry.citekey);
 			if (!searched || searched.itemKey !== entry.itemKey || searched.libraryType !== entry.libraryType || searched.groupID !== entry.groupID) throw new ExportMismatchError("Export differs from searched item identity");
@@ -154,7 +155,10 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 		});
 		if (entries.length !== items.length || new Set(entries.map(entry => entry.citekey)).size !== items.length) throw new ExportMismatchError("BBT export did not cover the requested parents");
 		// The name-based fallback learns the library's local ID from its first export.
-		if (plan.libraryID === undefined && entries.length) plan.libraryID = entries[0].libraryID;
+		if (plan.libraryID === undefined && entries.length) {
+			plan.libraryID = entries[0].libraryID;
+			for (const skipped of plan.skipped) if (skipped.libraryID === undefined) skipped.libraryID = plan.libraryID;
+		}
 		return entries;
 	};
 	const skipExport = (plan: LibraryPlan, item: SearchedItem, error: unknown): void => {
@@ -289,7 +293,7 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 		let timedOut: unknown = null;
 		try { settled = await batch(group.map(entry => ({ method: "item.attachments", params: [entry.citekey, entry.libraryID] })), settings.attachmentTimeoutMs); }
 		catch (error) {
-			if (signal.aborted) throw error;
+			if (zoteroGone(error, signal)) throw error;
 			// Zotero is still working on a batch that timed out: sending its requests again one by one would only add load.
 			if (isBbtTransportError(error) && error.reason === "timeout") timedOut = error;
 		}
@@ -298,7 +302,7 @@ export async function collectIndex(transport: CollectorTransport, settings: Coll
 			if (timedOut) { apply(entry, { ok: false, error: timedOut }); continue; }
 			try { apply(entry, { ok: true, result: await call("item.attachments", [entry.citekey, entry.libraryID], settings.attachmentTimeoutMs) }); }
 			catch (error) {
-				if (signal.aborted) throw error;
+				if (zoteroGone(error, signal)) throw error;
 				apply(entry, { ok: false, error });
 			}
 		}

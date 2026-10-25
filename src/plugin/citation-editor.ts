@@ -1,8 +1,8 @@
 import { Notice, type Editor, type MarkdownFileInfo, type MarkdownView, type Menu, type TFile } from "obsidian";
 import type { EditorView } from "@codemirror/view";
 import { renderCluster } from "../citations/author-date";
-import { citationAt, isPageLocator, locatorEdit, parseClusters, type CitationCluster, type CitationItem } from "../citations/cluster";
-import { refreshCitations, type CitationEditorHost } from "../citations/editor-extension";
+import { citationAt, decomposeCluster, isPageLocator, locatorEdit, parseClusters, type CitationCluster, type CitationItem, type ComposedCitationItem } from "../citations/cluster";
+import { maskCitationText, refreshCitations, type CitationEditorHost } from "../citations/editor-extension";
 import { formatCitation, type CitationFormat } from "../citations/formats";
 import { firstPageLabel, locatorPageIn, pageSourceText } from "../citations/locator-page";
 import { parsePastedLinks, resolvePastedRef, type PastedRef } from "../citations/paste";
@@ -12,6 +12,7 @@ import { indexDerived } from "../index-derived";
 import type CMDSZoteroPlugin from "../main";
 import { ActionsModal, type ModalAction } from "../modals/actions";
 import { candidateLabel, requireChoice } from "../modals/choose-entry";
+import { CitationComposerModal } from "../modals/citation-composer";
 import { LocatorModal } from "../modals/locator";
 import { PageJumpModal } from "../modals/page-jump";
 import { PickerModal } from "../modals/picker";
@@ -58,7 +59,9 @@ export class CitationEditorController implements CitationEditorHost {
 	}
 
 	renderCluster(items: readonly CitationItem[]): string | null {
-		return this.plugin.indexLoaded() ? renderCluster(items, key => this.unique(key)) : null;
+		return this.plugin.indexLoaded()
+			? renderCluster(items, key => this.unique(key), { locale: this.plugin.settings.bibliographyLocale })
+			: null;
 	}
 
 	fillHover(dom: HTMLElement, item: CitationItem): boolean {
@@ -163,8 +166,16 @@ export class CitationEditorController implements CitationEditorHost {
 	citationAt(editor: Editor, offset?: number): CitationTarget | null {
 		const position = offset === undefined ? editor.getCursor() : editor.offsetToPos(offset);
 		const text = editor.getLine(position.line);
-		const found = citationAt(text, position.ch);
-		return found ? { line: position.line, text, ...found } : null;
+		const fullText = typeof editor.getValue === "function" ? editor.getValue() : undefined;
+		const maskedLine = fullText !== undefined
+			? (maskCitationText(fullText).split(/\r?\n/)[position.line] ?? "")
+			: maskCitationText(text);
+		const found = citationAt(maskedLine, position.ch);
+		if (!found) return null;
+		if (found.cluster && (position.ch < found.item.start || position.ch > found.item.end)) {
+			return { line: position.line, text, item: found.cluster.items[0], cluster: found.cluster };
+		}
+		return { line: position.line, text, ...found };
 	}
 
 	private requireCitation(editor: Editor, offset?: number): CitationTarget {
@@ -213,9 +224,13 @@ export class CitationEditorController implements CitationEditorHost {
 		else new PickerModal(this.plugin.app, targets, target => target.attachment.title || target.attachment.key, open, "Choose a PDF attachment…").open();
 	}
 
-	async copyBibliography(entry: ZoteroIndexEntry): Promise<void> {
-		const detail = await this.plugin.bibliography.bibliographyDetail(entry);
-		await navigator.clipboard.writeText(detail.text);
+	async copyBibliography(entry: ZoteroIndexEntry, file?: TFile | null): Promise<void> {
+		const activeFile = file !== undefined ? file : (this.plugin.lastMarkdownView?.()?.file ?? this.plugin.app?.workspace?.getActiveFile?.() ?? null);
+		const format = this.plugin.bibliography.noteFormat
+			? await this.plugin.bibliography.noteFormat(activeFile)
+			: { style: this.plugin.settings.bibliographyStyle, locale: this.plugin.settings.bibliographyLocale ?? "" };
+		const detail = await this.plugin.bibliography.bibliographyDetail(entry, format.style, { locale: format.locale });
+		await navigator.clipboard.writeText(detail.text || fallbackCitation(entry));
 		new Notice(copyBibliographyNotice(countBibliographySources([detail])));
 	}
 
@@ -229,6 +244,48 @@ export class CitationEditorController implements CitationEditorHost {
 			if (!edit) return;
 			editor.replaceRange(edit.text, { line: target.line, ch: edit.from }, { line: target.line, ch: edit.to });
 		}).open();
+	}
+
+	/** Compose a new citation cluster or edit the cluster/citation at the cursor. */
+	composeCitation(editor: Editor, offset?: number): void {
+		const target = this.citationAt(editor, offset);
+		const entries = this.plugin.cachedEntries();
+		if (target?.cluster) {
+			const cluster = target.cluster;
+			const initial = decomposeCluster(cluster);
+			new CitationComposerModal(this.plugin.app, entries, initial, text => {
+				if (editor.getLine(target.line) !== target.text) { new Notice("The line changed. Run the command again."); return; }
+				editor.replaceRange(text, { line: target.line, ch: cluster.start }, { line: target.line, ch: cluster.end });
+				editor.setCursor({ line: target.line, ch: cluster.start + text.length });
+			}, this.plugin.lastIndex).open();
+			return;
+		}
+		if (target) {
+			const { item } = target;
+			const initial: ComposedCitationItem[] = [{
+				citekey: item.citekey,
+				prefix: item.prefix,
+				locator: item.locator ? (item.locator.label ? `${item.locator.label} ${item.locator.value.trim()}` : item.locator.value.trim()) : "",
+				suffix: item.rest.replace(/^\s*,\s*/, "").trim(),
+				suppressAuthor: item.suppressAuthor,
+			}];
+			new CitationComposerModal(this.plugin.app, entries, initial, text => {
+				if (editor.getLine(target.line) !== target.text) { new Notice("The line changed. Run the command again."); return; }
+				editor.replaceRange(text, { line: target.line, ch: item.start }, { line: target.line, ch: item.end });
+				editor.setCursor({ line: target.line, ch: item.start + text.length });
+			}, this.plugin.lastIndex).open();
+			return;
+		}
+		const from = editor.getCursor("from");
+		const to = editor.getCursor("to");
+		const selected = editor.getSelection();
+		new CitationComposerModal(this.plugin.app, entries, [], text => {
+			if (!unchanged(editor, from, to, selected)) {
+				void copyOrShow(text, "The note changed while composing, so the citation was copied to the clipboard instead.", "The note changed while composing. Copy the citation from here:");
+				return;
+			}
+			placeCitation(editor, from, to, text);
+		}, this.plugin.lastIndex).open();
 	}
 
 	/**
@@ -256,11 +313,14 @@ export class CitationEditorController implements CitationEditorHost {
 	async showCitationActions(editor: Editor, context: MarkdownView | MarkdownFileInfo, offset?: number): Promise<void> {
 		const target = this.requireCitation(editor, offset);
 		const { item } = target;
+		const itemOffset = editor.posToOffset({ line: target.line, ch: item.start });
 		const resolution = await this.plugin.service.resolve({ citekey: item.citekey });
-		const editLocator: ModalAction[] = item.form === "wikilink" ? [] : [{ name: "Edit locator", description: item.locator ? `Now ${item.locator.label ? `${item.locator.label} ` : ""}${item.locator.value}` : "Add a page, chapter, section, figure or paragraph.", action: () => this.editLocator(editor, editor.posToOffset({ line: target.line, ch: item.start })) }];
+		const editLocator: ModalAction[] = item.form === "wikilink" ? [] : [{ name: "Edit locator", description: item.locator ? `Now ${item.locator.label ? `${item.locator.label} ` : ""}${item.locator.value}` : "Add a page, chapter, section, figure or paragraph.", action: () => this.editLocator(editor, itemOffset) }];
+		const composeClusterAction: ModalAction = { name: "Compose or edit citation cluster", description: "Edit items, prefixes, locators, suffixes and author suppression.", action: () => this.composeCitation(editor, itemOffset) };
 		if (resolution.status !== "resolved" && resolution.status !== "ambiguous") {
 			new ActionsModal(this.plugin.app, `@${item.citekey} is not in the literature index`, [
 				...editLocator,
+				composeClusterAction,
 				{ name: "Refresh citekey index", description: "Read Zotero again; the key may be new or renamed.", action: () => this.plugin.refreshIndex() },
 			]).open();
 			return;
@@ -271,12 +331,13 @@ export class CitationEditorController implements CitationEditorHost {
 			{ name: "Open literature note", action: () => this.openNoteFor(entry.citekey) },
 			{ name: `Open PDF${page}`, action: () => this.openPdfAt({ ...item, citekey: entry.citekey }, false) },
 			{ name: "Copy PDF page link", description: "A Zotero link to the attachment (by its key) and page.", action: () => this.openPdfAt({ ...item, citekey: entry.citekey }, true) },
-			{ name: "Copy bibliography entry", action: () => this.copyBibliography(entry) },
+			{ name: "Copy bibliography entry", action: () => this.copyBibliography(entry, context.file) },
 			{ name: "Find notes citing this source", action: () => this.plugin.navigation.showCitingNotes(entry) },
 			{ name: "Show in Zotero", action: () => { window.open(entry.zoteroSelectURI); } },
 			...editLocator,
+			composeClusterAction,
 		];
-		if (entry.citekey !== item.citekey) actions.push({ name: `Fix renamed citekey (@${item.citekey} → @${entry.citekey})`, description: "Preview every citation of the old key in this note, then replace them.", action: () => this.fixRenamedCitekey(editor, context, editor.posToOffset({ line: target.line, ch: item.start })) });
+		if (entry.citekey !== item.citekey) actions.push({ name: `Fix renamed citekey (@${item.citekey} → @${entry.citekey})`, description: "Preview every citation of the old key in this note, then replace them.", action: () => this.fixRenamedCitekey(editor, context, itemOffset) });
 		new ActionsModal(this.plugin.app, `${entry.title || entry.citekey} — @${item.citekey}`, actions).open();
 	}
 
@@ -290,6 +351,7 @@ export class CitationEditorController implements CitationEditorHost {
 		menu.addItem(entry => entry.setTitle(`Open literature note for @${item.citekey}`).setIcon("file-text").setSection("cmds-zotero").onClick(() => { void this.plugin.run(() => this.openNoteFor(item.citekey)); }));
 		menu.addItem(entry => entry.setTitle(item.locator && isPageLocator(item.locator) ? `Open PDF at ${item.locator.label || "p."} ${item.locator.value}` : "Open PDF").setIcon("file-text").setSection("cmds-zotero").onClick(() => { void this.plugin.run(() => this.openPdfAt(item, false)); }));
 		if (item.form !== "wikilink") menu.addItem(entry => entry.setTitle("Edit citation locator").setIcon("pencil").setSection("cmds-zotero").onClick(() => { void this.plugin.run(async () => { this.editLocator(editor, start); }); }));
+		menu.addItem(entry => entry.setTitle("Compose or edit citation cluster").setIcon("quote").setSection("cmds-zotero").onClick(() => { void this.plugin.run(async () => { this.composeCitation(editor, start); }); }));
 		if (this.problem(item.citekey)?.problem === "former") menu.addItem(entry => entry.setTitle(`Fix renamed citekey @${item.citekey}`).setIcon("replace").setSection("cmds-zotero").onClick(() => { void this.plugin.run(() => this.fixRenamedCitekey(editor, context, start)); }));
 		menu.addItem(entry => entry.setTitle("Citation actions…").setIcon("quote").setSection("cmds-zotero").onClick(() => { void this.plugin.run(() => this.showCitationActions(editor, context, start)); }));
 	}

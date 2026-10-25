@@ -225,7 +225,22 @@ test("an unreadable library keeps its previous entries; unreadable collections a
 test("without user.groups the 0.5 name-based search is used and same-named libraries are skipped, not fatal", async () => {
 	const libraries = synthetic().slice(0, 3);
 	let groups = true;
-	const api = await startMockBbt(libraries, { override: (call: MockCall) => { if (call.method === "user.groups" && !groups) throw new RpcFault(-32601, "Method not found: user.groups"); return undefined; } });
+	let mixedBatch = false;
+	const api = await startMockBbt(libraries, { override: (call: MockCall) => {
+		if (call.method === "user.groups" && !groups) throw new RpcFault(-32601, "Method not found: user.groups");
+		if (call.method === "item.export" && mixedBatch) {
+			const keys = call.params[0] as string[];
+			if (keys.includes("Old2025")) {
+				return JSON.stringify({ items: keys.map((key, index) => ({
+					libraryID: key === "Old2025" ? 99 : 1,
+					itemKey: key === "Alpha2026" ? "AAAA0001" : key === "Dup2026" ? "AAAA0002" : key === "Old2025" ? "AAAA0004" : "AAAA0005",
+					uri: user(key === "Alpha2026" ? "AAAA0001" : key === "Dup2026" ? "AAAA0002" : key === "Old2025" ? "AAAA0004" : "AAAA0005"),
+					citationKey: key, itemType: "journalArticle", title: `Synthetic ${index}`, date: "2026-03-01", creators: [], tags: [], notes: [], attachments: [],
+				})) });
+			}
+		}
+		return undefined;
+	} });
 	const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint });
 	try {
 		// 0.6 review: items skipped for a shared library name keep their entries from a previous refresh.
@@ -242,6 +257,15 @@ test("without user.groups the 0.5 name-based search is used and same-named libra
 		assert.equal(index.libraries, undefined);
 		assert.equal(index.collections, undefined);
 		assert.ok(validateIndex(JSON.parse(JSON.stringify(index))));
+
+		// Bug 5: in planByName, a pre-export skipped item gets its libraryID backfilled once the first export succeeds,
+		// and an export batch with a mismatched item.libraryID is retried item by item and the mismatched item is skipped.
+		libraries[0].items.push({ itemKey: "AAAA0009", citekey: "" });
+		mixedBatch = true;
+		const withBackfill = await service.collect();
+		assert.deepEqual(withBackfill.entries.map(entry => entry.id), ["1:AAAA0001", "1:AAAA0002", "1:AAAA0005"]);
+		assert.equal(withBackfill.diagnostics.find(d => d.code === "missing-citekey")?.itemID, "1:AAAA0009", "pre-export skipped item has its libraryID backfilled");
+		assert.equal(withBackfill.diagnostics.find(d => d.code === "item-skipped" && d.citekey === "Old2025")?.itemID, "1:AAAA0004", "item with mismatched libraryID in fallback is skipped after retry");
 	} finally { service.dispose(); await api.close(); }
 });
 
@@ -252,7 +276,10 @@ test("a transport fault still ends the refresh and the index service falls back 
 	const api = await startMockBbt(libraries, { httpStatus: (call: MockCall) => {
 		if (!status) return undefined;
 		const terms = call.method === "item.search" ? call.params[0] as unknown[][] : [];
-		return failOn === "parents" && call.method === "item.search" && !terms.some(term => term[0] === "collection") ? status : failOn === "collections" && terms.some(term => term[0] === "collection") ? status : undefined;
+		return failOn === "parents" && call.method === "item.search" && !terms.some(term => term[0] === "collection") ? status
+			: failOn === "collections" && terms.some(term => term[0] === "collection") ? status
+			: failOn === "attachments" && call.method === "item.attachments" ? status
+			: undefined;
 	} });
 	const service = new BbtService({ ...DEFAULT_SETTINGS, bbtEndpoint: api.endpoint });
 	let saved: string | null = null;
@@ -261,7 +288,7 @@ test("a transport fault still ends the refresh and the index service falls back 
 	try {
 		const first = await index.refresh({ force: true });
 		assert.equal(first.refreshed, true);
-		for (const [code, step] of [[500, "parents"], [404, "collections"]] as const) {
+		for (const [code, step] of [[500, "parents"], [404, "collections"], [404, "attachments"]] as const) {
 			status = code;
 			failOn = step;
 			const fallback = await index.refresh();

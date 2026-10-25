@@ -6,8 +6,11 @@ import { join } from "node:path";
 import { DEFAULT_SETTINGS, type CmdsZoteroSettings, type ZoteroIndexEntry } from "../src/types";
 import { normalizeSettings } from "../src/settings-data";
 import { hashText, renderLiterature } from "../src/note-writer";
-import { annotationsHeading, annotationsHeadingProblem, calloutType, DEFAULT_CALLOUTS, DEFAULT_SYNTHESIS_LINES, layoutOf, synthesisLines, THEME_VARIABLES } from "../src/layout";
-import { annotationsHeadingField, calloutField, synthesisLinesField } from "../src/settings/sections/layout";
+import {
+	annotationsHeading, annotationsHeadingProblem, applyLayoutProfile, calloutType, DEFAULT_CALLOUTS, DEFAULT_SYNTHESIS_LINES,
+	detectLayoutProfile, LAYOUT_PROFILES, layoutOf, synthesisLines, THEME_VARIABLES, type LayoutSettings,
+} from "../src/layout";
+import { annotationsHeadingField, calloutField, layoutSection, renderLayoutProfilePreset, synthesisLinesField } from "../src/settings/sections/layout";
 import { draftOf } from "../src/settings/fields";
 import { GOLDEN_BIBLIOGRAPHY, GOLDEN_ENTRIES, GOLDEN_IMAGE_HASHES, GOLDEN_RELATED } from "./fixtures/note-golden";
 
@@ -195,4 +198,43 @@ test("styles.css declares every documented theme variable", () => {
 		assert.ok(css.includes(`var(${variable})`), `${variable} used`);
 		assert.ok(css.slice(0, css.indexOf("*/")).includes(variable.replace(/-(?:yellow|red|green|blue|purple|magenta|orange|gray)$/, "-<colour>").replace(/^--cmds-zotero-state-(?!ok).*/, "--cmds-zotero-state-ok").replace(/^--cmds-zotero-card-(?!padding).*/, "--cmds-zotero-card-padding")), `${variable} documented`);
 	}
+});
+
+test("layout profiles: detectLayoutProfile and applyLayoutProfile round-trip presets and renderLayoutProfilePreset updates draft", async () => {
+	assert.equal(detectLayoutProfile(DEFAULT_SETTINGS), "cmds-default");
+	assert.equal(detectLayoutProfile({}), "cmds-default");
+	for (const id of ["cmds-default", "reading-first", "compact", "metadata-only"] as const) {
+		assert.ok(LAYOUT_PROFILES[id], id);
+		const target: Partial<LayoutSettings> = {};
+		applyLayoutProfile(target, id);
+		assert.equal(detectLayoutProfile(target), id);
+	}
+	assert.equal(detectLayoutProfile({ ...DEFAULT_SETTINGS, calloutCite: "quote" }), "custom");
+	const draft = draftOf(DEFAULT_SETTINGS);
+	let saved = 0;
+	let displayed = 0;
+	let onChangeHandler: ((value: string) => unknown) | null = null;
+	let initialValue = "";
+	const options: string[] = [];
+	renderLayoutProfilePreset({
+		setName() { return this; },
+		setDesc() { return this; },
+		addDropdown(cb) {
+			cb({
+				addOption(v) { options.push(v); return this; },
+				setValue(v) { initialValue = v; return this; },
+				onChange(fn) { onChangeHandler = fn; return this; },
+			});
+			return this;
+		},
+	}, { draft, saveAndRefresh: () => { saved++; }, display: () => { displayed++; } });
+	assert.equal(initialValue, "cmds-default");
+	assert.deepEqual(options, ["cmds-default", "reading-first", "compact", "metadata-only", "custom"]);
+	await onChangeHandler?.("compact");
+	assert.equal(detectLayoutProfile(draft), "compact");
+	assert.equal(draft.noteAbstract, false);
+	assert.equal(draft.joinContinuations, true);
+	assert.equal(saved, 1);
+	assert.equal(displayed, 1);
+	assert.ok(layoutSection.id === "layout");
 });

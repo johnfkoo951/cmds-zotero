@@ -62,4 +62,14 @@ test("figure-only pages make a text PDF partial without recommending OCR; mostly
 	const mostlyScanned = textLayerReport([...[1, 2, 3].map(n => page(n, `${body} ${tag(n)}`)), ...[4, 5, 6, 7, 8, 9].map(n => page(n, ""))]);
 	assert.equal(mostlyScanned.ocrRecommended, true);
 	assert.match(textLayerWarning(mostlyScanned, 9) ?? "", /; run OCR for them before relying on the text\.$/);
+
+	// Short documents where at least half the pages are empty are partial and recommend OCR.
+	const halfOfTwo = textLayerReport([page(1, `${body} ${tag(1)}`), page(2, "")]);
+	assert.equal(halfOfTwo.textLayer, "partial");
+	assert.equal(halfOfTwo.ocrRecommended, true);
+	const halfOfFour = textLayerReport([page(1, `${body} ${tag(1)}`), page(2, `${body} ${tag(2)}`), page(3, ""), page(4, "")]);
+	assert.equal(halfOfFour.textLayer, "partial");
+	assert.equal(halfOfFour.ocrRecommended, true);
+	assert.equal(textLayerReport([page(1, `${body} ${tag(1)}`), page(2, `${body} ${tag(2)}`), page(3, "")]).textLayer, "full");
+	assert.match(textLayerWarning({ status: "partial", emptyPages: [2], pageCount: 2, ocrRecommended: true }) ?? "", /^Partial text layer: 1 of 2 pages/);
 });

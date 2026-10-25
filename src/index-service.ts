@@ -113,7 +113,14 @@ export class IndexService {
 		const force = options.force === true;
 		const thresholdMs = options.ifOlderThanMs ?? this.maxAgeMinutes() * 60000;
 		const existing = this.flight;
-		if (existing && (existing.force || (!force && existing.thresholdMs <= thresholdMs))) return existing.promise;
+		if (existing && (existing.force || (!force && existing.thresholdMs <= thresholdMs))) {
+			return existing.force && !force
+				? existing.promise.catch((error: unknown): RefreshOutcome => {
+					if (!this.cache) throw error;
+					return { index: this.cache, refreshed: false, reason: "stale-fallback", ageMinutesBefore: this.ageMinutes(this.cache), error: error instanceof Error ? error.message : String(error), ...(error instanceof IndexRefusalError ? { failure: error.reason } : {}), cause: error };
+				})
+				: existing.promise;
+		}
 		const base = existing ? existing.promise.then(() => this.load(options), () => this.load(options)) : this.load(options);
 		const flight: Flight = { force, thresholdMs, promise: base };
 		flight.promise = base.finally(() => { if (this.flight === flight) this.flight = undefined; });

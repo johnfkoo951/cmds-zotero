@@ -15,6 +15,16 @@ export class LiteraturePickerModal extends FuzzySuggestModal<ZoteroIndexEntry> {
 		this.current = entries;
 		this.setPlaceholder("Search literature… (author:, year:, tag:, col:, lib:, type:, has:)");
 		this.setInstructions([{ command: "-tag:x", purpose: "exclude" }, { command: "\"a b\"", purpose: "phrase" }]);
+		this.scope?.register([], "Enter", event => {
+			if (event.isComposing || (event as { keyCode?: number }).keyCode === 229) return true;
+			this.selectActiveSuggestion(event);
+			return false;
+		});
+		this.inputEl?.addEventListener("compositionend", () => {
+			const modal = this as unknown as { onInput?: () => void };
+			if (typeof modal.onInput === "function") modal.onInput();
+			else this.inputEl?.dispatchEvent(new Event("input"));
+		});
 	}
 
 	getItems(): ZoteroIndexEntry[] { return this.current; }

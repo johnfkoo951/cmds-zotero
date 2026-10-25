@@ -186,6 +186,7 @@ export class VaultLinks {
 		const warnings: string[] = [];
 		for (const peer of this.settings().peerVaults) {
 			const rows: VaultNoteLink[] = [];
+			let warning: string | null = null;
 			try {
 				const { root, map } = await this.loadPeerMap(peer);
 				const paths: unknown = map.notes[entry.id];
@@ -193,15 +194,20 @@ export class VaultLinks {
 				const advancedUri = await this.peerListsAdvancedUri(root);
 				for (const value of paths) {
 					if (typeof value !== "string") continue;
-					const relative = relativePath(value);
-					if (!relative.endsWith(".md")) continue;
-					const realFile = await fs.realpath(path.join(root, relative));
-					if (!realFile.startsWith(root + path.sep)) throw new Error("A peer note points outside its vault.");
-					rows.push({ vault: peer.name, path: relative, uri: peerNoteURI(peer.name, relative, { advancedUri }) });
+					try {
+						const relative = relativePath(value);
+						if (!relative.endsWith(".md")) continue;
+						const realFile = await fs.realpath(path.join(root, relative));
+						if (!realFile.startsWith(root + path.sep)) throw new Error("A peer note points outside its vault.");
+						rows.push({ vault: peer.name, path: relative, uri: peerNoteURI(peer.name, relative, { advancedUri }) });
+					} catch (error) {
+						warning ??= `${peer.name}: ${error instanceof Error && !/^E[A-Z]+:/.test(error.message) ? error.message : "A peer note could not be read."}`;
+					}
 				}
 			} catch (error) {
-				warnings.push(`${peer.name}: ${error instanceof Error ? error.message : "Could not read the peer note map."}`);
+				warning ??= `${peer.name}: ${error instanceof Error && !/^E[A-Z]+:/.test(error.message) ? error.message : "Could not read the peer note map."}`;
 			} finally {
+				if (warning) warnings.push(warning);
 				links.push(...rows.sort(order));
 			}
 		}

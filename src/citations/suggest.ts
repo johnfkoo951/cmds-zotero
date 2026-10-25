@@ -11,6 +11,11 @@ import { acceptEdit, bracketSpan, type LineEdit } from "./cluster";
 /** 0.6.2 suggester-unicode-query: letters, marks and digits of any script (Korean in NFC or NFD, accented Latin) besides citekey characters. */
 const KEY_CHARS = /^[\p{L}\p{M}\p{N}_:.+/-]*$/u;
 
+interface ImeEvent { isComposing?: boolean; keyCode?: number }
+
+const isComposingEvent = (event: MouseEvent | KeyboardEvent | null | undefined): boolean =>
+	Boolean(event && ((event as ImeEvent).isComposing || (event as ImeEvent).keyCode === 229));
+
 /** The suggester's internal list; Shift+Enter and Mod+Enter accept the highlighted row through it. */
 interface SuggestList { useSelectedItem?(event: KeyboardEvent): boolean }
 
@@ -24,8 +29,9 @@ export class CitekeySuggest extends EditorSuggest<ZoteroIndexEntry> {
 			{ command: "shift ↵", purpose: "narrative @key" },
 			{ command: "mod ↵", purpose: "link the literature note" },
 		]);
-		for (const modifier of ["Shift", "Mod"] as const) {
-			this.scope.register([modifier], "Enter", event => {
+		for (const modifiers of [[], ["Shift"], ["Mod"]] as const) {
+			this.scope.register([...modifiers], "Enter", event => {
+				if (isComposingEvent(event)) return true;
 				const list = (this as unknown as { suggestions?: SuggestList }).suggestions;
 				if (!list?.useSelectedItem) return true;
 				list.useSelectedItem(event);
@@ -75,6 +81,7 @@ export class CitekeySuggest extends EditorSuggest<ZoteroIndexEntry> {
 	 * multi-source-citation-cluster). Shift inserts a narrative `@key`; Mod links the literature note.
 	 */
 	selectSuggestion(entry: ZoteroIndexEntry, event: MouseEvent | KeyboardEvent): void {
+		if (isComposingEvent(event)) return;
 		const context = this.context;
 		if (!context) return;
 		const editor = context.editor;

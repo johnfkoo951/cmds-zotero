@@ -178,6 +178,7 @@ test("VaultIndexStorage uses guarded filesystem replacement with a real temporar
 			await assert.rejects(storage.writeValidated(updated), /plugin was unloaded/);
 			assert.equal(await fs.readFile(join(root, indexPath), "utf8"), original);
 			assert.equal((await fileTree(root)).some(path => path.endsWith(".tmp")), false);
+			assert.deepEqual((await fileTree(root)).filter(path => path.startsWith(".cmds-zotero/backups/")), [], "unreferenced backup is removed when replacement does not complete");
 			assert.equal(adapter.removed.includes(indexPath), false);
 			assert.equal(adapter.renameCalls, 0);
 		});

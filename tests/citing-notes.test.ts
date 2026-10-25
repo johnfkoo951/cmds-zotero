@@ -69,3 +69,21 @@ test("0.6 OPT-15: a note without '@key' is no hit, and a failing read ends the s
 	assert.deepEqual((await findCitingNotes(files, ["smith2020"], async file => file.text)).map(hit => hit.file.path), ["b.md"]);
 	await assert.rejects(findCitingNotes(files, ["smith2020"], async file => { if (file.path === "a.md") throw new Error("unreadable"); return file.text; }), /unreadable/);
 });
+
+test("IMP-CITED-BY-VIEW: CitingNote includes trimmed 140-char snippet at first occurrence and deduplicated lines", async () => {
+	const longTail = "x".repeat(160);
+	const files: Note[] = [
+		{
+			path: "multi.md",
+			text: `# Heading\n   First citation [@smith2020] and @smith2020 on same line ${longTail}   \nMiddle\nThird line [[@smith2019old]].\n`,
+		},
+	];
+	const hits = await findCitingNotes(files, ["smith2020", "smith2019old"], async file => file.text);
+	assert.equal(hits.length, 1);
+	assert.equal(hits[0].line, 1);
+	assert.equal(hits[0].count, 3);
+	assert.deepEqual(hits[0].lines, [1, 3]);
+	assert.equal(hits[0].snippet.length, 140);
+	assert.ok(hits[0].snippet.startsWith("First citation [@smith2020] and @smith2020 on same line xxx"));
+});
+

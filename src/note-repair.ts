@@ -19,7 +19,7 @@ export interface RepairResult {
 export const CORE_SECTIONS = ["overview", "citation", "metadata", "notes"] as const;
 
 /** A plugin marker comment (well-formed or not); the owner marker (`cmds-zotero-owner:`) is not one. */
-const ANY_MARKER = /<!-- ?\/?cmds-zotero:[^\n]*?(?:-->|$)/gm;
+const ANY_MARKER = /<!-- ?\/?cmds-zotero:[^\r\n]*?(?:-->|$)/gm;
 
 const REMOVED = "@@cmds-zotero-repair-removed-block@@";
 
@@ -36,7 +36,8 @@ export function repairManagedMarkers(text: string, owner: string): RepairResult 
 	const repairs: string[] = [];
 	// 1. Duplicate well-formed blocks. Offsets come from the original text, so line numbers name the note as it is.
 	const seen = new Set<string>();
-	let deduplicated = text.replace(managedBlockPattern(), (whole: string, id: string, mark: string, tail: string, body: string, offset: number) => {
+	let deduplicated = text.replace(managedBlockPattern(), (whole: string, id: string, mark: string, tail: string, rawBody: string, offset: number) => {
+		const body = rawBody.replace(/\r\n/g, "\n");
 		if (!seen.has(id)) { seen.add(id); return whole; }
 		const line = lineAt(text, offset);
 		if (mark !== DETACHED_MARK && hashText(body) === mark && !tail.trim()) {
@@ -47,10 +48,14 @@ export function repairManagedMarkers(text: string, owner: string): RepairResult 
 		return [body, tail.trim()].filter(Boolean).join("\n");
 	});
 	// Only the blank lines around a removed copy are joined; blank lines elsewhere stay as they are.
-	deduplicated = deduplicated.replace(/\n*@@cmds-zotero-repair-removed-block@@\n*/g, "\n\n");
-	// 2. Markers outside every well-formed block.
+	deduplicated = deduplicated.replace(/(?:\r?\n)*@@cmds-zotero-repair-removed-block@@(?:\r?\n)*/g, "\n\n");
+	// 2. Markers outside every well-formed block's opening and closing marker spans.
 	const inside: [number, number][] = [];
-	for (const match of deduplicated.matchAll(managedBlockPattern())) inside.push([match.index, match.index + match[0].length]);
+	for (const match of deduplicated.matchAll(managedBlockPattern())) {
+		const openEnd = match.index + `<!-- cmds-zotero:${match[1]}:${match[2]} -->`.length;
+		const closeStart = match.index + match[0].lastIndexOf("<!-- /cmds-zotero:");
+		inside.push([match.index, openEnd], [closeStart, match.index + match[0].length]);
+	}
 	const stray: { start: number; end: number; marker: string }[] = [];
 	for (const match of deduplicated.matchAll(ANY_MARKER)) {
 		if (inside.some(([start, end]) => match.index >= start && match.index < end)) continue;

@@ -12,6 +12,7 @@ const OPEN_URI = "zotero://open-pdf/library/items/ATTACH01";
 
 test("quote location normalizes ligatures, hyphenation and quotes and falls back to token windows", () => {
 	assert.equal(normalizeForMatch("knowl-\nedge ﬁne “quoted”"), 'knowledge fine "quoted"');
+	assert.equal(normalizeForMatch("Æsop’s Œuvre"), "aesop's oeuvre");
 	const exact = locateQuote(pages, "store factual knowledge in their parameters");
 	assert.equal(exact.length, 1);
 	assert.equal(exact[0].page, 1);
@@ -112,6 +113,15 @@ test("locateBatch marks a quote straddling a page break as spansPages with a two
 	assert.equal(match.locator, "p.3-4");
 	assert.equal(match.uri, `${OPEN_URI}?page=4`);
 	assert.equal(results[0].calloutTitle, "원문 (p.3-4)");
+
+	const hyphenatedAcrossPages: PageText[] = [
+		{ page: 4, pageLabel: "3", text: "The final sentence of the page argues that parametric mem-" },
+		{ page: 5, pageLabel: "4", text: "ory alone cannot keep pace with a changing world." },
+	];
+	const dehyphenated = locateBatch(hyphenatedAcrossPages, [{ quote: "parametric memory alone cannot keep pace" }], { openURI: OPEN_URI });
+	assert.equal(dehyphenated.summary.found, 1);
+	assert.equal(dehyphenated.results[0].matches[0].spansPages, true);
+	assert.equal(dehyphenated.results[0].matches[0].locator, "p.3-4");
 });
 
 test("locateBatch classifies token-window hits as fuzzy without a callout title", () => {

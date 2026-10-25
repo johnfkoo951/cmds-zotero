@@ -6934,14 +6934,14 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs6 = this.flowScalar(this.type);
+              const fs7 = this.flowScalar(this.type);
               if (atNextItem || it.value) {
-                map.items.push({ start, key: fs6, sep: [] });
+                map.items.push({ start, key: fs7, sep: [] });
                 this.onKeyLine = true;
               } else if (it.sep) {
-                this.stack.push(fs6);
+                this.stack.push(fs7);
               } else {
-                Object.assign(it, { key: fs6, sep: [] });
+                Object.assign(it, { key: fs7, sep: [] });
                 this.onKeyLine = true;
               }
               return;
@@ -7069,13 +7069,13 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs6 = this.flowScalar(this.type);
+              const fs7 = this.flowScalar(this.type);
               if (!it || it.value)
-                fc.items.push({ start: [], key: fs6, sep: [] });
+                fc.items.push({ start: [], key: fs7, sep: [] });
               else if (it.sep)
-                this.stack.push(fs6);
+                this.stack.push(fs7);
               else
-                Object.assign(it, { key: fs6, sep: [] });
+                Object.assign(it, { key: fs7, sep: [] });
               return;
             }
             case "flow-map-end":
@@ -7384,8 +7384,8 @@ var require_dist = __commonJS({
 });
 
 // src/cli/core.ts
-import { promises as fs5 } from "node:fs";
-import { basename as basename2, join as join4, relative as relative2, sep as sep2 } from "node:path";
+import { promises as fs6 } from "node:fs";
+import { basename as basename3, join as join5, relative as relative2, sep as sep2 } from "node:path";
 
 // src/identity.ts
 import { createHash } from "crypto";
@@ -7501,13 +7501,13 @@ function validateEntryStructure(value) {
   try {
     const keys = /* @__PURE__ */ new Set();
     for (const attachment of item.attachments) {
-      if (!record(attachment) || !ITEM_KEY.test(attachment.key) || typeof attachment.openURI !== "string" || typeof attachment.title !== "string" || !(attachment.path === null || typeof attachment.path === "string") || !Array.isArray(attachment.annotations)) return false;
+      if (!record(attachment) || !ITEM_KEY.test(attachment.key) || typeof attachment.openURI !== "string" || typeof attachment.title !== "string" || !(attachment.path === null || typeof attachment.path === "string") || attachment.contentType !== void 0 && typeof attachment.contentType !== "string" || attachment.filename !== void 0 && typeof attachment.filename !== "string" || !Array.isArray(attachment.annotations)) return false;
       const uri = parseZoteroURI(attachment.openURI);
       if (uri.action !== "open-pdf" || uri.itemKey !== attachment.key || uri.itemKey === item.itemKey || uri.libraryType !== item.libraryType || uri.groupID !== item.groupID || keys.has(attachment.key)) return false;
       keys.add(attachment.key);
       for (const annotation of attachment.annotations) {
         if (!record(annotation) || !ITEM_KEY.test(annotation.key) || annotation.attachmentKey !== attachment.key || !positiveInteger(annotation.page) || !Number.isSafeInteger(annotation.version) || annotation.version < 0 || !strings(annotation.tags)) return false;
-        if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text5) => typeof text5 !== "string") || annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string") return false;
+        if ([annotation.type, annotation.text, annotation.comment, annotation.color, annotation.pageLabel, annotation.dateModified, annotation.uri].some((text5) => typeof text5 !== "string") || annotation.imagePath !== void 0 && typeof annotation.imagePath !== "string" || annotation.sortIndex !== void 0 && typeof annotation.sortIndex !== "string") return false;
         const location = parseZoteroURI(annotation.uri);
         if (location.action !== "open-pdf" || location.itemKey !== attachment.key || location.annotationKey !== annotation.key || location.page !== annotation.page || location.libraryType !== item.libraryType || location.groupID !== item.groupID) return false;
       }
@@ -7663,7 +7663,16 @@ function isDirectoryCovered(gitignoreText, dir) {
   if (path === "") return false;
   const rules = parseGitignore(gitignoreText);
   if (ignoredByRules(rules, path, true)) return true;
-  return verdict(rules, `${path}/`, true) === true;
+  const probe = `${path}/`;
+  let covered = false;
+  for (const rule of rules) {
+    if (rule.negated) {
+      covered = false;
+      continue;
+    }
+    if (!rule.dirOnly && rule.regex.test(probe)) covered = true;
+  }
+  return covered;
 }
 function gitCoverage(gitignoreText, indexPath, cacheDir, privateIgnore = null) {
   gitignoreText ??= "";
@@ -7676,6 +7685,143 @@ function gitCoverage(gitignoreText, indexPath, cacheDir, privateIgnore = null) {
 function privateIgnoreCoversAll(text5) {
   const last = parseGitignore(text5 ?? "").at(-1);
   return last !== void 0 && !last.negated && !last.dirOnly && !last.anchored && last.pattern === "*";
+}
+
+// src/agent/types.ts
+function noteRef(vault, path) {
+  const basename4 = path.split("/").pop()?.replace(/\.md$/i, "") ?? path;
+  return { path, basename: basename4, uri: obsidianOpenURI(vault, path) };
+}
+var HUB_IDENTITY_KEYS = ["citekey", "citekeyProvisional", "doi", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
+var HUB_WRITABLE_KEYS = ["citekeyProvisional", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
+var LEGACY_LITERATURE_KEYS = ["zotero-id", "zotero-library-id", "zoteroItemKey", "zoteroLibraryID", "zoteroLibraryType", "zoteroGroupID"];
+var ZOTERO_NOTE_TYPES = ["zotero", "paper-hub", "paper-analysis", "raw-source", "literature-zotero"];
+
+// src/note-aliases.ts
+var FOREIGN_LINK = /\b(?:bookends|x-devonthink-item):\/\//;
+function claim(map, key, id) {
+  if (!map.has(key)) map.set(key, id);
+  else if (map.get(key) !== id) map.set(key, null);
+}
+function selectKey(libraryType, groupID, itemKey) {
+  return `${libraryType}/${groupID ?? 0}/${itemKey}`;
+}
+function buildAliasIndex(entries) {
+  const ids = new Set(entries.map((entry) => entry.id));
+  const aliases = /* @__PURE__ */ new Map();
+  const selects = /* @__PURE__ */ new Map();
+  const itemKeys = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    for (const alias of /* @__PURE__ */ new Set([entry.citekey, ...entry.citekeyHistory])) claim(aliases, alias, entry.id);
+    if (typeof entry.itemKey === "string" && ITEM_KEY.test(entry.itemKey)) {
+      claim(selects, selectKey(entry.libraryType, entry.groupID, entry.itemKey), entry.id);
+      claim(itemKeys, entry.itemKey, entry.id);
+    }
+  }
+  return { ids, aliases, selects, itemKeys, singleLibrary: new Set(entries.map((entry) => entry.libraryID)).size === 1 };
+}
+function typeOf(frontmatter) {
+  return typeof frontmatter.type === "string" ? frontmatter.type.trim() : "";
+}
+function isZoteroType(type) {
+  return ZOTERO_NOTE_TYPES.includes(type);
+}
+function hasForeignIdentity(frontmatter) {
+  if (!frontmatter) return false;
+  const bookends = frontmatter.bookendsID;
+  if (bookends !== void 0 && bookends !== null && bookends !== "") return true;
+  const type = typeOf(frontmatter);
+  if (type) return !isZoteroType(type);
+  for (const value of Object.values(frontmatter)) {
+    for (const item of Array.isArray(value) ? value : [value]) if (typeof item === "string" && FOREIGN_LINK.test(item)) return true;
+  }
+  return false;
+}
+function citekeyEvidenceAllowed(basename4, frontmatter) {
+  return basename4.startsWith("@") || frontmatter !== void 0 && isZoteroType(typeOf(frontmatter));
+}
+function selectIdentity(uri) {
+  if (typeof uri !== "string" || !uri.trim()) return null;
+  try {
+    const parsed = parseZoteroURI(uri.trim());
+    return parsed.action === "select" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// src/citations/score.ts
+function searchFold(value) {
+  if (/^[\x00-\x7f]*$/.test(value)) return value.toLowerCase();
+  return value.normalize("NFD").replace(new RegExp("\\p{Mn}", "gu"), "").normalize("NFC").toLowerCase();
+}
+function completionRows(entries) {
+  return entries.map((entry) => {
+    const citekey = entry.citekey.toLowerCase();
+    return { entry, citekey, haystack: searchFold(`${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`) };
+  }).sort((a, b) => a.entry.citekey.localeCompare(b.entry.citekey));
+}
+
+// src/index-derived.ts
+var NONE = /* @__PURE__ */ Object.freeze([]);
+function groupBy(entries, keys) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    for (const key of keys(entry)) {
+      const group = groups.get(key);
+      if (group) group.push(entry);
+      else groups.set(key, [entry]);
+    }
+  }
+  return groups;
+}
+var IndexDerived = class {
+  constructor(entries) {
+    this.entries = entries;
+    this.alias = null;
+    this.byCitekey = null;
+    this.byId = null;
+    this.byItemKey = null;
+    this.completion = null;
+  }
+  /** `buildAliasIndex(entries)`: the identity evidence vault notes are resolved against. */
+  get aliasIndex() {
+    if (!this.alias) this.alias = buildAliasIndex(this.entries);
+    return this.alias;
+  }
+  /** Citekey-completion rows in completion order (`completionRows`). */
+  get completionRows() {
+    if (!this.completion) this.completion = completionRows(this.entries);
+    return this.completion;
+  }
+  /** Entries whose current or a previous citekey is `citekey`, in index order (several when libraries share a key). */
+  entriesWithCitekey(citekey) {
+    if (!this.byCitekey) this.byCitekey = groupBy(this.entries, (entry) => /* @__PURE__ */ new Set([entry.citekey, ...entry.citekeyHistory]));
+    return this.byCitekey.get(citekey) ?? NONE;
+  }
+  /** Entries with this id, in index order: exactly one in a validated index. */
+  entriesWithId(id) {
+    if (!this.byId) this.byId = groupBy(this.entries, (entry) => [entry.id]);
+    return this.byId.get(id) ?? NONE;
+  }
+  /** The first entry with this id, or null. */
+  entryById(id) {
+    return this.entriesWithId(id)[0] ?? null;
+  }
+  /** Entries with this Zotero item key, in index order; libraries are independent, so the key alone is not an identity. */
+  entriesWithItemKey(itemKey) {
+    if (!this.byItemKey) this.byItemKey = groupBy(this.entries, (entry) => [entry.itemKey]);
+    return this.byItemKey.get(itemKey) ?? NONE;
+  }
+};
+var derived = /* @__PURE__ */ new WeakMap();
+function indexDerived(entries) {
+  let value = derived.get(entries);
+  if (!value) {
+    value = new IndexDerived(entries);
+    derived.set(entries, value);
+  }
+  return value;
 }
 
 // src/agent/search.ts
@@ -7950,7 +8096,24 @@ function rankKeyMatches(matches2) {
 }
 function resolveByKey(index, selector, kind, query) {
   const base = { matchedHistory: false, candidates: [], ranked: [], query };
-  const scoped = index.entries.filter((entry2) => (selector.libraryID === void 0 || entry2.libraryID === selector.libraryID) && (kind !== "itemKey" || entry2.itemKey === query.normalized));
+  const derived2 = indexDerived(index.entries);
+  let candidates;
+  if (kind === "itemKey") {
+    candidates = derived2.entriesWithItemKey(query.normalized);
+  } else {
+    const byCitekey = derived2.entriesWithCitekey(query.normalized);
+    const byId2 = derived2.entriesWithId(query.normalized);
+    const byItemKey = ITEM_KEY2.test(query.normalized) ? derived2.entriesWithItemKey(query.normalized) : [];
+    const nonEmpty = [byCitekey, byId2, byItemKey].filter((list) => list.length > 0);
+    if (nonEmpty.length === 0) candidates = [];
+    else if (nonEmpty.length === 1) candidates = nonEmpty[0];
+    else {
+      const unique = [.../* @__PURE__ */ new Set([...byCitekey, ...byId2, ...byItemKey])];
+      unique.sort((a, b) => index.entries.indexOf(a) - index.entries.indexOf(b));
+      candidates = unique;
+    }
+  }
+  const scoped = selector.libraryID === void 0 ? candidates : candidates.filter((entry2) => entry2.libraryID === selector.libraryID);
   const rawMatches = kind === "itemKey" ? scoped.map((entry2) => ({ entry: entry2, matchedBy: "itemKey", score: 100, reason: `item key ${query.normalized}` })) : scoped.flatMap((entry2) => {
     const m = keyMatch(entry2, query.normalized);
     return m ? [m] : [];
@@ -8122,7 +8285,7 @@ function httpRequest(rawURL, timeoutMs, body, signal) {
   const fail = (reject) => (error) => {
     reject(signal?.aborted ? new BbtTransportError("aborted", endpoint, error instanceof Error ? error.message : String(error), { cause: error, code: codeOf(error) }) : classifyTransportError(error, endpoint, timeoutMs, "connection-refused"));
   };
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const url = new URL(rawURL);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid BBT endpoint");
     if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_WAIT_MS) throw new Error("Invalid request timeout");
@@ -8140,7 +8303,7 @@ function httpRequest(rawURL, timeoutMs, body, signal) {
       });
       response.on("error", fail(reject));
       response.on("aborted", () => reject(signal?.aborted ? new BbtTransportError("aborted", endpoint, "BBT request aborted by the plugin") : new BbtTransportError("connection-refused", endpoint, "BBT response aborted by the remote end before it completed", { code: "ECONNRESET" })));
-      response.on("end", () => resolve3({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+      response.on("end", () => resolve4({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
     });
     const timer = timers.setTimeout(() => request.destroy(new BbtTransportError("timeout", endpoint, "BBT request timed out", { timeoutMs })), timeoutMs);
     request.on("close", () => timers.clearTimeout(timer));
@@ -8299,69 +8462,6 @@ function infoWarnings(connection) {
     warnings.push({ code: "index-stale", message: `The index is ${connection.index.ageMinutes ?? 0} minutes old (limit ${connection.index.maxAgeMinutes}); run refresh or pass --allow-stale.` });
   }
   return warnings;
-}
-
-// src/agent/types.ts
-function noteRef(vault, path) {
-  const basename3 = path.split("/").pop()?.replace(/\.md$/i, "") ?? path;
-  return { path, basename: basename3, uri: obsidianOpenURI(vault, path) };
-}
-var HUB_IDENTITY_KEYS = ["citekey", "citekeyProvisional", "doi", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
-var HUB_WRITABLE_KEYS = ["citekeyProvisional", "zoteroID", "zoteroSelectURI", "zoteroStatus", "zoteroCheckedAt"];
-var LEGACY_LITERATURE_KEYS = ["zotero-id", "zotero-library-id", "zoteroItemKey", "zoteroLibraryID", "zoteroLibraryType", "zoteroGroupID"];
-var ZOTERO_NOTE_TYPES = ["zotero", "paper-hub", "paper-analysis", "raw-source", "literature-zotero"];
-
-// src/note-aliases.ts
-var FOREIGN_LINK = /\b(?:bookends|x-devonthink-item):\/\//;
-function claim(map, key, id) {
-  if (!map.has(key)) map.set(key, id);
-  else if (map.get(key) !== id) map.set(key, null);
-}
-function selectKey(libraryType, groupID, itemKey) {
-  return `${libraryType}/${groupID ?? 0}/${itemKey}`;
-}
-function buildAliasIndex(entries) {
-  const ids = new Set(entries.map((entry) => entry.id));
-  const aliases = /* @__PURE__ */ new Map();
-  const selects = /* @__PURE__ */ new Map();
-  const itemKeys = /* @__PURE__ */ new Map();
-  for (const entry of entries) {
-    for (const alias of /* @__PURE__ */ new Set([entry.citekey, ...entry.citekeyHistory])) claim(aliases, alias, entry.id);
-    if (typeof entry.itemKey === "string" && ITEM_KEY.test(entry.itemKey)) {
-      claim(selects, selectKey(entry.libraryType, entry.groupID, entry.itemKey), entry.id);
-      claim(itemKeys, entry.itemKey, entry.id);
-    }
-  }
-  return { ids, aliases, selects, itemKeys, singleLibrary: new Set(entries.map((entry) => entry.libraryID)).size === 1 };
-}
-function typeOf(frontmatter) {
-  return typeof frontmatter.type === "string" ? frontmatter.type.trim() : "";
-}
-function isZoteroType(type) {
-  return ZOTERO_NOTE_TYPES.includes(type);
-}
-function hasForeignIdentity(frontmatter) {
-  if (!frontmatter) return false;
-  const bookends = frontmatter.bookendsID;
-  if (bookends !== void 0 && bookends !== null && bookends !== "") return true;
-  const type = typeOf(frontmatter);
-  if (type) return !isZoteroType(type);
-  for (const value of Object.values(frontmatter)) {
-    for (const item of Array.isArray(value) ? value : [value]) if (typeof item === "string" && FOREIGN_LINK.test(item)) return true;
-  }
-  return false;
-}
-function citekeyEvidenceAllowed(basename3, frontmatter) {
-  return basename3.startsWith("@") || frontmatter !== void 0 && isZoteroType(typeOf(frontmatter));
-}
-function selectIdentity(uri) {
-  if (typeof uri !== "string" || !uri.trim()) return null;
-  try {
-    const parsed = parseZoteroURI(uri.trim());
-    return parsed.action === "select" ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 // src/agent/note-classify.ts
@@ -9288,7 +9388,7 @@ function referencesPayload(keys, classified, bibliography, hubFullCitation, opti
   }
   const markdown = referencesMarkdown(keys, classified, bibliography, hubFullCitation, heading);
   const content = format === "markdown" ? markdown : resolved.map((item) => item.text).filter(Boolean).join("\n\n");
-  return { format, style: options.style ?? "", heading, resolved, unresolved: unresolved2, markdown, content };
+  return { format, style: options.style ?? "", ...options.locale ? { locale: options.locale } : {}, heading, resolved, unresolved: unresolved2, markdown, content };
 }
 function structuredReferencesPayload(keys, classified, format, heading, merged, renamed) {
   const exported = new Set(merged?.exported ?? []);
@@ -9724,8 +9824,8 @@ function hubAttachmentFinding(entry, vaultPdfCandidates, hubCitekey) {
   const keys = new Set([entry.citekey, hubCitekey].filter((key) => Boolean(key)));
   const copies = vaultPdfCandidates.filter((path) => {
     if (!path.startsWith(HUB_ATTACHMENT_FOLDER)) return false;
-    const basename3 = path.slice(path.lastIndexOf("/") + 1);
-    return [...keys].some((key) => basename3.endsWith(`-${key}.pdf`));
+    const basename4 = path.slice(path.lastIndexOf("/") + 1);
+    return [...keys].some((key) => basename4.endsWith(`-${key}.pdf`));
   }).sort();
   const reason = entry.attachments.length ? "no PDF attachment has a local file" : "no PDF attachment";
   if (copies.length) return finding("hub-attachment-missing", `Zotero item ${entry.id} has ${reason}; vault copy at ${copies[0]}.`, copies[0]);
@@ -10018,6 +10118,7 @@ function isAnnotationColor(value) {
 import { createHash as createHash2 } from "crypto";
 
 // src/layout.ts
+var DEFAULT_CALLOUTS = { abstract: "Abstract", cite: "Cite", metadata: "md", links: "LINK", synthesis: "Synth" };
 var DEFAULT_SYNTHESIS_LINES = ["**Contribution**::", "**Related**::"];
 var DEFAULT_ANNOTATIONS_HEADING = "Annotations";
 var CALLOUT_TYPE = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
@@ -10053,6 +10154,58 @@ function annotationsHeading(value) {
   if (typeof value !== "string" || annotationsHeadingProblem(value) !== null) return DEFAULT_ANNOTATIONS_HEADING;
   return value.trim().replace(/^#+\s*/, "").replace(/\s+/g, " ") || DEFAULT_ANNOTATIONS_HEADING;
 }
+var BASE_LAYOUT_SETTINGS = {
+  noteAbstract: true,
+  noteCitation: true,
+  noteMetadata: true,
+  noteLinks: true,
+  noteZoteroNotes: true,
+  noteSynthesis: true,
+  calloutAbstract: DEFAULT_CALLOUTS.abstract,
+  calloutCite: DEFAULT_CALLOUTS.cite,
+  calloutMetadata: DEFAULT_CALLOUTS.metadata,
+  calloutLinks: DEFAULT_CALLOUTS.links,
+  calloutSynthesis: DEFAULT_CALLOUTS.synthesis,
+  synthesisLines: [...DEFAULT_SYNTHESIS_LINES],
+  annotationsHeading: DEFAULT_ANNOTATIONS_HEADING,
+  noteItemTypeFields: false,
+  joinContinuations: false,
+  noteRichText: false
+};
+var LAYOUT_PROFILE_LIST = [
+  {
+    id: "cmds-default",
+    name: "CMDS default",
+    label: "CMDS default",
+    description: "The standard CMDS Zotero note layout with all sections and fixed metadata fields.",
+    settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES] }
+  },
+  {
+    id: "reading-first",
+    name: "Reading first",
+    label: "Reading first",
+    description: "Rich text, joined highlight continuations and item-type metadata fields for active reading.",
+    settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES], noteItemTypeFields: true, joinContinuations: true, noteRichText: true }
+  },
+  {
+    id: "compact",
+    name: "Compact",
+    label: "Compact",
+    description: "Citation, metadata, links and joined rich-text annotations without abstract, Zotero notes or synthesis scaffold.",
+    settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES], noteAbstract: false, noteZoteroNotes: false, noteSynthesis: false, joinContinuations: true, noteRichText: true }
+  },
+  {
+    id: "metadata-only",
+    name: "Metadata only",
+    label: "Metadata only",
+    description: "Abstract, bibliography, item-type metadata and links without Zotero notes or synthesis scaffold.",
+    settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES], noteZoteroNotes: false, noteSynthesis: false, noteItemTypeFields: true }
+  }
+];
+var LAYOUT_PROFILES = Object.assign(
+  [...LAYOUT_PROFILE_LIST],
+  Object.fromEntries(LAYOUT_PROFILE_LIST.map((profile) => [profile.id, profile]))
+);
 var THEME_VARIABLES = [
   ...["yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray"].map((color) => `--cmds-zotero-hl-${color}`),
   "--cmds-zotero-hl-strength",
@@ -10105,80 +10258,6 @@ function readingOrder(entry) {
 
 // src/api/normalize.ts
 var MAX_READER_POSITION = 16 * 1024;
-
-// src/citations/score.ts
-function searchFold(value) {
-  if (/^[\x00-\x7f]*$/.test(value)) return value.toLowerCase();
-  return value.normalize("NFD").replace(new RegExp("\\p{Mn}", "gu"), "").normalize("NFC").toLowerCase();
-}
-function completionRows(entries) {
-  return entries.map((entry) => {
-    const citekey = entry.citekey.toLowerCase();
-    return { entry, citekey, haystack: searchFold(`${citekey} ${entry.title} ${entry.authors.join(" ")} ${entry.year}`) };
-  }).sort((a, b) => a.entry.citekey.localeCompare(b.entry.citekey));
-}
-
-// src/index-derived.ts
-var NONE = /* @__PURE__ */ Object.freeze([]);
-function groupBy(entries, keys) {
-  const groups = /* @__PURE__ */ new Map();
-  for (const entry of entries) {
-    for (const key of keys(entry)) {
-      const group = groups.get(key);
-      if (group) group.push(entry);
-      else groups.set(key, [entry]);
-    }
-  }
-  return groups;
-}
-var IndexDerived = class {
-  constructor(entries) {
-    this.entries = entries;
-    this.alias = null;
-    this.byCitekey = null;
-    this.byId = null;
-    this.byItemKey = null;
-    this.completion = null;
-  }
-  /** `buildAliasIndex(entries)`: the identity evidence vault notes are resolved against. */
-  get aliasIndex() {
-    if (!this.alias) this.alias = buildAliasIndex(this.entries);
-    return this.alias;
-  }
-  /** Citekey-completion rows in completion order (`completionRows`). */
-  get completionRows() {
-    if (!this.completion) this.completion = completionRows(this.entries);
-    return this.completion;
-  }
-  /** Entries whose current or a previous citekey is `citekey`, in index order (several when libraries share a key). */
-  entriesWithCitekey(citekey) {
-    if (!this.byCitekey) this.byCitekey = groupBy(this.entries, (entry) => /* @__PURE__ */ new Set([entry.citekey, ...entry.citekeyHistory]));
-    return this.byCitekey.get(citekey) ?? NONE;
-  }
-  /** Entries with this id, in index order: exactly one in a validated index. */
-  entriesWithId(id) {
-    if (!this.byId) this.byId = groupBy(this.entries, (entry) => [entry.id]);
-    return this.byId.get(id) ?? NONE;
-  }
-  /** The first entry with this id, or null. */
-  entryById(id) {
-    return this.entriesWithId(id)[0] ?? null;
-  }
-  /** Entries with this Zotero item key, in index order; libraries are independent, so the key alone is not an identity. */
-  entriesWithItemKey(itemKey) {
-    if (!this.byItemKey) this.byItemKey = groupBy(this.entries, (entry) => [entry.itemKey]);
-    return this.byItemKey.get(itemKey) ?? NONE;
-  }
-};
-var derived = /* @__PURE__ */ new WeakMap();
-function indexDerived(entries) {
-  let value = derived.get(entries);
-  if (!value) {
-    value = new IndexDerived(entries);
-    derived.set(entries, value);
-  }
-  return value;
-}
 
 // src/recent/recent-reads.ts
 function pad(value) {
@@ -10456,7 +10535,8 @@ function flagged(id, title, code, detail, paths) {
   return { id, status: DIAGNOSTIC_CODES2[code], title, detail, code, ...paths?.length ? { paths: paths.slice(0, MAX_PATHS) } : {} };
 }
 function plural(count, word) {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
+  if (count === 1) return `${count} ${word}`;
+  return `${count} ${word.endsWith("y") ? `${word.slice(0, -1)}ies` : `${word}s`}`;
 }
 function zoteroCheck(bbt) {
   const title = "Zotero and Better BibTeX";
@@ -10593,7 +10673,7 @@ function verifyCache(cache, stat) {
 // src/pdf/locate.ts
 var LIGATURES = { "\uFB00": "ff", "\uFB01": "fi", "\uFB02": "fl", "\uFB03": "ffi", "\uFB04": "ffl", "\xE6": "ae", "\u0153": "oe" };
 function normalizeForMatch(value) {
-  return value.normalize("NFC").replace(/[ﬀ-ﬄæœ]/g, (c) => LIGATURES[c] ?? c).replace(/­/g, "").replace(new RegExp("(\\p{L})-\\s*\\n\\s*(\\p{L})", "gu"), "$1$2").replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"').replace(/[‐-―−]/g, "-").replace(/…/g, "...").replace(/\s+/g, " ").trim().toLowerCase();
+  return value.normalize("NFC").toLowerCase().replace(/[ﬀ-ﬄæœ]/g, (c) => LIGATURES[c] ?? c).replace(/­/g, "").replace(new RegExp("(\\p{L})-\\s*\\n\\s*(\\p{L})", "gu"), "$1$2").replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"').replace(/[‐-―−]/g, "-").replace(/…/g, "...").replace(/\s+/g, " ").trim();
 }
 function tokenize(value) {
   return normalizeForMatch(value).split(" ").filter(Boolean);
@@ -10614,9 +10694,17 @@ function locateQuote(pages, quote, minScore = 0.6) {
   }
   if (exact.length) return exact;
   for (let i = 0; i + 1 < normalized.length; i++) {
-    const joined = `${normalized[i].text} ${normalized[i + 1].text}`;
-    const index = joined.indexOf(needle);
-    if (index >= 0 && index < normalized[i].text.length) exact.push({ page: normalized[i].page.page, pageLabel: normalized[i].page.pageLabel, score: 0.95, snippet: snippetAround(joined, index, needle.length), method: "exact", span: { page: normalized[i + 1].page.page, pageLabel: normalized[i + 1].page.pageLabel } });
+    const left = normalized[i].text;
+    const right = normalized[i + 1].text;
+    const joins = [`${left} ${right}`, ...new RegExp("\\p{L}-$", "u").test(left) ? [`${left.slice(0, -1)}${right}`, `${left}${right}`] : []];
+    for (const joined of joins) {
+      const limit = joined.startsWith(`${left} `) ? left.length : left.length - 1;
+      const index = joined.indexOf(needle);
+      if (index >= 0 && index < limit) {
+        exact.push({ page: normalized[i].page.page, pageLabel: normalized[i].page.pageLabel, score: 0.95, snippet: snippetAround(joined, index, needle.length), method: "exact", span: { page: normalized[i + 1].page.page, pageLabel: normalized[i + 1].page.pageLabel } });
+        break;
+      }
+    }
   }
   if (exact.length) return exact;
   const want = tokenize(quote);
@@ -10734,6 +10822,130 @@ function locateBatch(pages, quotes, attachment) {
 // src/agent/actions.ts
 import { createHash as createHash4 } from "node:crypto";
 
+// src/bibliography/csl-styles.ts
+import { promises as fs2 } from "fs";
+import { homedir } from "os";
+import { basename, join, resolve as resolve2 } from "path";
+
+// src/local-file.ts
+import { constants, promises as fs } from "fs";
+import { isAbsolute, resolve } from "path";
+var LocalFileError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "LocalFileError";
+  }
+};
+var MAGIC_HEAD_BYTES = 16;
+var DEFAULT_MIN_BYTES = 8;
+function matchesMagic(head, magic) {
+  if (typeof magic === "function") return magic(head);
+  const hex = Buffer.from(head).toString("hex");
+  return magic.some((prefix) => prefix.length > 0 && hex.startsWith(prefix.toLowerCase()));
+}
+async function readLocalFile(path, opts) {
+  const label = opts.label ?? "File";
+  const minBytes = opts.minBytes ?? DEFAULT_MIN_BYTES;
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) throw new LocalFileError("not-absolute", `${label} must have an absolute local path`);
+  const absolute = resolve(path);
+  if (await fs.realpath(absolute) !== absolute) throw new LocalFileError("symlink", `Symlinked ${label.toLowerCase()} path refused`);
+  const handle = await fs.open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = await handle.stat();
+    const pathStat = await fs.lstat(absolute);
+    if (await fs.realpath(absolute) !== absolute || pathStat.ino !== stat.ino || pathStat.dev !== stat.dev || pathStat.isSymbolicLink()) throw new LocalFileError("changed-during-open", `${label} path changed during open`);
+    if (!stat.isFile()) throw new LocalFileError("not-regular-file", `${label} path is not a regular file`);
+    if (stat.size < minBytes) throw new LocalFileError("too-small", `${label} size ${stat.size} is below the ${minBytes} byte minimum`);
+    if (stat.size > opts.maxBytes) throw new LocalFileError("too-large", `${label} size ${stat.size} exceeds the ${opts.maxBytes} byte limit`);
+    const bytes = new Uint8Array(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = await handle.read(bytes, offset, bytes.length - offset, offset);
+      if (!read.bytesRead) throw new LocalFileError("changed-during-read", `${label} changed during read`);
+      offset += read.bytesRead;
+    }
+    if (!matchesMagic(bytes.subarray(0, Math.min(MAGIC_HEAD_BYTES, bytes.length)), opts.magic)) throw new LocalFileError("bad-magic", `${label} content does not match the expected format`);
+    const after = await handle.stat();
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new LocalFileError("changed-during-read", `${label} changed during read`);
+    return { bytes, mtimeMs: stat.mtimeMs };
+  } finally {
+    await handle.close();
+  }
+}
+
+// src/bibliography/rules.ts
+import { isAbsolute as isAbsolute2 } from "path";
+var LOCALE = /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/;
+function localeProblem(value) {
+  const text5 = value.trim();
+  if (!text5) return null;
+  return LOCALE.test(text5) ? null : "Enter a locale such as en-US, de-DE or ko-KR, or leave it empty for the style's default.";
+}
+function canonicalLocale(value) {
+  const parts = value.trim().replace(/_/g, "-").split("-");
+  if (!parts[0]) return "";
+  return parts.map((part, index) => index === 0 ? part.toLowerCase() : part.length === 4 ? part[0].toUpperCase() + part.slice(1).toLowerCase() : part.toUpperCase()).join("-");
+}
+function dataDirectoryProblem(value) {
+  const text5 = value.trim();
+  if (!text5) return null;
+  if (text5.includes("\0")) return "The path contains a NUL character.";
+  if (!(text5 === "~" || text5.startsWith("~/") || isAbsolute2(text5))) return "Enter an absolute folder path or one starting with ~/.";
+  if (text5.split(/[\\/]/).some((part) => part === "..")) return "Path traversal (..) is not allowed.";
+  return null;
+}
+
+// src/bibliography/csl-styles.ts
+var MAX_STYLE_BYTES = 2 * 1024 * 1024;
+var ZOTERO_STYLE_PREFIX = /^https?:\/\/www\.zotero\.org\/styles\//;
+function styleKey(id) {
+  const trimmed = id.trim();
+  return ZOTERO_STYLE_PREFIX.test(trimmed) ? trimmed.replace(ZOTERO_STYLE_PREFIX, "") : trimmed;
+}
+function findStyle(styles, value) {
+  const raw = styleKey(value);
+  const key = raw.replace(/\.csl$/i, "");
+  return styles.find((style) => style.key === raw || style.key === key) ?? styles.find((style) => style.file.replace(/\.csl$/i, "") === key) ?? null;
+}
+
+// src/bibliography/format.ts
+function frontmatterString(frontmatter, key) {
+  const value = frontmatter?.[key];
+  if (typeof value === "string") return value.trim() || null;
+  if (Array.isArray(value) && typeof value[0] === "string") return value[0].trim() || null;
+  return null;
+}
+function styleFromCsl(value, styles = []) {
+  const text5 = value.trim();
+  if (!text5 || text5.length > 500 || text5.includes("\0")) return null;
+  if (/\.csl$/i.test(text5)) {
+    const file = text5.split(/[\\/]/).pop() ?? "";
+    const installed2 = styles.find((style) => style.file.toLowerCase() === file.toLowerCase());
+    return installed2 ? installed2.key : file.replace(/\.csl$/i, "") || null;
+  }
+  const installed = findStyle(styles, text5);
+  return installed ? installed.key : styleKey(text5);
+}
+function noteFormat(frontmatter, settings, styles = []) {
+  const problems = [];
+  const csl = frontmatterString(frontmatter, "csl");
+  const fromNote = csl ? styleFromCsl(csl, styles) : null;
+  if (csl && !fromNote) problems.push(`The note's csl value "${csl.slice(0, 80)}" is not a style.`);
+  const lang = frontmatterString(frontmatter, "lang");
+  const locale = lang ? canonicalLocale(lang) : "";
+  const localeOk = !!lang && localeProblem(locale) === null;
+  if (lang && !localeOk) problems.push(`The note's lang value "${lang.slice(0, 40)}" is not a locale such as en-US or ko-KR.`);
+  return {
+    style: fromNote ?? settings.bibliographyStyle,
+    locale: localeOk ? locale : settings.bibliographyLocale ?? "",
+    styleFrom: fromNote ? "note" : "settings",
+    localeFrom: localeOk ? "note" : "settings",
+    problems
+  };
+}
+var collator = new Intl.Collator(void 0, { sensitivity: "base", numeric: true });
+
 // src/pdf/text-layer.ts
 var MIN_PAGE_BODY_CHARS = 20;
 function lines(text5) {
@@ -10753,13 +10965,15 @@ function textLayerReport(pages) {
   const bodies = pageLines.map((list) => list.filter((line) => (occurrences.get(repeatKey(line)) ?? 0) < repeatedAt).reduce((sum, line) => sum + visibleLength(line), 0));
   const emptyPages = pages.filter((_, position) => bodies[position] < MIN_PAGE_BODY_CHARS).map((page) => page.page);
   const bodyChars = bodies.reduce((sum, chars) => sum + chars, 0);
-  const textLayer = !pages.length || emptyPages.length === pages.length ? "none" : emptyPages.length > Math.max(2, pages.length * 0.2) ? "partial" : "full";
+  const textLayer = !pages.length || emptyPages.length === pages.length ? "none" : emptyPages.length * 2 >= pages.length || emptyPages.length > Math.max(2, pages.length * 0.2) ? "partial" : "full";
   return { textLayer, emptyPages, bodyChars, ocrRecommended: textLayer === "none" || textLayer === "partial" && emptyPages.length * 2 >= pages.length };
 }
 function textLayerWarning(report, pageCount) {
-  if (report.textLayer === "full") return null;
-  if (report.textLayer === "none") return `No text layer: none of the ${pageCount} pages has extractable body text (a scanned PDF). Run OCR before reading or quoting it; locate cannot verify quotes in it.`;
-  return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (figure-only, blank or scanned pages)${report.ocrRecommended ? "; run OCR for them before relying on the text" : "; if those pages are scanned text, run OCR for them"}.`;
+  const kind = ("status" in report && report.status ? report.status : report.textLayer) ?? "full";
+  const total = pageCount ?? ("pageCount" in report && typeof report.pageCount === "number" ? report.pageCount : report.emptyPages.length);
+  if (kind === "full") return null;
+  if (kind === "none") return `No text layer: none of the ${total} pages has extractable body text (a scanned PDF). Run OCR before reading or quoting it; locate cannot verify quotes in it.`;
+  return `Partial text layer: ${report.emptyPages.length} of ${total} pages have no extractable body text (figure-only, blank or scanned pages)${report.ocrRecommended ? "; run OCR for them before relying on the text" : "; if those pages are scanned text, run OCR for them"}.`;
 }
 
 // src/agent/actions.ts
@@ -10781,6 +10995,7 @@ var ACTION_API_VERSION = {
   annotations: 2,
   citing: 2
 };
+var IMPORT_SECTION_SCOPES = ["overview", "citation", "metadata", "notes", "annotations"];
 function envelope(host, action, apiVersion, failure) {
   return buildEnvelope(action, host.vault, apiVersion, host.connection, host.now, failure);
 }
@@ -10869,13 +11084,14 @@ async function identityAction(host, request) {
   const citekeyCurrent = entry?.citekey ?? null;
   const pdf = pickPdf(entry ?? emptyEntry(), request.attachment);
   const style = request.style ?? host.settings.bibliographyStyle;
+  const locale = request.locale !== void 0 ? canonicalLocale(request.locale) : host.settings.bibliographyLocale ?? "";
   let bibliography = null;
   let bibliographyReason = request.noBibliography ? "disabled" : host.bibliographyReason ?? void 0;
   let bbtError = null;
   if (!request.noBibliography && entry && host.bibliography) {
     try {
-      const text5 = await host.bibliography(entry, style);
-      if (text5) bibliography = { style, text: text5 };
+      const text5 = await host.bibliography(entry, style, locale || void 0);
+      if (text5) bibliography = { style, ...locale ? { locale } : {}, text: text5 };
       else bibliographyReason = "style-error";
     } catch (error) {
       bibliographyReason = "bbt-unreachable";
@@ -10978,7 +11194,9 @@ async function citesAction(host, request) {
   } else if (request.bibliography && !isStructuredFormat(format)) {
     const bibliography = /* @__PURE__ */ new Map();
     const hubFull = /* @__PURE__ */ new Map();
-    const style = request.style ?? host.settings.bibliographyStyle;
+    const singleNoteFormat = targets.length === 1 && (request.style === void 0 || request.locale === void 0) ? noteFormat(targets[0].frontmatter, host.settings) : null;
+    const style = request.style ?? singleNoteFormat?.style ?? host.settings.bibliographyStyle;
+    const locale = request.locale !== void 0 ? canonicalLocale(request.locale) : singleNoteFormat?.locale ?? host.settings.bibliographyLocale ?? "";
     const byId = new Map(view.index.entries.map((entry) => [entry.id, entry]));
     let bbtDown = false;
     for (const key of allKeys) {
@@ -10988,7 +11206,7 @@ async function citesAction(host, request) {
         const entry = byId.get(verdict2.entryId);
         if (entry) {
           try {
-            const text5 = await host.bibliography(entry, style);
+            const text5 = await host.bibliography(entry, style, locale || void 0);
             if (text5) bibliography.set(key, text5);
           } catch (error) {
             referencesReason = "bbt-unreachable";
@@ -11002,7 +11220,7 @@ async function citesAction(host, request) {
         if (line) hubFull.set(key, line);
       }
     }
-    references = referencesPayload(allKeys, verdicts, bibliography, hubFull, { format, heading, style });
+    references = referencesPayload(allKeys, verdicts, bibliography, hubFull, { format, heading, style, ...locale ? { locale } : {} });
   }
   const diagnostics = citesDiagnostics(files);
   const payload = { ...envelope(host, "cites", 2), files, keys, references, ...referencesReason ? { referencesReason } : {}, ...referencesReason && bbtError ? { bbtError } : {}, summary: summarize(files, truncated || scan.truncated), scan: { skipped: lookups.skipped ?? [], truncated: scan.truncated }, diagnostics };
@@ -11158,15 +11376,16 @@ async function diagnosticsAction(host, request) {
     const lookups = toRefMaps(buildNoteIndexes(listed), host.vault);
     const scan = scanOf(host);
     lookups.skipped = [.../* @__PURE__ */ new Set([...lookups.skipped ?? [], ...scan.skipped, ...scan.truncated ? ["<vault-scan-truncated>"] : []])];
+    const headings = host.settings.referencesHeadings;
     const withBodies = [];
     for (const note of citing.slice(0, MAX_CITES_FILES)) withBodies.push({ ...note, body: await host.reader.readNote(note.path) });
-    const keys = [...new Set(withBodies.flatMap((note) => citedKeys(note)))];
+    const keys = [...new Set(withBodies.flatMap((note) => citedKeys(note, headings)))];
     const verdicts = classifyKeys(keys, view.index, lookups, stale, allowStaleNegative);
-    diagnostics.push(...citesDiagnostics(withBodies.map((note) => citesForNote(note, verdicts))));
+    diagnostics.push(...citesDiagnostics(withBodies.map((note) => citesForNote(note, verdicts, headings))));
   }
   if (host.connection.legacyPluginEnabled) diagnostics.push(diagnostic("legacy-plugin-enabled", "The legacy cmds-link-zotero plugin is enabled beside CMDS Zotero and shares the index path; disable it before refreshing."));
   if (host.connection.index.stale) diagnostics.push(diagnostic("index-stale", `The index is ${host.connection.index.ageMinutes} minutes old (limit ${host.connection.index.maxAgeMinutes}).`));
-  if (host.connection.git?.repo && (host.connection.git.indexIgnored === false || host.connection.git.cacheIgnored === false)) diagnostics.push(diagnostic("index-in-git", "The vault is a git repository and the index or the .cmds-zotero cache is not ignored; add both to .gitignore and untrack the index."));
+  if (host.connection.git?.repo && (host.connection.git.indexIgnored === false || host.connection.git.cacheIgnored === false || host.connection.git.indexTracked === true || host.connection.git.cacheTracked === true)) diagnostics.push(diagnostic("index-in-git", "The vault is a git repository and the index or the .cmds-zotero cache is not ignored; add both to .gitignore and untrack the index."));
   return { ...envelope(host, "diagnostics", 1), generatedAt: view.index.generatedAt, complete: view.index.complete, count: view.index.count, diagnostics, ...environment };
 }
 async function locateTarget(host, request, citekeyFromNote) {
@@ -11183,7 +11402,12 @@ async function locateTarget(host, request, citekeyFromNote) {
   const outcome = resolveIndex(host.indexView.index, selector);
   if (outcome.status !== "resolved" || !outcome.entry) return { failure: { reason: "no-pdf-attachment", message: `Item ${outcome.status}: ${JSON.stringify(selector)}` } };
   const entry = outcome.entry;
-  const pdf = pickPdf(entry, request.attachment);
+  let pdf;
+  try {
+    pdf = pickPdf(entry, request.attachment);
+  } catch (error) {
+    return { failure: { reason: "invalid-request", message: error instanceof Error ? error.message : "Invalid attachment." } };
+  }
   if (pdf.pdfStatus === "ambiguous") return { failure: { reason: "attachment-ambiguous", message: "Several PDF attachments; pass --attachment KEY.", candidates: pdf.candidates } };
   if (pdf.pdfStatus === "missing-file" || pdf.pdfStatus === "unavailable") return { failure: { reason: "attachment-file-missing", message: pdf.pdfStatus === "unavailable" ? "Attachment lookup failed at the last refresh; refresh the index." : "The PDF attachment is indexed but its file is not on this machine (not downloaded); this is not evidence that the item has no PDF." } };
   if (pdf.pdfStatus !== "present" || !pdf.attachmentKey || !pdf.path) return { failure: { reason: "no-pdf-attachment", message: `No PDF attachment is indexed for @${entry.citekey} (pdfStatus ${pdf.pdfStatus}).` } };
@@ -11256,6 +11480,10 @@ async function locateAction(host, request) {
   const verified = verifyCache(found.cache, stat);
   if (verified === false) return { ...envelope(host, "locate", 2, { reason: "source-changed", message: "The PDF changed after text extraction; re-extract before locating quotes." }), item: target.item, attachment: target.attachment, cache: { path: found.path, sha256: found.cache.sha256, extractedAt: found.cache.extractedAt, pageCount: found.cache.pageCount, verified } };
   const batch = locateBatch(found.cache.pages, quotes, { openURI: target.attachment.openURI });
+  const cachedLayer = found.cache.textLayer ?? textLayerReport(found.cache.pages);
+  const layerKind = cachedLayer.status ?? cachedLayer.textLayer ?? "full";
+  const layerWarning = batch.summary.notFound > 0 && layerKind !== "full" ? textLayerWarning(cachedLayer, found.cache.pageCount) : null;
+  const warnings = layerWarning ? [...batch.warnings, layerWarning] : batch.warnings;
   return {
     ...envelope(host, "locate", 2),
     item: target.item,
@@ -11263,7 +11491,7 @@ async function locateAction(host, request) {
     cache: { path: found.path, sha256: found.cache.sha256, extractedAt: found.cache.extractedAt, pageCount: found.cache.pageCount, verified },
     results: batch.results,
     summary: batch.summary,
-    warnings: batch.warnings
+    warnings
   };
 }
 function validateActionRequest(action, value) {
@@ -11274,28 +11502,33 @@ function validateActionRequest(action, value) {
     info: [],
     refresh: ["ifOlderThanMinutes"],
     resolve: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh"],
-    identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "noBibliography"],
-    cites: ["path", "recursive", "bibliography", "style", "strict", "allowStale", "format", "out", "force"],
+    identity: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale", "refresh", "rawSource", "attachment", "style", "locale", "noBibliography"],
+    cites: ["path", "recursive", "bibliography", "style", "locale", "strict", "allowStale", "format", "out", "force"],
     reconcile: ["folders", "apply", "strict", "allowStale"],
     diagnostics: ["allowStale", "env"],
     // 0.5 R10: format/out/force
     "pdf-text": ["citekey", "itemKey", "libraryID", "file", "attachment", "pages", "force"],
     locate: ["path", "citekey", "itemKey", "libraryID", "file", "quote", "attachment"],
     recent: ["days"],
-    import: ["citekey", "itemKey", "libraryID", "apply", "allowStale"],
+    import: ["citekey", "itemKey", "libraryID", "apply", "allowStale", "adopt", "rebuild", "scope"],
     // 0.6
     annotations: ["citekey", "itemKey", "libraryID", "today", "attachment", "color", "type", "tag", "fresh", "allowStale"],
     citing: ["citekey", "itemKey", "libraryID", "doi", "arxiv", "title", "year", "author", "query", "allowStale"]
   };
   for (const key of Object.keys(request)) if (!allowed[action].includes(key)) throw new Error(`Unsupported ${action} request field: ${key}.`);
-  for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh", "env"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
-  for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "path", "file", "pages", "quote", "color", "type", "tag"]) {
+  for (const key of ["allowStale", "refresh", "recursive", "bibliography", "strict", "apply", "noBibliography", "force", "today", "fresh", "env", "rebuild"]) if (key in request && typeof request[key] !== "boolean") throw new Error(`${key} must be boolean.`);
+  for (const key of ["citekey", "itemKey", "doi", "arxiv", "title", "year", "author", "query", "rawSource", "attachment", "style", "locale", "path", "file", "pages", "quote", "color", "type", "tag", "adopt"]) {
     const value2 = request[key];
     if (value2 !== void 0 && (typeof value2 !== "string" || !value2.trim() || value2.length > 8192)) throw new Error(`${key} must be a non-empty bounded string.`);
+  }
+  if ("locale" in request && request.locale !== void 0) {
+    const problem = localeProblem(canonicalLocale(request.locale));
+    if (problem) throw new Error(problem);
   }
   if ("libraryID" in request && (!Number.isSafeInteger(request.libraryID) || request.libraryID < 1)) throw new Error("libraryID must be a positive integer.");
   if ("ifOlderThanMinutes" in request && (!Number.isSafeInteger(request.ifOlderThanMinutes) || request.ifOlderThanMinutes < 1 || request.ifOlderThanMinutes > 10080)) throw new Error("ifOlderThanMinutes must be between 1 and 10080.");
   if ("folders" in request && (!Array.isArray(request.folders) || request.folders.some((folder) => typeof folder !== "string" || !folder.trim()))) throw new Error("folders must be an array of non-empty paths.");
+  if ("scope" in request && request.scope !== void 0 && (!Array.isArray(request.scope) || !request.scope.length || request.scope.some((group) => typeof group !== "string" || !IMPORT_SECTION_SCOPES.includes(group)))) throw new Error(`scope must be a non-empty array of ${IMPORT_SECTION_SCOPES.join(", ")}.`);
   if (request.itemKey !== void 0 && (typeof request.itemKey !== "string" || !/^[A-Z0-9]{8}$/.test(request.itemKey) || request.libraryID === void 0)) throw new Error("itemKey requires eight uppercase letters/digits and libraryID.");
   if ((request.year !== void 0 || request.author !== void 0) && request.title === void 0 && request.query === void 0) throw new Error("year and author narrow title or query only.");
   if (action === "resolve" || action === "identity" || action === "citing") {
@@ -11309,7 +11542,12 @@ function validateActionRequest(action, value) {
   if (action === "cites" && (request.format !== void 0 || request.out !== void 0 || request.force !== void 0) && request.bibliography !== true) throw new Error("format, out and force need bibliography.");
   if (action === "pdf-text" && ["citekey", "itemKey", "file"].filter((key) => request[key] !== void 0).length !== 1) throw new Error("pdf-text requires exactly one target.");
   if (action === "recent" && request.days !== void 0 && (!Number.isSafeInteger(request.days) || request.days < 1 || request.days > 365)) throw new Error("days must be an integer between 1 and 365.");
-  if (action === "import" && ["citekey", "itemKey"].filter((key) => request[key] !== void 0).length !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID.");
+  if (action === "import") {
+    const selectors = ["citekey", "itemKey"].filter((key) => request[key] !== void 0).length;
+    const adopting = typeof request.adopt === "string" && request.adopt.trim().length > 0;
+    if (adopting ? selectors > 1 : selectors !== 1) throw new Error("import requires exactly one selector: citekey, or itemKey with libraryID (optional with adopt).");
+    if (adopting && request.rebuild === true) throw new Error("adopt and rebuild cannot be combined.");
+  }
   if (action === "annotations") {
     if (["citekey", "itemKey"].filter((key) => request[key] !== void 0).length + (request.today === true ? 1 : 0) !== 1) throw new Error("annotations requires exactly one selector: citekey, itemKey with libraryID, or today.");
     const filters = parseAnnotationFilters(request);
@@ -11416,11 +11654,15 @@ async function importAction(host, request) {
   for (const section of preview?.sections ?? []) counts[section.state] = (counts[section.state] ?? 0) + 1;
   const body = {
     dryRun: request.apply !== true,
+    mode: result.mode ?? "import",
     item: result.item ?? null,
     fresh: result.fresh === true,
     note: { path: preview?.path ?? outcome?.path ?? null, existed: preview?.exists ?? false, before: result.before ?? null, ...result.after ? { after: result.after } : {} },
     preview: preview ? { conflicts: preview.conflicts, softConflicts: preview.softConflicts, sections: counts, changes: preview.changes } : null,
+    ...result.repairs?.length ? { repairs: result.repairs } : {},
     outcome: outcome ? { ...outcome, summary: describeSendOutcome(outcome) } : null,
+    ...result.backup ? { backup: result.backup } : {},
+    ...result.unverified ? { unverified: result.unverified } : {},
     warnings: result.warnings ?? []
   };
   const refused = (preview?.conflicts.length ?? 0) > 0 || outcome?.status === "refused";
@@ -11561,7 +11803,13 @@ async function runAction(host, action, request = {}) {
   let effectiveHost = host;
   if ((action === "resolve" || action === "identity") && request.refresh === true) {
     if (!host.refresh) return { ...envelope(host, action, ACTION_API_VERSION[action], { reason: "requires-obsidian", message: "Explicit refresh requires the live Obsidian host." }), ...action === "resolve" ? { status: "unavailable" } : {} };
-    effectiveHost = (await host.refresh({})).host;
+    try {
+      effectiveHost = (await host.refresh({})).host;
+    } catch (error) {
+      if (!(error instanceof IndexRefusalError)) throw error;
+      const bbtError = bbtErrorPayload(error.cause);
+      return { ...envelope(host, action, ACTION_API_VERSION[action], { reason: error.reason, message: error.message }), ...bbtError ? { bbtError } : {}, ...action === "resolve" ? { status: "unavailable" } : {} };
+    }
   }
   switch (action) {
     case "connection":
@@ -11593,28 +11841,6 @@ async function runAction(host, action, request = {}) {
     case "citing":
       return citingAction(host, request);
   }
-}
-
-// src/bibliography/rules.ts
-import { isAbsolute } from "path";
-var LOCALE = /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?$/;
-function localeProblem(value) {
-  const text5 = value.trim();
-  if (!text5) return null;
-  return LOCALE.test(text5) ? null : "Enter a locale such as en-US, de-DE or ko-KR, or leave it empty for the style's default.";
-}
-function canonicalLocale(value) {
-  const parts = value.trim().replace(/_/g, "-").split("-");
-  if (!parts[0]) return "";
-  return parts.map((part, index) => index === 0 ? part.toLowerCase() : part.length === 4 ? part[0].toUpperCase() + part.slice(1).toLowerCase() : part.toUpperCase()).join("-");
-}
-function dataDirectoryProblem(value) {
-  const text5 = value.trim();
-  if (!text5) return null;
-  if (text5.includes("\0")) return "The path contains a NUL character.";
-  if (!(text5 === "~" || text5.startsWith("~/") || isAbsolute(text5))) return "Enter an absolute folder path or one starting with ~/.";
-  if (text5.split(/[\\/]/).some((part) => part === "..")) return "Path traversal (..) is not allowed.";
-  return null;
 }
 
 // src/note-path.ts
@@ -11754,74 +11980,30 @@ async function probeBbt(endpoint, timeoutMs = 5e3) {
   }
   try {
     const ready = await rpc(validated, "api.ready", [], timeoutMs);
-    if (!record(ready) || typeof ready.zotero !== "string" || typeof ready.betterbibtex !== "string") return { reachable: false, error: "Invalid BBT readiness response" };
+    if (!record(ready) || typeof ready.zotero !== "string" || !ready.zotero.trim() || typeof ready.betterbibtex !== "string" || !ready.betterbibtex.trim()) {
+      throw new BbtTransportError("invalid-response", validated, "Invalid BBT readiness response");
+    }
     return { reachable: true, zotero: ready.zotero, betterbibtex: ready.betterbibtex };
   } catch (error) {
-    return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable" };
+    const reason = transportReasonOf(error);
+    return { reachable: false, error: error instanceof Error ? error.message : "BBT unreachable", ...reason ? { reason } : {} };
   }
 }
 
 // src/cli/fs-vault.ts
 var import_yaml = __toESM(require_dist());
-import { promises as fs3 } from "node:fs";
-import { homedir } from "node:os";
-import { basename, isAbsolute as isAbsolute3, join as join2, relative, resolve as resolve2, sep } from "node:path";
-
-// src/local-file.ts
-import { constants, promises as fs } from "fs";
-import { isAbsolute as isAbsolute2, resolve } from "path";
-var LocalFileError = class extends Error {
-  constructor(code, message) {
-    super(message);
-    this.code = code;
-    this.name = "LocalFileError";
-  }
-};
-var MAGIC_HEAD_BYTES = 16;
-var DEFAULT_MIN_BYTES = 8;
-function matchesMagic(head, magic) {
-  if (typeof magic === "function") return magic(head);
-  const hex = Buffer.from(head).toString("hex");
-  return magic.some((prefix) => prefix.length > 0 && hex.startsWith(prefix.toLowerCase()));
-}
-async function readLocalFile(path, opts) {
-  const label = opts.label ?? "File";
-  const minBytes = opts.minBytes ?? DEFAULT_MIN_BYTES;
-  if (typeof path !== "string" || !isAbsolute2(path) || path.includes("\0")) throw new LocalFileError("not-absolute", `${label} must have an absolute local path`);
-  const absolute = resolve(path);
-  if (await fs.realpath(absolute) !== absolute) throw new LocalFileError("symlink", `Symlinked ${label.toLowerCase()} path refused`);
-  const handle = await fs.open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const stat = await handle.stat();
-    const pathStat = await fs.lstat(absolute);
-    if (await fs.realpath(absolute) !== absolute || pathStat.ino !== stat.ino || pathStat.dev !== stat.dev || pathStat.isSymbolicLink()) throw new LocalFileError("changed-during-open", `${label} path changed during open`);
-    if (!stat.isFile()) throw new LocalFileError("not-regular-file", `${label} path is not a regular file`);
-    if (stat.size < minBytes) throw new LocalFileError("too-small", `${label} size ${stat.size} is below the ${minBytes} byte minimum`);
-    if (stat.size > opts.maxBytes) throw new LocalFileError("too-large", `${label} size ${stat.size} exceeds the ${opts.maxBytes} byte limit`);
-    const bytes = new Uint8Array(stat.size);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const read = await handle.read(bytes, offset, bytes.length - offset, offset);
-      if (!read.bytesRead) throw new LocalFileError("changed-during-read", `${label} changed during read`);
-      offset += read.bytesRead;
-    }
-    if (!matchesMagic(bytes.subarray(0, Math.min(MAGIC_HEAD_BYTES, bytes.length)), opts.magic)) throw new LocalFileError("bad-magic", `${label} content does not match the expected format`);
-    const after = await handle.stat();
-    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new LocalFileError("changed-during-read", `${label} changed during read`);
-    return { bytes, mtimeMs: stat.mtimeMs };
-  } finally {
-    await handle.close();
-  }
-}
+import { promises as fs4 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { basename as basename2, isAbsolute as isAbsolute3, join as join3, relative, resolve as resolve3, sep } from "node:path";
 
 // src/frontmatter-read.ts
 function parseNoteText(text5, parse) {
   const source = text5.charCodeAt(0) === 65279 ? text5.slice(1) : text5;
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source);
+  const match = /^---\r?\n(?:([\s\S]*?)\r?\n)??---(?:\r?\n|$)/.exec(source);
   if (!match) return { frontmatter: null, frontmatterParse: /^---(?:\r?\n|$)/.test(source) ? "error" : "ok", body: source };
   const body = source.slice(match[0].length);
   try {
-    const value = parse(match[1]);
+    const value = parse(match[1] ?? "");
     if (value === null || value === void 0) return { frontmatter: {}, frontmatterParse: "ok", body };
     if (typeof value !== "object" || Array.isArray(value)) return { frontmatter: null, frontmatterParse: "error", body };
     return { frontmatter: value, frontmatterParse: "ok", body };
@@ -11831,8 +12013,8 @@ function parseNoteText(text5, parse) {
 }
 
 // src/vault-scan.ts
-import { promises as fs2 } from "node:fs";
-import { join } from "node:path";
+import { promises as fs3 } from "node:fs";
+import { join as join2 } from "node:path";
 var SCAN_CONCURRENCY = 8;
 async function* each(items) {
   yield* items;
@@ -11886,16 +12068,16 @@ function configDirOf(value) {
   if (typeof value !== "string" || !/^\.[^/\\]+$/.test(value) || value === ".." || value.includes("\0")) throw new Error("--config-dir must be one folder name that starts with a dot.");
   return value;
 }
-async function locateVault(name, explicitPath, home = homedir()) {
+async function locateVault(name, explicitPath, home = homedir2()) {
   if (explicitPath) {
     if (!isAbsolute3(explicitPath)) throw new Error("--vault-path must be absolute");
-    const real = await fs3.realpath(explicitPath);
+    const real = await fs4.realpath(explicitPath);
     return { location: { name, path: real }, ambiguous: false, candidates: [real] };
   }
-  const registry = join2(home, "Library", "Application Support", "obsidian", "obsidian.json");
+  const registry = join3(home, "Library", "Application Support", "obsidian", "obsidian.json");
   let raw;
   try {
-    raw = JSON.parse(await fs3.readFile(registry, "utf8"));
+    raw = JSON.parse(await fs4.readFile(registry, "utf8"));
   } catch {
     return { location: null, ambiguous: false, candidates: [] };
   }
@@ -11904,11 +12086,11 @@ async function locateVault(name, explicitPath, home = homedir()) {
   if (vaults && typeof vaults === "object") {
     for (const value of Object.values(vaults)) {
       const path = value && typeof value === "object" ? value.path : void 0;
-      if (typeof path === "string" && basename(path) === name) candidates.push(path);
+      if (typeof path === "string" && basename2(path) === name) candidates.push(path);
     }
   }
   if (candidates.length !== 1) return { location: null, ambiguous: candidates.length > 1, candidates };
-  return { location: { name, path: await fs3.realpath(candidates[0]) }, ambiguous: false, candidates };
+  return { location: { name, path: await fs4.realpath(candidates[0]) }, ambiguous: false, candidates };
 }
 function parseFrontmatter(text5) {
   return parseNoteText(text5, import_yaml.parse);
@@ -11934,10 +12116,10 @@ var FsVaultReader = class {
   }
   async resolveInside(path) {
     if (path.includes("\0") || path.includes("\\") || isAbsolute3(path)) throw new Error("Choose a vault-relative path.");
-    const target = resolve2(this.root, path);
+    const target = resolve3(this.root, path);
     const rel = relative(this.root, target);
     if (!rel || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute3(rel)) throw new Error("Path escapes the vault.");
-    const real = await fs3.realpath(target);
+    const real = await fs4.realpath(target);
     if (real !== target) throw new Error("Path resolves outside the vault.");
     return target;
   }
@@ -11949,14 +12131,14 @@ var FsVaultReader = class {
     yield { kind: "pass" };
     let entries;
     try {
-      entries = await fs3.readdir(dir, { withFileTypes: true });
+      entries = await fs4.readdir(dir, { withFileTypes: true });
     } catch {
       yield { kind: "skip", path: relative(this.root, dir).split(sep).join("/"), reason: "unreadable" };
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      const full = join2(dir, entry.name);
+      const full = join3(dir, entry.name);
       if (entry.isSymbolicLink()) {
         yield { kind: "skip", path: relative(this.root, full).split(sep).join("/"), reason: "symlink" };
         continue;
@@ -12004,7 +12186,7 @@ var FsVaultReader = class {
    */
   async findNote(path) {
     const candidates = notePathCandidates(path);
-    const present2 = await Promise.all(candidates.map((candidate2) => fs3.lstat(join2(this.root, candidate2)).then((stat) => stat.isFile(), () => false)));
+    const present2 = await Promise.all(candidates.map((candidate2) => fs4.lstat(join3(this.root, candidate2)).then((stat) => stat.isFile(), () => false)));
     if (!present2.some(Boolean)) return null;
     const wanted = new Set(candidates);
     let passed = 0;
@@ -12024,7 +12206,7 @@ var FsVaultReader = class {
   }
   async readNote(path) {
     const full = await this.resolveInside(path);
-    const stat = await fs3.stat(full);
+    const stat = await fs4.stat(full);
     if (!stat.isFile()) throw new Error(`Note not found: ${path}`);
     if (stat.size > MAX_NOTE_BYTES) throw new Error(`Note exceeds ${MAX_NOTE_BYTES / 1024 / 1024} MiB: ${path}`);
     return Buffer.from((await readLocalFile(full, { maxBytes: MAX_NOTE_BYTES, minBytes: 0, magic: () => true })).bytes).toString("utf8");
@@ -12032,7 +12214,7 @@ var FsVaultReader = class {
   async exists(path) {
     try {
       const full = await this.resolveInside(path);
-      return (await fs3.stat(full)).isFile();
+      return (await fs4.stat(full)).isFile();
     } catch {
       return false;
     }
@@ -12040,7 +12222,7 @@ var FsVaultReader = class {
   async readText(path, maxBytes) {
     try {
       const full = await this.resolveInside(path);
-      const stat = await fs3.stat(full);
+      const stat = await fs4.stat(full);
       if (!stat.isFile() || stat.size > maxBytes) return null;
       return Buffer.from((await readLocalFile(full, { maxBytes, minBytes: 0, magic: () => true })).bytes).toString("utf8");
     } catch {
@@ -12050,7 +12232,7 @@ var FsVaultReader = class {
   async statFile(path) {
     try {
       const full = await this.resolveInside(path);
-      const stat = await fs3.stat(full);
+      const stat = await fs4.stat(full);
       return stat.isFile() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null;
     } catch {
       return null;
@@ -12059,7 +12241,7 @@ var FsVaultReader = class {
   async listDir(path) {
     try {
       const full = await this.resolveInside(path);
-      return (await fs3.readdir(full)).sort();
+      return (await fs4.readdir(full)).sort();
     } catch {
       return [];
     }
@@ -12067,17 +12249,17 @@ var FsVaultReader = class {
   async isDirectory(path) {
     try {
       const full = await this.resolveInside(path);
-      return (await fs3.stat(full)).isDirectory();
+      return (await fs4.stat(full)).isDirectory();
     } catch {
       return false;
     }
   }
 };
 async function readPluginSettings(root, configDir) {
-  const legacyIndex = async (raw2) => !storesIndexPath(raw2) && await fs3.lstat(join2(root, LEGACY_DEFAULT_INDEX_PATH)).then(() => true, () => false);
+  const legacyIndex = async (raw2) => !storesIndexPath(raw2) && await fs4.lstat(join3(root, LEGACY_DEFAULT_INDEX_PATH)).then(() => true, () => false);
   let raw;
   try {
-    raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
+    raw = JSON.parse(await fs4.readFile(join3(root, configDir, "plugins", "cmds-zotero", "data.json"), "utf8"));
   } catch {
     return { settings: normalizeSettings({}, { legacyIndex: await legacyIndex({}) }), present: false };
   }
@@ -12085,7 +12267,7 @@ async function readPluginSettings(root, configDir) {
 }
 async function readEnabledPlugins(root, configDir) {
   try {
-    const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "community-plugins.json"), "utf8"));
+    const raw = JSON.parse(await fs4.readFile(join3(root, configDir, "community-plugins.json"), "utf8"));
     return Array.isArray(raw) ? raw.filter((v) => typeof v === "string") : null;
   } catch {
     return null;
@@ -12093,7 +12275,7 @@ async function readEnabledPlugins(root, configDir) {
 }
 async function readInstalledPluginVersion(root, configDir) {
   try {
-    const raw = JSON.parse(await fs3.readFile(join2(root, configDir, "plugins", "cmds-zotero", "manifest.json"), "utf8"));
+    const raw = JSON.parse(await fs4.readFile(join3(root, configDir, "plugins", "cmds-zotero", "manifest.json"), "utf8"));
     const version = raw && typeof raw === "object" ? raw.version : void 0;
     return typeof version === "string" ? version : null;
   } catch {
@@ -12103,22 +12285,22 @@ async function readInstalledPluginVersion(root, configDir) {
 
 // src/git-probe.ts
 import { execFile } from "node:child_process";
-import { promises as fs4 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { join as join3 } from "node:path";
+import { promises as fs5 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join4 } from "node:path";
 import { promisify } from "node:util";
 var execute = promisify(execFile);
 var MAX_IGNORE_BYTES = 256 * 1024;
 async function ignoreText(root, name) {
   try {
-    return Buffer.from((await readLocalFile(join3(root, name), { maxBytes: MAX_IGNORE_BYTES, minBytes: 0, magic: () => true })).bytes).toString("utf8");
+    return Buffer.from((await readLocalFile(join4(root, name), { maxBytes: MAX_IGNORE_BYTES, minBytes: 0, magic: () => true })).bytes).toString("utf8");
   } catch {
     return null;
   }
 }
 async function probeGit(root, indexPath) {
   try {
-    await fs4.lstat(join3(root, ".git"));
+    await fs5.lstat(join4(root, ".git"));
   } catch {
     return { repo: false, indexIgnored: null, cacheIgnored: null, indexTracked: null, cacheTracked: null };
   }
@@ -12166,7 +12348,7 @@ function pluginApiVersionsFor(version) {
 async function readIndex(root, path) {
   let full;
   try {
-    const reader = new FsVaultReader(root, basename2(root));
+    const reader = new FsVaultReader(root, basename3(root));
     full = await reader.resolveInside(path);
   } catch (error) {
     const missing = typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
@@ -12193,8 +12375,8 @@ function cacheReader(reader) {
     read: (path) => reader.readText(path, 32 * 1024 * 1024),
     statLocal: async (path) => {
       try {
-        if (await fs5.realpath(path) !== path) return null;
-        const stat = await fs5.lstat(path);
+        if (await fs6.realpath(path) !== path) return null;
+        const stat = await fs6.lstat(path);
         return stat.isFile() && !stat.isSymbolicLink() ? { size: stat.size, mtimeMs: stat.mtimeMs } : null;
       } catch {
         return null;
@@ -12217,13 +12399,13 @@ async function pdfPaths(root) {
     if (output.length >= 2e4) return;
     let entries;
     try {
-      entries = await fs5.readdir(dir, { withFileTypes: true });
+      entries = await fs6.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of entries) {
       if (entry.isSymbolicLink() || entry.name.startsWith(".")) continue;
-      const full = join4(dir, entry.name);
+      const full = join5(dir, entry.name);
       if (entry.isDirectory()) await walk(full);
       else if (entry.isFile() && entry.name.toLowerCase().endsWith(".pdf")) output.push(relative2(root, full).split(sep2).join("/"));
     }

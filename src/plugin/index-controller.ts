@@ -1,5 +1,5 @@
 import { Notice, TAbstractFile, TFile, TFolder } from "obsidian";
-import { describeRefreshFailure, formatIndexAge, refreshRefusal } from "../index-service";
+import { classifyRefreshError, describeRefreshFailure, formatIndexAge, refreshRefusal } from "../index-service";
 import type { IngestAPI } from "../ingest-api";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndex } from "../types";
@@ -115,7 +115,13 @@ export class IndexController {
 		const snapshot = await this.peekPublished();
 		if (!snapshot) {
 			try { return (await this.plugin.service.ensureIndex()).index; }
-			catch (error) { throw new Error(describeRefreshFailure(error, this.plugin.settings.bbtEndpoint, null)); }
+			catch (error) {
+				if (classifyRefreshError(error) !== "cancelled") {
+					this.state.failed();
+					this.state.announce(this.plugin.lastIndex?.generatedAt ?? "none", true);
+				}
+				throw new Error(describeRefreshFailure(error, this.plugin.settings.bbtEndpoint, null));
+			}
 		}
 		if (this.plugin.index.isStale(snapshot) === true) {
 			if (this.state.announce(snapshot.generatedAt)) new Notice(`Using the saved index from ${formatIndexAge(this.plugin.index.ageMinutes(snapshot))} ago; Zotero was not contacted. Refresh the index to update it.`);
@@ -167,7 +173,13 @@ export class IndexController {
 		await this.plugin.run(async () => {
 			let result: Awaited<ReturnType<IngestAPI["ensureIndex"]>>;
 			try { result = await this.plugin.service.ensureIndex(true); }
-			catch (error) { throw new Error(describeRefreshFailure(error, this.plugin.settings.bbtEndpoint, this.plugin.cachedIndexAgeMinutes())); }
+			catch (error) {
+				if (classifyRefreshError(error) !== "cancelled") {
+					this.state.failed();
+					this.state.announce(this.plugin.lastIndex?.generatedAt ?? "none", true);
+				}
+				throw new Error(describeRefreshFailure(error, this.plugin.settings.bbtEndpoint, this.plugin.cachedIndexAgeMinutes()));
+			}
 			new Notice(`Index refreshed: ${result.index.count} entries. ${result.index.complete ? "Complete." : "Review diagnostics for unresolved records."}`);
 		});
 		notice.hide();

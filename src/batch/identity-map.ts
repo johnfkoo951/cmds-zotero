@@ -70,11 +70,11 @@ export class IdentityMap {
 	/** True for the notes the map tracks: below the folder, or anywhere when it looks for moved notes (0.6.3). */
 	covers(path: string): boolean { return path.startsWith(this.prefix) || this.source.outside !== undefined; }
 
-	/** Sorted paths of the folder's notes whose `zoteroID` is `identity`; notes reported changed are read again first. */
+	/** Sorted paths of the folder's notes whose `zoteroID` is `identity` (or pre-0.5 owned notes carrying `ownerMarker(identity)`); notes reported changed are read again first. */
 	async pathsFor(identity: string): Promise<string[]> {
 		await this.catchUp();
 		if (this.failure) throw this.failure.error;
-		return [...(this.pathsOf.get(identity) ?? [])].sort();
+		return [...new Set([...(this.pathsOf.get(identity) ?? []), ...(this.pathsOf.get(ownerMarker(identity)) ?? [])])].sort();
 	}
 
 	/**
@@ -103,11 +103,12 @@ export class IdentityMap {
 		return [...inside, ...[...new Set(outside)].sort()];
 	}
 
-	/** The note's `zoteroID`; outside the folder only when the text carries that item's owner marker (a moved literature note). */
+	/** The note's `zoteroID` (or, inside the folder without `zoteroID`, its `ownerMarker`); outside the folder only when the text carries that item's owner marker (a moved literature note). */
 	private identityOf(path: string, text: string): string | null {
 		const id = noteZoteroID(text, this.source.parseYaml);
-		if (id === null || path.startsWith(this.prefix)) return id;
-		return text.includes(ownerMarker(id)) ? id : null;
+		if (id !== null) return path.startsWith(this.prefix) || text.includes(ownerMarker(id)) ? id : null;
+		if (!path.startsWith(this.prefix)) return null;
+		return /<!-- cmds-zotero-owner:[a-f0-9]{64} -->/.exec(text)?.[0] ?? null;
 	}
 
 	/** Applies reported changes, one round at a time; a round that starts while another runs waits for it. */

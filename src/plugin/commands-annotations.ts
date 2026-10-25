@@ -33,11 +33,17 @@ export function registerAnnotationCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.addCommand({ id: "annotations-unpin", name: "Annotations sidebar: unpin and follow the active note", callback: () => withView(view => view.pin(null)) });
 	// 0.6.1 annotation-search-insert: the saved snapshot's annotations, prepared once per index generation; never calls BBT.
 	plugin.addCommand({ id: "search-annotations", name: "Search annotations", callback: () => {
-		const entries = plugin.cachedEntries();
-		const rows = preparedSearchRows(entries, plugin.settings.excludedTags);
-		new AnnotationSearchModal(plugin.app, rows, searchEmptyText(plugin.indexLoaded(), rows.length), sourceLabel(null, plugin.cachedIndexAgeMinutes()), (row, action) => {
-			void plugin.run(() => chooseSearchRow(plugin, row, action));
-		}).open();
+		void plugin.run(async () => {
+			if (!plugin.indexLoaded()) {
+				await plugin.savedIndex();
+				if (!plugin.indexLoaded() && !plugin.warmBackoffActive()) void plugin.warmIndex();
+			}
+			const entries = plugin.cachedEntries();
+			const rows = preparedSearchRows(entries, plugin.settings.excludedTags);
+			new AnnotationSearchModal(plugin.app, rows, searchEmptyText(plugin.indexLoaded(), rows.length), sourceLabel(null, plugin.cachedIndexAgeMinutes()), (row, action) => {
+				void plugin.run(() => chooseSearchRow(plugin, row, action));
+			}).open();
+		});
 	} });
 	registerAnnotationDrop(plugin);
 	registerSelectionFollow(plugin);

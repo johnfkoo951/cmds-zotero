@@ -116,6 +116,7 @@ export interface ReferencesPayload {
 	/** 0.5 R10: `text` (default) or `markdown`; the structured formats use {@link StructuredReferencesPayload}. */
 	format: "text" | "markdown";
 	style: string;
+	locale?: string;
 	/** Heading reused for `markdown`: the note's own References heading when found, else `## References`. */
 	heading: string;
 	resolved: { citekey: string; text: string }[];
@@ -638,7 +639,7 @@ function unresolvedEntry(citekey: string, verdict: KeyVerdict | undefined): Refe
 }
 
 /** The `references` payload for `text`/`markdown`: resolved texts, unresolved keys with hints, the References block and `content`. */
-export function referencesPayload(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, bibliography: ReadonlyMap<string, string>, hubFullCitation: ReadonlyMap<string, string>, options: { format?: "text" | "markdown"; heading?: string; style?: string } = {}): ReferencesPayload {
+export function referencesPayload(keys: readonly string[], classified: ReadonlyMap<string, KeyVerdict>, bibliography: ReadonlyMap<string, string>, hubFullCitation: ReadonlyMap<string, string>, options: { format?: "text" | "markdown"; heading?: string; style?: string; locale?: string } = {}): ReferencesPayload {
 	const format = options.format ?? "text";
 	const heading = options.heading ?? DEFAULT_REFERENCES_HEADING;
 	const resolved: ReferencesPayload["resolved"] = [];
@@ -650,7 +651,7 @@ export function referencesPayload(keys: readonly string[], classified: ReadonlyM
 	}
 	const markdown = referencesMarkdown(keys, classified, bibliography, hubFullCitation, heading);
 	const content = format === "markdown" ? markdown : resolved.map(item => item.text).filter(Boolean).join("\n\n");
-	return { format, style: options.style ?? "", heading, resolved, unresolved, markdown, content };
+	return { format, style: options.style ?? "", ...(options.locale ? { locale: options.locale } : {}), heading, resolved, unresolved, markdown, content };
 }
 
 /** The `references` payload for `csl-json`/`bibtex`/`biblatex`; `merged` is null when the export was unavailable. */

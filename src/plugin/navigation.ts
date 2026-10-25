@@ -60,7 +60,7 @@ export class NavigationController {
 	async showCitingNotes(entry: ZoteroIndexEntry): Promise<void> {
 		const hits = await findCitingNotes(this.plugin.app.vault.getMarkdownFiles(), [entry.citekey, ...entry.citekeyHistory], file => this.plugin.app.vault.cachedRead(file));
 		new ActionsModal(this.plugin.app, `Notes citing @${entry.citekey}`, hits.length ? hits.map(hit => ({
-			name: hit.file.path, description: `${hit.count} citation${hit.count === 1 ? "" : "s"}`,
+			name: hit.file.path, description: `${hit.count} citation${hit.count === 1 ? "" : "s"}${hit.snippet ? ` · ${hit.snippet}` : ""}`,
 			action: async () => { const leaf = this.plugin.app.workspace.getLeaf(false); await leaf.openFile(hit.file, { eState: { line: hit.line } }); },
 		})) : [{ name: "No citing notes", description: "No [@citekey], @citekey, or [[@citekey]] occurrences were found in this vault.", action: () => {} }]).open();
 	}

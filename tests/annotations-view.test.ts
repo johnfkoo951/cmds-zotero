@@ -370,3 +370,60 @@ test("an item without annotations says so whatever filter is carried over", asyn
 	view.pin(failed);
 	assert.equal(message(), "Attachment lookup failed at the last refresh. Refresh the index.");
 });
+
+test("copy-quote action, attachment-scoped continuations, search compositionend, and IME-guarded card keyboard navigation", async () => {
+	const copied: string[] = [];
+	Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: (text: string) => { copied.push(text); return Promise.resolve(); } } }, configurable: true });
+	const multiAttachmentItem: ZoteroIndexEntry = {
+		...item(5, []),
+		attachments: [
+			attachment("ATTA0001", [
+				note("SAME0001", 1, { attachmentKey: "ATTA0001", text: "First part" }),
+				note("SAME0002", 1, { attachmentKey: "ATTA0001", text: "Second part", comment: "+ continued" }),
+			]),
+			attachment("ATTA0002", [
+				note("SAME0002", 2, { attachmentKey: "ATTA0002", text: "Independent highlight in second attachment" }),
+			]),
+		],
+	};
+	const { view, plugin, find, cards, mod } = await sidebar({ entries: [multiAttachmentItem] });
+	(plugin as { settings: typeof DEFAULT_SETTINGS }).settings = { ...DEFAULT_SETTINGS, joinContinuations: true };
+	view.pin(multiAttachmentItem);
+
+	// Attachment-scoped continuations: only ATTA0001:SAME0002 has the continuation badge, not ATTA0002:SAME0002.
+	const renderedCards = find(el => el.classes.has("cmds-zotero-annotation"));
+	assert.equal(renderedCards.length, 3);
+	const badgesPerCard = renderedCards.map(card => card.all().some(el => el.classes.has("cmds-zotero-annotation-continuation")));
+	assert.deepEqual(badgesPerCard, [false, true, false]);
+
+	// Search compositionend updates the filter query.
+	const search = find(el => el.tag === "input")[0];
+	search.value = "Independent";
+	search.dispatch("compositionend");
+	mod.obs.flushDebounced();
+	assert.deepEqual(cards(), ["Independent highlight in second attachment"]);
+	search.value = "";
+	search.dispatch("compositionend");
+	mod.obs.flushDebounced();
+	assert.equal(cards().length, 3);
+
+	// Keyboard navigation (ArrowDown / ArrowUp) and IME guard on cards.
+	const firstCard = renderedCards[0] as FakeEl & { listeners: Record<string, ((event: unknown) => void)[]> };
+	const secondCard = renderedCards[1] as FakeEl & { listeners: Record<string, ((event: unknown) => void)[]> };
+	firstCard.dispatch("focusin");
+	assert.ok(firstCard.classes.has("is-focused"));
+	for (const listener of firstCard.listeners.keydown) listener({ key: "ArrowDown", isComposing: true });
+	for (const listener of firstCard.listeners.keydown) listener({ key: "ArrowDown", keyCode: 229 });
+	assert.ok(firstCard.classes.has("is-focused"), "IME composition blocks ArrowDown navigation");
+	for (const listener of firstCard.listeners.keydown) listener({ key: "ArrowDown", isComposing: false });
+	assert.ok(secondCard.classes.has("is-focused"), "ArrowDown moves focus to next visible card");
+	for (const listener of secondCard.listeners.keydown) listener({ key: "ArrowUp", isComposing: false });
+	assert.ok(firstCard.classes.has("is-focused"), "ArrowUp moves focus to previous visible card");
+
+	// copy-quote action copies the joined quote with citation.
+	const v = view as unknown as { runFocusedAction(id: string): Promise<void> };
+	await v.runFocusedAction("copy-quote");
+	assert.equal(copied.length, 1);
+	assert.match(copied[0], /^> First part … Second part\n> — \[@synthetic2026item5, p\. 1\]/);
+});
+

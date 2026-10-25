@@ -52,9 +52,15 @@ export function zoteroTime(value: unknown): number | null {
 	return Number.isFinite(time) ? time : null;
 }
 
-/** The latest change Zotero recorded for the item: its `dateModified` and its annotations' `dateModified`. Null when none is readable. */
+/** The latest change Zotero recorded for the item: its `dateModified`, its child notes' `dateModified` and its annotations' `dateModified`. Null when attachments are unavailable or none is readable. */
 export function lastZoteroChange(entry: ZoteroIndexEntry): number | null {
-	const times = [zoteroTime(entry.metadata.dateModified), ...entry.attachments.flatMap(attachment => [...attachment.annotations, ...attachment.readerAnnotations ?? []].map(annotation => zoteroTime(annotation.dateModified)))].filter((time): time is number => time !== null);
+	if (entry.attachmentStatus === "unavailable") return null;
+	const notes: unknown[] = Array.isArray(entry.metadata.notes) ? entry.metadata.notes : [];
+	const times = [
+		zoteroTime(entry.metadata.dateModified),
+		...notes.map(note => note && typeof note === "object" ? zoteroTime((note as Record<string, unknown>).dateModified) : null),
+		...entry.attachments.flatMap(attachment => [...attachment.annotations, ...attachment.readerAnnotations ?? []].map(annotation => zoteroTime(annotation.dateModified))),
+	].filter((time): time is number => time !== null);
 	return times.length ? Math.max(...times) : null;
 }
 

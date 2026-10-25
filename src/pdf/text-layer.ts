@@ -11,8 +11,10 @@ export const MIN_PAGE_BODY_CHARS = 20;
 export interface TextLayerReport {
 	/** `full`: (nearly) every page has text; `partial`: many pages have none; `none`: no page has body text. */
 	textLayer: "full" | "partial" | "none";
+	status?: "full" | "partial" | "none";
 	/** One-based positions of pages without body text. */
 	emptyPages: number[];
+	pageCount?: number;
 	/** Body characters across the document (whitespace and repeated watermark lines excluded). */
 	bodyChars: number;
 	/** True when the text layer is missing on the whole document or a large part of it. */
@@ -40,13 +42,24 @@ export function textLayerReport(pages: readonly PageText[]): TextLayerReport {
 	const bodies = pageLines.map(list => list.filter(line => (occurrences.get(repeatKey(line)) ?? 0) < repeatedAt).reduce((sum, line) => sum + visibleLength(line), 0));
 	const emptyPages = pages.filter((_, position) => bodies[position] < MIN_PAGE_BODY_CHARS).map(page => page.page);
 	const bodyChars = bodies.reduce((sum, chars) => sum + chars, 0);
-	const textLayer = !pages.length || emptyPages.length === pages.length ? "none" : emptyPages.length > Math.max(2, pages.length * 0.2) ? "partial" : "full";
+	const textLayer = !pages.length || emptyPages.length === pages.length ? "none" : emptyPages.length * 2 >= pages.length || emptyPages.length > Math.max(2, pages.length * 0.2) ? "partial" : "full";
 	return { textLayer, emptyPages, bodyChars, ocrRecommended: textLayer === "none" || (textLayer === "partial" && emptyPages.length * 2 >= pages.length) };
 }
 
+export interface TextLayerSummary {
+	textLayer?: "full" | "partial" | "none";
+	status?: "full" | "partial" | "none";
+	emptyPages: readonly number[];
+	pageCount?: number;
+	bodyChars?: number;
+	ocrRecommended: boolean;
+}
+
 /** The warning an agent sees when the text layer is missing; null for a normal text PDF. */
-export function textLayerWarning(report: TextLayerReport, pageCount: number): string | null {
-	if (report.textLayer === "full") return null;
-	if (report.textLayer === "none") return `No text layer: none of the ${pageCount} pages has extractable body text (a scanned PDF). Run OCR before reading or quoting it; locate cannot verify quotes in it.`;
-	return `Partial text layer: ${report.emptyPages.length} of ${pageCount} pages have no extractable body text (figure-only, blank or scanned pages)${report.ocrRecommended ? "; run OCR for them before relying on the text" : "; if those pages are scanned text, run OCR for them"}.`;
+export function textLayerWarning(report: TextLayerReport | TextLayerSummary, pageCount?: number): string | null {
+	const kind = ("status" in report && report.status ? report.status : report.textLayer) ?? "full";
+	const total = pageCount ?? ("pageCount" in report && typeof report.pageCount === "number" ? report.pageCount : report.emptyPages.length);
+	if (kind === "full") return null;
+	if (kind === "none") return `No text layer: none of the ${total} pages has extractable body text (a scanned PDF). Run OCR before reading or quoting it; locate cannot verify quotes in it.`;
+	return `Partial text layer: ${report.emptyPages.length} of ${total} pages have no extractable body text (figure-only, blank or scanned pages)${report.ocrRecommended ? "; run OCR for them before relying on the text" : "; if those pages are scanned text, run OCR for them"}.`;
 }

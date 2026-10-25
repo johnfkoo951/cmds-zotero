@@ -5,10 +5,10 @@ import assert from "node:assert/strict";
 import { parse } from "yaml";
 import { DEFAULT_SETTINGS, type ZoteroIndexEntry } from "../src/types";
 import { DEFAULT_FILENAME_PATTERN, newNotePath, noteFilename, notePatternProblem, noteSubfolders, sanitizeSegment } from "../src/note-path";
-import { managedBlock, ownerMarker, renderLiterature, sectionGroup } from "../src/note-writer";
+import { managedBlock, ownerMarker, renderLiterature, sectionGroup, literatureSections } from "../src/note-writer";
 import { repairManagedMarkers } from "../src/note-repair";
 import { editFrontmatterLines, frontmatterRefreshChanges, legacyKeysIn, mergedItemCandidates, relinkBody, relinkEdit, verifyFrontmatterEdit } from "../src/note-frontmatter";
-import { AdoptIndex, adoptCandidates, adoptedNoteText, adoptRefusal, hasBetterNotesSync } from "../src/note-adopt";
+import { AdoptIndex, adoptCandidates, adoptIdentityEdit, adoptedNoteText, adoptRefusal, hasBetterNotesSync } from "../src/note-adopt";
 import { includedRows, lastZoteroChange, localDayStart, planSummary, reviewRow, scopeEntries, unchangedReason, zoteroTime } from "../src/batch/plan";
 import { doctorChecks } from "../src/doctor/checks";
 import { IdentityMap } from "../src/batch/identity-map";
@@ -69,6 +69,11 @@ test("selective-update-scope: groups outside the scope stay byte for byte; new a
 	assert.deepEqual(renderLiterature(later, bib, DEFAULT_SETTINGS, withoutNotes).conflicts, ["Missing managed section: notes"]);
 	assert.equal(sectionGroup("annotation-ATTACHA1-ANNOTAA1"), "annotations");
 	assert.equal(sectionGroup("citation"), "citation");
+	// Bug 17: literatureSections only pushes to images when scope is absent or includes annotations.
+	const withImage = entry({ attachments: [{ key: "ATTACHA1", openURI: "", path: null, title: "PDF", annotations: [{ ...annotation("ANNOTAA1", ""), imagePath: "/synthetic/img.png" }] }] });
+	const imageHashes = new Map([["/synthetic/img.png", "a".repeat(64)]]);
+	assert.equal(literatureSections(withImage, bib, DEFAULT_SETTINGS, false, new Map(), { scope: ["metadata"] }).images.length, 0);
+	assert.equal(literatureSections(withImage, bib, DEFAULT_SETTINGS, false, imageHashes, { scope: ["annotations"] }).images.length, 1);
 });
 
 test("rebuild-or-repair-note: duplicates, stray markers and missing sections are repaired; user lines stay", () => {
@@ -99,6 +104,16 @@ test("rebuild-or-repair-note: duplicates, stray markers and missing sections are
 	assert.ok(rendered.content.indexOf("cmds-zotero:citation:") < rendered.content.indexOf("cmds-zotero:metadata:"));
 	assert.ok(rendered.content.indexOf("cmds-zotero:metadata:") < rendered.content.indexOf("cmds-zotero:notes:"));
 	assert.deepEqual(repairManagedMarkers(note, owner), { text: note, repairs: [] }, "a sound note is left as it is");
+	// Bug 11: an unclosed opening marker before a same-ID well-formed block is stripped, never swallowed into the body.
+	const withUnclosedBefore = note.replace("<!-- cmds-zotero:citation:", `<!-- cmds-zotero:citation:${"f".repeat(64)} -->\nStray text before block\n<!-- cmds-zotero:citation:`);
+	const repairedUnclosed = repairManagedMarkers(withUnclosedBefore, owner);
+	assert.ok(repairedUnclosed.repairs.some(line => /Removed a damaged marker of citation/.test(line)));
+	assert.ok(repairedUnclosed.text.includes("Stray text before block"));
+	assert.deepEqual(renderLiterature(item, bib, DEFAULT_SETTINGS, repairedUnclosed.text).conflicts, []);
+	// Bug 9: CRLF duplicate unedited blocks are recognized and removed.
+	const crlfDuplicated = note.replace(/\n/g, "\r\n") + "\r\n" + metadata.replace(/\n/g, "\r\n");
+	const repairedCrlf = repairManagedMarkers(crlfDuplicated, owner);
+	assert.ok(repairedCrlf.repairs.some(line => /Removed a second, unedited copy of metadata/.test(line)));
 });
 
 test("frontmatter line patch: set keeps quoting and list layout, remove takes continuation lines, others byte for byte", () => {
@@ -172,6 +187,12 @@ test("adopt-existing-notes: matching never picks a first match; identity keys ar
 	assert.match(updated.content, /<!-- cmds-zotero:annotation-ATTACHA1-ANNOTAA1:[a-f0-9]{64} -->/);
 	const clash = adoptedNoteText("---\nzoteroID: 1:OTHEROTH\n---\n", { zoteroID: "1:OTHEROTH" }, item, sections, DEFAULT_SETTINGS);
 	assert.deepEqual(clash, { refuse: "zoteroID in the note names another item (1:OTHEROTH)" });
+	// Bug 14: whitespace-only strings are treated as empty, and zoteroSelectURI is validated by full identity scope.
+	const blankKeys = adoptIdentityEdit({ zoteroID: "   ", zoteroSelectURI: "\t", "zotero-key": "  ", citekey: "  " }, item);
+	assert.ok("edit" in blankKeys);
+	assert.deepEqual(blankKeys.edit.set, { zoteroID: item.id, zoteroSelectURI: item.zoteroSelectURI, "zotero-key": item.itemKey, citekey: item.citekey });
+	const wrongLibrary = adoptIdentityEdit({ zoteroSelectURI: "zotero://select/groups/99/items/ITEMAAA1" }, item);
+	assert.deepEqual(wrongLibrary, { refuse: "zoteroSelectURI in the note names another item (zotero://select/groups/99/items/ITEMAAA1)" });
 });
 
 test("batch plans: review rows, summary, changed-since and Zotero dates", () => {
@@ -190,6 +211,10 @@ test("batch plans: review rows, summary, changed-since and Zotero dates", () => 
 	assert.equal(unchangedReason(item, { kind: "note" }, Date.UTC(2024, 4, 1)), null);
 	assert.equal(unchangedReason(item, { kind: "date", time: localDayStart("2024-07-01") ?? 0 }, null), "no change in Zotero since 2024-07-01");
 	assert.equal(unchangedReason(entry({ metadata: {} }), { kind: "date", time: Date.UTC(2030, 0, 1) }, null), null, "an unknown date is never proof of no change");
+	// Bug 12: unavailable attachments return null from lastZoteroChange, and child note dateModified is included.
+	assert.equal(lastZoteroChange(entry({ attachmentStatus: "unavailable" })), null);
+	const withChildNote = entry({ metadata: { dateModified: "2024-05-01T10:00:00Z", notes: [{ note: "<p>x</p>", dateModified: "2024-08-15T12:00:00Z" }] } });
+	assert.equal(lastZoteroChange(withChildNote), Date.UTC(2024, 7, 15, 12));
 	assert.equal(localDayStart("2024-02-30"), null);
 	assert.equal(localDayStart("2024-02-03"), new Date(2024, 1, 3).getTime());
 });

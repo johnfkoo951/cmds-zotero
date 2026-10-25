@@ -71,7 +71,7 @@ function attribute(tag: string, name: string): string | undefined {
  * only the first `<info>` block is read, so a malformed rest of the file never matters.
  */
 export function parseCslInfo(xml: string): CslStyleInfo | null {
-	const text = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
+	const text = (xml.charCodeAt(0) === 0xfeff ? xml.slice(1) : xml).replace(/<!--[\s\S]*?-->/g, "");
 	const info = /<info(?:\s[^>]*)?>([\s\S]*?)<\/info>/.exec(text);
 	if (!info) return null;
 	const element = (name: string): string | undefined => {
@@ -102,8 +102,11 @@ export function sameStyle(left: string, right: string): boolean {
 
 /** The installed style a stored value names, matched by id, by short name or by file name (`apa.csl`), or null. */
 export function findStyle(styles: readonly InstalledStyle[], value: string): InstalledStyle | null {
-	const key = styleKey(value);
-	return styles.find(style => style.key === key) ?? styles.find(style => style.file.replace(/\.csl$/i, "") === key) ?? null;
+	const raw = styleKey(value);
+	const key = raw.replace(/\.csl$/i, "");
+	return styles.find(style => style.key === raw || style.key === key)
+		?? styles.find(style => style.file.replace(/\.csl$/i, "") === key)
+		?? null;
 }
 
 /** The independent style whose file pandoc can use for `style`: the style itself, or its installed parent. */

@@ -104,6 +104,122 @@ export type LayoutSettings = Pick<CmdsZoteroSettings,
 	"noteAbstract" | "noteCitation" | "noteMetadata" | "noteLinks" | "noteZoteroNotes" | "noteSynthesis" |
 	"calloutAbstract" | "calloutCite" | "calloutMetadata" | "calloutLinks" | "calloutSynthesis" | "synthesisLines" | "annotationsHeading" | "noteItemTypeFields" | "joinContinuations" | "noteRichText">;
 
+export type LayoutProfileId = "cmds-default" | "reading-first" | "compact" | "metadata-only" | "custom";
+export type PresetLayoutProfileId = Exclude<LayoutProfileId, "custom">;
+
+export interface LayoutProfile {
+	id: PresetLayoutProfileId;
+	name: string;
+	label: string;
+	description: string;
+	settings: LayoutSettings;
+}
+
+const BASE_LAYOUT_SETTINGS: LayoutSettings = {
+	noteAbstract: true,
+	noteCitation: true,
+	noteMetadata: true,
+	noteLinks: true,
+	noteZoteroNotes: true,
+	noteSynthesis: true,
+	calloutAbstract: DEFAULT_CALLOUTS.abstract,
+	calloutCite: DEFAULT_CALLOUTS.cite,
+	calloutMetadata: DEFAULT_CALLOUTS.metadata,
+	calloutLinks: DEFAULT_CALLOUTS.links,
+	calloutSynthesis: DEFAULT_CALLOUTS.synthesis,
+	synthesisLines: [...DEFAULT_SYNTHESIS_LINES],
+	annotationsHeading: DEFAULT_ANNOTATIONS_HEADING,
+	noteItemTypeFields: false,
+	joinContinuations: false,
+	noteRichText: false,
+};
+
+const LAYOUT_PROFILE_LIST: readonly LayoutProfile[] = [
+	{
+		id: "cmds-default",
+		name: "CMDS default",
+		label: "CMDS default",
+		description: "The standard CMDS Zotero note layout with all sections and fixed metadata fields.",
+		settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES] },
+	},
+	{
+		id: "reading-first",
+		name: "Reading first",
+		label: "Reading first",
+		description: "Rich text, joined highlight continuations and item-type metadata fields for active reading.",
+		settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES], noteItemTypeFields: true, joinContinuations: true, noteRichText: true },
+	},
+	{
+		id: "compact",
+		name: "Compact",
+		label: "Compact",
+		description: "Citation, metadata, links and joined rich-text annotations without abstract, Zotero notes or synthesis scaffold.",
+		settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES], noteAbstract: false, noteZoteroNotes: false, noteSynthesis: false, joinContinuations: true, noteRichText: true },
+	},
+	{
+		id: "metadata-only",
+		name: "Metadata only",
+		label: "Metadata only",
+		description: "Abstract, bibliography, item-type metadata and links without Zotero notes or synthesis scaffold.",
+		settings: { ...BASE_LAYOUT_SETTINGS, synthesisLines: [...DEFAULT_SYNTHESIS_LINES], noteZoteroNotes: false, noteSynthesis: false, noteItemTypeFields: true },
+	},
+];
+
+export const LAYOUT_PROFILES: readonly LayoutProfile[] & Readonly<Record<PresetLayoutProfileId, LayoutProfile>> = Object.assign(
+	[...LAYOUT_PROFILE_LIST],
+	Object.fromEntries(LAYOUT_PROFILE_LIST.map(profile => [profile.id, profile])) as Record<PresetLayoutProfileId, LayoutProfile>,
+);
+
+function sameLayout(a: LayoutOptions, b: LayoutOptions): boolean {
+	return a.abstract === b.abstract
+		&& a.citation === b.citation
+		&& a.metadata === b.metadata
+		&& a.links === b.links
+		&& a.zoteroNotes === b.zoteroNotes
+		&& a.synthesis === b.synthesis
+		&& a.callouts.abstract === b.callouts.abstract
+		&& a.callouts.cite === b.callouts.cite
+		&& a.callouts.metadata === b.callouts.metadata
+		&& a.callouts.links === b.callouts.links
+		&& a.callouts.synthesis === b.callouts.synthesis
+		&& a.synthesisLines.length === b.synthesisLines.length
+		&& a.synthesisLines.every((line, index) => line === b.synthesisLines[index])
+		&& a.annotationsHeading === b.annotationsHeading
+		&& a.itemTypeFields === b.itemTypeFields
+		&& a.joinContinuations === b.joinContinuations
+		&& a.richText === b.richText;
+}
+
+export function detectLayoutProfile(settings: Partial<LayoutSettings>): LayoutProfileId {
+	const current = layoutOf(settings);
+	for (const profile of LAYOUT_PROFILE_LIST) {
+		if (sameLayout(current, layoutOf(profile.settings))) return profile.id;
+	}
+	return "custom";
+}
+
+export function applyLayoutProfile(target: Partial<LayoutSettings>, profile: Exclude<LayoutProfileId, "custom">): void {
+	const found = LAYOUT_PROFILE_LIST.find(item => item.id === profile);
+	if (!found) return;
+	const { settings } = found;
+	target.noteAbstract = settings.noteAbstract;
+	target.noteCitation = settings.noteCitation;
+	target.noteMetadata = settings.noteMetadata;
+	target.noteLinks = settings.noteLinks;
+	target.noteZoteroNotes = settings.noteZoteroNotes;
+	target.noteSynthesis = settings.noteSynthesis;
+	target.calloutAbstract = settings.calloutAbstract;
+	target.calloutCite = settings.calloutCite;
+	target.calloutMetadata = settings.calloutMetadata;
+	target.calloutLinks = settings.calloutLinks;
+	target.calloutSynthesis = settings.calloutSynthesis;
+	target.synthesisLines = [...settings.synthesisLines];
+	target.annotationsHeading = settings.annotationsHeading;
+	target.noteItemTypeFields = settings.noteItemTypeFields;
+	target.joinContinuations = settings.joinContinuations;
+	target.noteRichText = settings.noteRichText;
+}
+
 /** The layout a note is rendered with; every value is normalised again, so a hand-built settings object is safe. */
 export function layoutOf(settings: Partial<LayoutSettings>): LayoutOptions {
 	const on = (value: unknown): boolean => value !== false;

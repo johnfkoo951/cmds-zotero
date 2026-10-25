@@ -35,8 +35,12 @@ const ACTION_SINCE = { recent: '0.5', import: '0.5', annotations: '0.6', citing:
 const LATER_ACTIONS = new Set(Object.keys(ACTION_SINCE));
 // Request features added to an existing action later (0.6.1): an older host does not list them in service.features and is
 // refused before submission (plugin-too-old), so a new flag is never silently dropped or rejected as an invalid request.
-const FEATURE_SINCE = { 'diagnostics-env': '0.6.1' };
-const requestedFeature = () => (action === 'diagnostics' && request.env === true ? 'diagnostics-env' : null);
+const FEATURE_SINCE = { 'diagnostics-env': '0.6.1', 'import-modes': '0.6.3' };
+const requestedFeature = () => {
+	if (action === 'diagnostics' && request.env === true) return 'diagnostics-env';
+	if (action === 'import' && (request.adopt !== undefined || request.rebuild === true || request.scope !== undefined)) return 'import-modes';
+	return null;
+};
 const V1_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 1);
 const V2_ACTIONS = Object.keys(ACTION_API_VERSION).filter(action => ACTION_API_VERSION[action] === 2);
 const OFFLINE_CAPABLE = new Set(['connection', 'info', 'resolve', 'identity', 'cites', 'reconcile', 'diagnostics', 'locate', 'annotations', 'citing']);
@@ -65,6 +69,7 @@ const FLAGS = {
 	'--raw-source': { type: 'string', actions: ['identity'], help: 'Raw Source wikilink for the S01 block' },
 	'--attachment': { type: 'string', actions: ['identity', 'pdf-text', 'locate', 'annotations'], help: 'Attachment key when an item has several PDFs; annotations: only that attachment' },
 	'--style': { type: 'string', actions: ['identity', 'cites'], help: 'CSL style id (default from settings)' },
+	'--locale': { type: 'string', actions: ['identity', 'cites'], help: 'BCP 47 bibliography locale such as en-US or ko-KR (default from note lang or settings)' },
 	'--no-bibliography': { type: 'boolean', actions: ['identity'], help: 'Skip the BBT bibliography call' },
 	'--path': { type: 'string', actions: ['cites', 'locate'], help: 'Vault-relative file or folder' },
 	'--recursive': { type: 'boolean', actions: ['cites'], help: 'Recurse into folders' },
@@ -88,6 +93,10 @@ const FLAGS = {
 	'--tag': { type: 'string', actions: ['annotations'], help: 'Only annotations carrying this tag (case-insensitive)' },
 	// 0.6.1
 	'--env': { type: 'boolean', actions: ['diagnostics'], help: 'Add report-only setup checks (Zotero/BBT versions, legacy plugin, index, Git, pdf.js, other vaults, output folder, Obsidian bridge) as environment.checks' },
+	// 0.6.3
+	'--adopt': { type: 'string', actions: ['import'], help: 'Adopt this vault-relative note as the literature note (L1 frontmatter + L2 append; live only)' },
+	'--rebuild': { type: 'boolean', actions: ['import'], help: 'Repair damaged, duplicate or missing managed markers of the owned note before refreshing it' },
+	'--scope': { type: 'string', actions: ['import'], help: 'Refresh only these comma-separated section groups: overview,citation,metadata,notes,annotations' },
 	'--if-older-than': { type: 'integer', actions: ['refresh'], min: 1, max: 10080, help: 'Refresh only when the index is older than N minutes' },
 };
 
@@ -160,11 +169,20 @@ if (['pdf-text', 'locate'].includes(action)) {
 	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
 }
 if (action === 'cites' && !('--path' in parsed.values)) fail('cites needs --path.');
+const IMPORT_SCOPES = ['overview', 'citation', 'metadata', 'notes', 'annotations'];
 if (action === 'import') {
 	const given = ['--citekey', '--item-key'].filter(name => name in parsed.values);
-	if (given.length !== 1) fail('import needs exactly one selector: --citekey | --item-key --library.');
+	const adopting = typeof parsed.values['--adopt'] === 'string' && parsed.values['--adopt'].trim().length > 0;
+	if (adopting ? given.length > 1 : given.length !== 1) fail('import needs exactly one selector: --citekey | --item-key --library (optional with --adopt).');
 	if ('--item-key' in parsed.values && (!/^[A-Z0-9]{8}$/.test(parsed.values['--item-key']) || !('--library' in parsed.values))) fail('--item-key requires eight characters and --library.');
+	if ('--adopt' in parsed.values && !adopting) fail('--adopt must not be empty.');
+	if ('--adopt' in parsed.values && '--rebuild' in parsed.values) fail('--adopt and --rebuild cannot be combined.');
+	if ('--scope' in parsed.values) {
+		const groups = parsed.values['--scope'].split(',').map(s => s.trim()).filter(Boolean);
+		if (!groups.length || groups.some(g => !IMPORT_SCOPES.includes(g))) fail(`--scope must be comma-separated values from ${IMPORT_SCOPES.join(', ')}.`);
+	}
 }
+if ('--locale' in parsed.values && !/^[A-Za-z]{2,3}(?:[-_][A-Za-z]{4})?(?:[-_](?:[A-Za-z]{2}|[0-9]{3}))?$/.test(parsed.values['--locale'].trim())) fail('--locale must be a BCP 47 locale such as en-US, de-DE or ko-KR.');
 // 0.6
 const ANNOTATION_COLORS = ['yellow', 'red', 'green', 'blue', 'purple', 'magenta', 'orange', 'gray'];
 const ANNOTATION_TYPES = ['highlight', 'underline', 'note', 'text', 'image', 'ink'];
@@ -184,9 +202,10 @@ if (action === 'cites' && '--format' in parsed.values && !BIBLIOGRAPHY_FORMATS.i
 if (action === 'cites' && ('--format' in parsed.values || '--out' in parsed.values || '--force' in parsed.values) && !('--bibliography' in parsed.values)) fail('--format, --out and --force need --bibliography.');
 
 let request = {};
-const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict', '--today': 'today', '--fresh': 'fresh', '--color': 'color', '--type': 'type', '--tag': 'tag', '--env': 'env' };
+const map = { '--days': 'days', '--format': 'format', '--out': 'out', '--citekey': 'citekey', '--item-key': 'itemKey', '--library': 'libraryID', '--doi': 'doi', '--arxiv': 'arxiv', '--title': 'title', '--query': 'query', '--year': 'year', '--author': 'author', '--raw-source': 'rawSource', '--attachment': 'attachment', '--style': 'style', '--locale': 'locale', '--no-bibliography': 'noBibliography', '--path': 'path', '--recursive': 'recursive', '--bibliography': 'bibliography', '--folders': 'folders', '--apply': 'apply', '--file': 'file', '--pages': 'pages', '--force': 'force', '--quote': 'quote', '--if-older-than': 'ifOlderThanMinutes', '--allow-stale': 'allowStale', '--refresh': 'refresh', '--strict': 'strict', '--today': 'today', '--fresh': 'fresh', '--color': 'color', '--type': 'type', '--tag': 'tag', '--env': 'env', '--adopt': 'adopt', '--rebuild': 'rebuild', '--scope': 'scope' };
 for (const [name, key] of Object.entries(map)) if (name in parsed.values) request[key] = parsed.values[name];
 if (request.folders) request.folders = request.folders.split(',').map(s => s.trim()).filter(Boolean);
+if (request.scope) request.scope = [...new Set(request.scope.split(',').map(s => s.trim()).filter(Boolean))];
 const pollOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_POLL_MS ?? '') ? Number(process.env.CMDS_ZOTERO_POLL_MS) : null;
 const delayOverride = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.CMDS_ZOTERO_DELAY_MS ?? '') ? Number(process.env.CMDS_ZOTERO_DELAY_MS) : null;
 const timeoutMs = pollOverride ?? (parsed.values['--timeout'] ?? (action === 'pdf-text' ? 900 : 300)) * 1000;
@@ -344,7 +363,7 @@ async function produce() {
 		}
 		if (bridge.kind === 'invalid-request') return structuredFailure('invalid-request', bridge.message, true, presentPluginConnection(bridge.apiVersions));
 		if (bridge.kind === 'plugin-error' || bridge.kind === 'timeout') return structuredFailure(bridge.kind === 'timeout' ? 'timeout' : 'requires-obsidian', bridge.message);
-		if (bridge.kind === 'too-old-feature') return structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not accept ${bridge.feature === 'diagnostics-env' ? '--env' : bridge.feature} for ${action}; install CMDS Zotero ${FEATURE_SINCE[bridge.feature]} or later and reload it. Add --offline to answer from the saved index file instead.`, true, presentPluginConnection(bridge.apiVersions));
+		if (bridge.kind === 'too-old-feature') return structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not accept ${bridge.feature === 'diagnostics-env' ? '--env' : bridge.feature === 'import-modes' ? '--adopt, --rebuild or --scope' : bridge.feature} for ${action}; install CMDS Zotero ${FEATURE_SINCE[bridge.feature]} or later and reload it.${OFFLINE_CAPABLE.has(action) && !liveWrite ? ' Add --offline to answer from the saved index file instead.' : ''}`, true, presentPluginConnection(bridge.apiVersions));
 		if (bridge.kind === 'too-old-action') return structuredFailure('plugin-too-old', `The loaded CMDS Zotero plugin does not provide the ${action} action; install CMDS Zotero ${ACTION_SINCE[action]} or later and reload it.${OFFLINE_CAPABLE.has(action) && !liveWrite ? ' Add --offline to answer from the saved index file instead.' : ''}`, true, presentPluginConnection(bridge.apiVersions));
 		if (bridge.kind === 'too-old' || bridge.kind === 'too-old-read') {
 			if (OFFLINE_CAPABLE.has(action) && action !== 'connection' && !liveWrite) { fellBackOffline = true; lastBridgeMessage = `Loaded plugin supports API versions ${bridge.apiVersions.join(',')}.`; return runOffline(lastBridgeMessage); }

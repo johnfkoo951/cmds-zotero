@@ -11,6 +11,7 @@ import { markdownLink, noteDeepLink } from "../uris";
 export const CARD_ACTIONS = [
 	{ id: "copy-citation", name: "Copy as citation" },
 	{ id: "copy-citation-link", name: "Copy as citation with Zotero link" },
+	{ id: "copy-quote", name: "Copy as quote with citation" },
 	{ id: "copy-callout", name: "Copy callout" },
 	{ id: "copy-bibliography", name: "Copy bibliography entry" },
 	{ id: "copy-annotation-key", name: "Copy annotation key" },
@@ -18,6 +19,7 @@ export const CARD_ACTIONS = [
 	{ id: "copy-identity-link", name: "Copy identity link" },
 	{ id: "show-data", name: "Show annotation data" },
 ] as const;
+export const ANNOTATION_CARD_ACTIONS = CARD_ACTIONS;
 export type CardActionId = typeof CARD_ACTIONS[number]["id"];
 
 /** A usable PDF page position: the annotation's, or 1. */

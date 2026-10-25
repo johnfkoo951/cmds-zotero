@@ -1,7 +1,8 @@
 // 0.6.1 annotation-search-insert: the search model over every indexed annotation and the insert formats. Pure.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { annotationInsertText, annotationSearchRows, linkOnly, preparedSearchRows, searchAnnotations, searchEmptyText } from "../src/annotations/search";
+import { build } from "esbuild";
+import { annotationInsertText, annotationSearchRow, annotationSearchRows, linkOnly, preparedSearchRows, searchAnnotations, searchEmptyText } from "../src/annotations/search";
 import { annotationBody } from "../src/note-writer";
 import { DEFAULT_SETTINGS, type Annotation, type Attachment, type ZoteroIndexEntry } from "../src/types";
 
@@ -96,3 +97,72 @@ test("empty search: index not loaded, nothing indexed, no match", () => {
 	assert.match(searchEmptyText(true, 0), /No annotations are indexed/);
 	assert.equal(searchEmptyText(true, 4), "No annotations match.");
 });
+
+test("AnnotationSearchModal: strips rich-text HTML from comment, omits empty comment line, and guards IME composition", async () => {
+	const mockObsidian = `
+	export class SuggestModal {
+		constructor(app) {
+			this.app = app;
+			this.registered = [];
+			this.selected = 0;
+			this.inputCalls = 0;
+			this.scope = { register: (mods, key, cb) => { this.registered.push({ mods, key, cb }); } };
+			this.inputEl = { listeners: {}, addEventListener(type, cb) { (this.listeners[type] ??= []).push(cb); } };
+		}
+		setPlaceholder() {}
+		setInstructions() {}
+		selectActiveSuggestion() { this.selected++; }
+		onInput() { this.inputCalls++; }
+	}
+	export const Keymap = { isModifier: () => false };
+	`;
+	const bundled = await build({
+		stdin: { contents: 'export { AnnotationSearchModal } from "./src/modals/annotation-search";', resolveDir: process.cwd(), loader: "ts" },
+		bundle: true, platform: "node", format: "esm", write: false,
+		plugins: [{
+			name: "mock-obsidian",
+			setup(b) {
+				b.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "mock" }));
+				b.onLoad({ filter: /.*/, namespace: "mock" }, () => ({ contents: mockObsidian, loader: "js" }));
+			},
+		}],
+	});
+	const { AnnotationSearchModal } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString("base64")}`) as {
+		AnnotationSearchModal: new (app: unknown, rows: unknown[], empty: string, source: string, choose: () => void) => {
+			registered: { cb: (e: unknown) => boolean }[];
+			selected: number;
+			inputCalls: number;
+			inputEl: { listeners: Record<string, (() => void)[]> };
+			renderSuggestion(row: unknown, el: unknown): void;
+		};
+	};
+	const modal = new AnnotationSearchModal({}, [], "empty", "snapshot", () => {});
+	assert.equal(modal.registered.length, 3);
+	assert.equal(modal.registered[0].cb({ isComposing: true }), true);
+	assert.equal(modal.registered[0].cb({ keyCode: 229 }), true);
+	assert.equal(modal.selected, 0);
+	assert.equal(modal.registered[0].cb({ isComposing: false }), false);
+	assert.equal(modal.selected, 1);
+	for (const cb of modal.inputEl.listeners.compositionend ?? []) cb();
+	assert.equal(modal.inputCalls, 1);
+
+	const makeEl = () => {
+		const children: { tag: string; cls?: string; text?: string }[] = [];
+		return {
+			children,
+			createDiv(opts: { text?: string }) { children.push({ tag: "div", text: opts.text }); },
+			createEl(tag: string, opts: { cls?: string; text?: string }) { children.push({ tag, cls: opts.cls, text: opts.text }); },
+		};
+	};
+	const richRow = annotationSearchRow(entries[0], entries[0].attachments[0], note({ text: "Highlighted text", comment: "<b>Important</b> <i>note</i>" }));
+	const el1 = makeEl();
+	modal.renderSuggestion(richRow, el1);
+	assert.equal(el1.children.length, 3);
+	assert.equal(el1.children[1].text, "Important note");
+
+	const emptyHtmlCommentRow = annotationSearchRow(entries[0], entries[0].attachments[0], note({ text: "Highlighted text", comment: "<span>   </span>" }));
+	const el2 = makeEl();
+	modal.renderSuggestion(emptyHtmlCommentRow, el2);
+	assert.equal(el2.children.length, 2, "whitespace-only HTML comment does not render a <small> comment line");
+});
+

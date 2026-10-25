@@ -3,11 +3,13 @@
  * Mod+click, the right-click position for the editor menu, and dropped Zotero links. Only the visible lines are read;
  * lookups go through the host (the saved index snapshot, never Better BibTeX).
  */
-import { StateEffect, type Extension, type Range, type Text } from "@codemirror/state";
+import { StateEffect, type Extension, type Range } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, hoverTooltip, type DecorationSet, type PluginValue, type ViewUpdate } from "@codemirror/view";
 import { editorInfoField, editorLivePreviewField, Keymap, type MarkdownFileInfo } from "obsidian";
-import { citationsOnLine, parseClusters, type CitationItem } from "./cluster";
+import { maskIgnored } from "./cited-keys";
+import { citationAt, citationsOnLine, parseClusters, type CitationCluster, type CitationItem } from "./cluster";
 import type { CitekeyProblem } from "./problems";
+import { withoutReferencesBlock } from "./references-block";
 
 /** What the editor extension asks the plugin. */
 export interface CitationEditorHost {
@@ -33,20 +35,9 @@ export interface CitationEditorHost {
 /** Dispatched to every live editor when the index snapshot or the settings change. */
 export const refreshCitations = StateEffect.define<null>();
 
-/** Lines (1-based) in frontmatter or fenced code among the first `toLine` lines; citations there are not marked. */
-function blockedLines(doc: Text, toLine: number): Set<number> {
-	const blocked = new Set<number>();
-	let fenced = false;
-	let frontmatter = doc.lines > 0 && doc.line(1).text.trim() === "---";
-	let number = 0;
-	// One sequential pass over the line texts (no per-line lookup); stops at the last visible line.
-	for (const text of doc.iterLines(1, Math.min(toLine, doc.lines) + 1)) {
-		number++;
-		if (frontmatter) { blocked.add(number); if (number > 1 && text.trim() === "---") frontmatter = false; continue; }
-		if (/^\s*(```|~~~)/.test(text)) { fenced = !fenced; blocked.add(number); continue; }
-		if (fenced) blocked.add(number);
-	}
-	return blocked;
+/** The note text with frontmatter, fenced/inline code, HTML/Obsidian comments, escapes and the managed references block masked to spaces. */
+export function maskCitationText(text: string): string {
+	return maskIgnored(withoutReferencesBlock(text));
 }
 
 class AuthorDateWidget extends WidgetType {
@@ -62,28 +53,28 @@ class AuthorDateWidget extends WidgetType {
 
 const MARK_CLASS: Record<CitekeyProblem, string> = { unknown: "cmds-zotero-citekey-unknown", ambiguous: "cmds-zotero-citekey-ambiguous", former: "cmds-zotero-citekey-former" };
 
-function buildDecorations(view: EditorView, host: CitationEditorHost): DecorationSet {
+export function buildDecorations(view: EditorView, host: CitationEditorHost): DecorationSet {
 	const marks = host.marksEnabled();
 	const livePreview = host.authorDateEnabled() && view.state.field(editorLivePreviewField, false) === true;
 	if (!marks && !livePreview) return Decoration.none;
 	const doc = view.state.doc;
 	const ranges = view.visibleRanges;
 	if (!ranges.length) return Decoration.none;
-	const lastLine = doc.lineAt(ranges[ranges.length - 1].to).number;
-	const blocked = blockedLines(doc, lastLine);
+	const masked = maskCitationText(doc.toString());
 	const selection = view.state.selection.ranges;
+	const composing = Boolean(view.composing);
 	const found: Range<Decoration>[] = [];
 	let done = 0;
 	for (const range of ranges) {
 		for (let number = doc.lineAt(range.from).number; number <= doc.lineAt(range.to).number; number++) {
 			if (number <= done) continue;
 			done = number;
-			if (blocked.has(number)) continue;
 			const line = doc.line(number);
-			if (!line.text.includes("@")) continue;
+			const maskedLine = masked.slice(line.from, line.to);
+			if (!maskedLine.includes("@")) continue;
 			const replaced: { from: number; to: number }[] = [];
 			if (livePreview) {
-				for (const cluster of parseClusters(line.text)) {
+				for (const cluster of parseClusters(maskedLine)) {
 					const from = line.from + cluster.start;
 					const to = line.from + cluster.end;
 					if (selection.some(sel => sel.to >= from && sel.from <= to)) continue; // the cursor reveals the source
@@ -94,10 +85,11 @@ function buildDecorations(view: EditorView, host: CitationEditorHost): Decoratio
 				}
 			}
 			if (marks) {
-				for (const item of citationsOnLine(line.text)) {
+				for (const item of citationsOnLine(maskedLine)) {
 					const from = line.from + item.keyStart - 1;
 					const to = line.from + item.keyEnd;
 					if (replaced.some(span => from >= span.from && to <= span.to)) continue;
+					if (composing && selection.some(sel => sel.to >= from && sel.from <= to)) continue;
 					const problem = host.problem(item.citekey);
 					if (!problem) continue;
 					found.push(Decoration.mark({ class: `cmds-zotero-citekey-problem ${MARK_CLASS[problem.problem]}`, attributes: { title: problem.text } }).range(from, to));
@@ -108,10 +100,19 @@ function buildDecorations(view: EditorView, host: CitationEditorHost): Decoratio
 	return Decoration.set(found, true);
 }
 
-function citationAtOffset(view: EditorView, offset: number): CitationItem | null {
-	const line = view.state.doc.lineAt(offset);
+export function citationAtOffset(view: EditorView, offset: number): { item: CitationItem; cluster: CitationCluster | null } | null {
+	const doc = view.state.doc;
+	if (offset < 0 || offset > doc.length) return null;
+	const masked = maskCitationText(doc.toString());
+	const line = doc.lineAt(offset);
+	const maskedLine = masked.slice(line.from, line.to);
 	const column = offset - line.from;
-	return citationsOnLine(line.text).find(item => column >= item.start && column <= item.end) ?? null;
+	const found = citationAt(maskedLine, column);
+	if (!found) return null;
+	if (found.cluster && (column < found.item.start || column > found.item.end)) {
+		return { item: found.cluster.items[0], cluster: found.cluster };
+	}
+	return found;
 }
 
 const info = (view: EditorView): MarkdownFileInfo | null => view.state.field(editorInfoField, false) ?? null;
@@ -120,25 +121,34 @@ const info = (view: EditorView): MarkdownFileInfo | null => view.state.field(edi
 export function citationEditorExtension(host: CitationEditorHost): Extension[] {
 	const decorations = ViewPlugin.fromClass(class implements PluginValue {
 		decorations: DecorationSet;
+		private wasComposing: boolean;
 		constructor(private readonly view: EditorView) {
 			host.views.add(view);
+			this.wasComposing = Boolean(view.composing);
 			this.decorations = buildDecorations(view, host);
 		}
 		update(update: ViewUpdate): void {
 			const refresh = update.transactions.some(transaction => transaction.effects.some(effect => effect.is(refreshCitations)));
 			const preview = update.startState.field(editorLivePreviewField, false) !== update.state.field(editorLivePreviewField, false);
-			if (refresh || preview || update.docChanged || update.viewportChanged || (update.selectionSet && host.authorDateEnabled())) this.decorations = buildDecorations(update.view, host);
+			const composingChanged = this.wasComposing !== Boolean(update.view.composing);
+			this.wasComposing = Boolean(update.view.composing);
+			if (refresh || preview || composingChanged || update.docChanged || update.viewportChanged || (update.selectionSet && (host.authorDateEnabled() || (host.marksEnabled() && this.wasComposing)))) {
+				this.decorations = buildDecorations(update.view, host);
+			}
 		}
 		destroy(): void { host.views.delete(this.view); }
 	}, { decorations: value => value.decorations });
 
 	const hover = hoverTooltip((view, pos) => {
 		if (!host.hoverEnabled()) return null;
-		const item = citationAtOffset(view, pos);
-		if (!item) return null;
+		const found = citationAtOffset(view, pos);
+		if (!found) return null;
+		const { item, cluster } = found;
 		const line = view.state.doc.lineAt(pos);
+		const start = cluster && (pos - line.from < item.start || pos - line.from > item.end) ? cluster.start : item.start;
+		const end = cluster && (pos - line.from < item.start || pos - line.from > item.end) ? cluster.end : item.end;
 		return {
-			pos: line.from + item.start, end: line.from + item.end, above: true,
+			pos: line.from + start, end: line.from + end, above: true,
 			create: () => {
 				const dom = createDiv({ cls: "cmds-zotero-citation-hover" });
 				if (!host.fillHover(dom, item)) dom.setText(`@${item.citekey}`);
@@ -148,6 +158,11 @@ export function citationEditorExtension(host: CitationEditorHost): Extension[] {
 	}, { hoverTime: 400 });
 
 	const events = EditorView.domEventHandlers({
+		compositionend(_event, view) {
+			try { view.dispatch({ effects: refreshCitations.of(null) }); }
+			catch { queueMicrotask(() => { if (host.views.has(view)) view.dispatch({ effects: refreshCitations.of(null) }); }); }
+			return false;
+		},
 		mousedown(event, view) {
 			if (event.button === 2) {
 				const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
@@ -157,9 +172,9 @@ export function citationEditorExtension(host: CitationEditorHost): Extension[] {
 			if (event.button !== 0 || !Keymap.isModifier(event, "Mod")) return false;
 			const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
 			if (offset === null) return false;
-			const item = citationAtOffset(view, offset);
-			if (!item || item.form === "wikilink") return false;
-			if (!host.modClick(item, info(view))) return false;
+			const found = citationAtOffset(view, offset);
+			if (!found || found.item.form === "wikilink") return false;
+			if (!host.modClick(found.item, info(view))) return false;
 			event.preventDefault();
 			return true;
 		},

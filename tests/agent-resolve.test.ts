@@ -85,6 +85,13 @@ test("citekey resolution unions current and history matches across distinct item
 	const result = resolveIndex(index([current, former]), { citekey: "shared2024key" });
 	assert.equal(result.status, "ambiguous");
 	assert.deepEqual(result.candidates.map(candidate => candidate.id), ["1:UNION001", "1:UNION002"]);
+
+	// Mixed candidate sources (one entry by itemKey, another by citekey) stay deduplicated in index order.
+	const asItemKey = entry({ id: "1:KEYCOLL1", itemKey: "KEYCOLL1", citekey: "other2024key" });
+	const asCitekey = entry({ id: "1:OTHER002", itemKey: "OTHER002", citekey: "KEYCOLL1" });
+	const mixed = resolveIndex(index([asItemKey, asCitekey]), { citekey: "KEYCOLL1" });
+	assert.equal(mixed.status, "ambiguous");
+	assert.deepEqual(mixed.candidates.map(candidate => candidate.id), ["1:KEYCOLL1", "1:OTHER002"]);
 });
 
 test("v1 item key family: duplicates across libraries are ambiguous until scoped", () => {

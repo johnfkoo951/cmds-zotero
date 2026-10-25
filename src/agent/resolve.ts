@@ -5,6 +5,7 @@
  * DOI, arXiv, title and query go through `searchIndex`, which only resolves exact, rival-free hits.
  */
 import type { ZoteroIndex, ZoteroIndexEntry } from "../types";
+import { indexDerived } from "../index-derived";
 import type { MatchedBy, QueryEcho, RankedItem, ResolveOutcome, Selector, SelectorKind } from "./types";
 import { normalizeArxiv, normalizeDoi, normalizeTitle, RANKED_LIMIT, rankedCandidate, rankedItem, searchIndex, type Candidate } from "./search";
 
@@ -91,7 +92,24 @@ function rankKeyMatches(matches: KeyMatch[]): RankedItem[] {
 
 function resolveByKey(index: ZoteroIndex, selector: Selector, kind: "citekey" | "itemKey", query: QueryEcho): ResolveOutcome {
 	const base = { matchedHistory: false, candidates: [] as ZoteroIndexEntry[], ranked: [] as RankedItem[], query };
-	const scoped = index.entries.filter(entry => (selector.libraryID === undefined || entry.libraryID === selector.libraryID) && (kind !== "itemKey" || entry.itemKey === query.normalized));
+	const derived = indexDerived(index.entries);
+	let candidates: readonly ZoteroIndexEntry[];
+	if (kind === "itemKey") {
+		candidates = derived.entriesWithItemKey(query.normalized);
+	} else {
+		const byCitekey = derived.entriesWithCitekey(query.normalized);
+		const byId = derived.entriesWithId(query.normalized);
+		const byItemKey = ITEM_KEY.test(query.normalized) ? derived.entriesWithItemKey(query.normalized) : [];
+		const nonEmpty = [byCitekey, byId, byItemKey].filter(list => list.length > 0);
+		if (nonEmpty.length === 0) candidates = [];
+		else if (nonEmpty.length === 1) candidates = nonEmpty[0];
+		else {
+			const unique = [...new Set([...byCitekey, ...byId, ...byItemKey])];
+			unique.sort((a, b) => index.entries.indexOf(a) - index.entries.indexOf(b));
+			candidates = unique;
+		}
+	}
+	const scoped = selector.libraryID === undefined ? candidates : candidates.filter(entry => entry.libraryID === selector.libraryID);
 	const rawMatches: KeyMatch[] = kind === "itemKey"
 		? scoped.map(entry => ({ entry, matchedBy: "itemKey", score: 100, reason: `item key ${query.normalized}` }))
 		: scoped.flatMap(entry => { const m = keyMatch(entry, query.normalized); return m ? [m] : []; });

@@ -1,6 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting, requireApiVersion } from "obsidian";
 import type { SettingDefinition, SettingDefinitionGroup, SettingDefinitionItem } from "obsidian";
 import type CMDSZoteroPlugin from "../main";
+import { DEFAULT_SETTINGS } from "../types";
 import { describeBbtError } from "../api/transport";
 import { draftOf, type Problem, type SettingsDraft } from "./fields";
 import { buildSections, saveBlocker, type RowSpec, type SectionSpec, type SettingsActions } from "./model";
@@ -153,6 +154,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			case "text":
 				setting.addText(text => {
 					text.setValue(row.field.read(this.draft)).onChange(value => report(row.field.write(this.draft, value)));
+					text.inputEl?.addEventListener("compositionend", () => report(row.field.write(this.draft, text.inputEl.value)));
 					if (row.placeholder) text.setPlaceholder(row.placeholder);
 					this.refreshers.set(row.field.key, () => { text.setValue(row.field.read(this.draft)); report(null); });
 				});
@@ -160,6 +162,7 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			case "textarea":
 				setting.addTextArea(text => {
 					text.setValue(row.field.read(this.draft)).onChange(value => report(row.field.write(this.draft, value)));
+					text.inputEl?.addEventListener("compositionend", () => report(row.field.write(this.draft, text.inputEl.value)));
 					if (row.placeholder) text.setPlaceholder(row.placeholder);
 				});
 				break;
@@ -185,9 +188,10 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 			try {
 				// 0.6.2 probe-validated-style-picker: a changed style or locale is rendered once by Better BibTeX before it is stored.
 				const stored = this.plugin.settings;
-				if (this.draft.bibliographyStyle !== stored.bibliographyStyle || this.draft.bibliographyLocale !== stored.bibliographyLocale) {
+				const nextStyle = this.draft.bibliographyStyle || DEFAULT_SETTINGS.bibliographyStyle;
+				if (nextStyle !== stored.bibliographyStyle || this.draft.bibliographyLocale !== stored.bibliographyLocale) {
 					status.setText("Checking the bibliography style with Better BibTeX…");
-					const problem = await this.plugin.bibliography.probeFormat({ style: this.draft.bibliographyStyle || stored.bibliographyStyle, locale: this.draft.bibliographyLocale });
+					const problem = await this.plugin.bibliography.probeFormat({ style: nextStyle, locale: this.draft.bibliographyLocale });
 					if (problem) { status.setText(problem); return; }
 				}
 				await this.plugin.saveSettings(this.draft);

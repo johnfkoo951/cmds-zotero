@@ -30,6 +30,8 @@ test("a healthy setup is all ok, in report order, with no diagnostics", () => {
 	assert.deepEqual(checks.map(check => check.id), ["zotero", "legacy-plugin", "index", "git", "pdfjs", "peer-vaults", "output-folder"]);
 	assert.ok(checks.every(check => check.status === "ok" && check.code === undefined));
 	assert.equal(checks[0].detail, "Zotero 10.0.6; Better BibTeX 9.0.71.");
+	assert.match(checks[2].detail, /^450 entries,/);
+	assert.match(doctorChecks({ ...HEALTHY, index: { ...HEALTHY.index, count: 1 } })[2].detail, /^1 entry,/);
 	assert.deepEqual(doctorDiagnostics(checks), []);
 });
 
@@ -139,4 +141,17 @@ test("diagnostics --env: request validation, environment checks offline and on a
 	assert.equal(failedChecks.index.code, "index-missing");
 	assert.match(failedChecks.index.detail, /References\/Zotero\/zotero-index\.json/, "the configured path stands in for an unknown one");
 	assert.equal(failedChecks.obsidian.code, "obsidian-unavailable");
+
+	// Bug 36: diagnosticsAction honors custom referencesHeadings and flags tracked index/cache in git.
+	const customHeadingHost = host({
+		notes: [{ path: "30. Questions/RQ.md", basename: "RQ", frontmatter: { type: "research-question" }, frontmatterParse: "ok" }],
+		bodies: { "30. Questions/RQ.md": "# RQ\n\n## 문헌 목록\n- [@dangling2026key] Listed under custom heading\n" },
+		extra: {
+			settings: { ...base.settings, referencesHeadings: ["문헌 목록"] },
+			connection: { ...base.connection, git: { repo: true, indexIgnored: true, cacheIgnored: true, indexTracked: true, cacheTracked: false } },
+		},
+	});
+	const diagResult = await runAction(customHeadingHost, "diagnostics", {}) as { diagnostics: { code: string; citekey?: string }[] };
+	assert.equal(diagResult.diagnostics.some(d => d.citekey === "dangling2026key"), false, "keys inside custom referencesHeadings are not scanned as body citations");
+	assert.equal(diagResult.diagnostics.some(d => d.code === "index-in-git"), true, "tracked index triggers index-in-git even when ignored");
 });

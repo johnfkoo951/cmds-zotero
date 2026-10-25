@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runAction, validateActionRequest, type ActionHost } from "../src/agent/actions";
+import { AGENT_FEATURES, runAction, validateActionRequest, type ActionHost } from "../src/agent/actions";
 import { buildConnection } from "../src/agent/connection";
 import { BbtTransportError, ZoteroVersionError } from "../src/api/transport";
+import { IndexRefusalError } from "../src/index-service";
 import { IngestAPI } from "../src/ingest-api";
-import { DEFAULT_SETTINGS, type ZoteroIndex } from "../src/types";
+import { DEFAULT_SETTINGS, type ZoteroIndex, type ZoteroIndexEntry } from "../src/types";
 import type { ImportNoteResult, RecentReport } from "../src/recent/recent-reads";
 
 // Synthetic records only.
@@ -47,8 +48,14 @@ test("request validation bounds the window and requires exactly one import selec
 	assert.throws(() => validateActionRequest("import", { itemKey: "ABCD2345" }), /libraryID/);
 	assert.throws(() => validateActionRequest("import", { citekey: "a", apply: "yes" }), /boolean/);
 	assert.throws(() => validateActionRequest("import", { citekey: "a", pages: "1" }), /Unsupported import request field/);
+	assert.throws(() => validateActionRequest("import", { citekey: "a", adopt: "Notes/x.md", rebuild: true }), /cannot be combined/);
+	assert.throws(() => validateActionRequest("import", { citekey: "a", scope: [] }), /non-empty array/);
+	assert.throws(() => validateActionRequest("import", { citekey: "a", scope: ["invalid"] }), /scope must be/);
 	validateActionRequest("import", { itemKey: "ABCD2345", libraryID: 1, apply: true, allowStale: true });
+	validateActionRequest("import", { adopt: "Notes/existing.md", apply: true });
+	validateActionRequest("import", { citekey: "a", rebuild: true, scope: ["overview", "annotations"] });
 	validateActionRequest("recent", { days: 365 });
+	assert.ok(AGENT_FEATURES.includes("import-modes"));
 });
 
 test("recent lists papers with read days, note states and what needs importing", async () => {
@@ -140,3 +147,88 @@ test("the host advertises its actions and counts an applied import as a write", 
 	assert.equal(writes("recent", {}), false);
 	api.dispose();
 });
+
+test("import modes (adopt, rebuild, scope) report mode, repairs, backup and unverified", async () => {
+	const rebuilt = await runAction(host({
+		importNote: async req => ({
+			mode: req.rebuild ? "rebuild" : "import",
+			item, fresh: true, before, preview,
+			repairs: ["Line 14: added missing closing marker for overview"],
+			backup: ".cmds-zotero/backups/notes/@Example2026-1.md",
+			unverified: "Post-write check warning",
+			outcome: { status: "updated", path: preview.path, preserved: [] },
+			warnings: [],
+		}),
+	}), "import", { citekey: "Example2026", rebuild: true, scope: ["overview"], apply: true });
+	assert.equal(rebuilt.ok, true);
+	assert.equal(rebuilt.mode, "rebuild");
+	assert.deepEqual(rebuilt.repairs, ["Line 14: added missing closing marker for overview"]);
+	assert.equal(rebuilt.backup, ".cmds-zotero/backups/notes/@Example2026-1.md");
+	assert.equal(rebuilt.unverified, "Post-write check warning");
+});
+
+test("Bug 39 & Priority 10: resolve/identity --refresh catches IndexRefusalError, locateTarget catches bad attachment, cites/identity pass locale and locate warns on partial textLayer", async () => {
+	const bbtCause = new BbtTransportError("connection-refused", "http://127.0.0.1:23119/better-bibtex/json-rpc", "ECONNREFUSED");
+	const refusingHost = host({
+		refresh: async () => { throw new IndexRefusalError("bbt-unreachable", "Better BibTeX is unreachable.", bbtCause); },
+	});
+	const resRefused = await runAction(refusingHost, "resolve", { citekey: "Example2026", refresh: true });
+	assert.equal(resRefused.ok, false);
+	assert.equal(resRefused.status, "unavailable");
+	assert.equal(resRefused.reason, "bbt-unreachable");
+	assert.deepEqual(resRefused.bbtError, { reason: "connection-refused", endpoint: "http://127.0.0.1:23119/better-bibtex/json-rpc" });
+
+	const idRefused = await runAction(refusingHost, "identity", { citekey: "Example2026", refresh: true });
+	assert.equal(idRefused.ok, false);
+	assert.equal(idRefused.reason, "bbt-unreachable");
+	assert.deepEqual(idRefused.bbtError, { reason: "connection-refused", endpoint: "http://127.0.0.1:23119/better-bibtex/json-rpc" });
+
+	const entry: ZoteroIndexEntry = {
+		id: "1:ABCD2345", libraryID: 1, libraryType: "user", itemKey: "ABCD2345", citekey: "Example2026", citekeyHistory: [],
+		title: "Synthetic", authors: ["Author, A"], year: "2026", doi: "", url: "", collections: [], tags: [],
+		attachmentPath: "/tmp/a.pdf", zoteroSelectURI: "zotero://select/library/items/ABCD2345",
+		attachments: [{ key: "PDF12345", openURI: "zotero://open-pdf/library/items/PDF12345", path: "/tmp/a.pdf", title: "Paper.pdf", annotations: [] }],
+		attachmentStatus: "complete", contentHash: "", metadata: {},
+	};
+	const withItem = host({ indexView: { index: { ...index, count: 1, entries: [entry] }, stale: false, ageMinutes: 0 } });
+	const badAttach = await runAction(withItem, "locate", { citekey: "Example2026", attachment: "NOTTHERE", quote: "some quote that is long enough" });
+	assert.equal(badAttach.ok, false);
+	assert.equal(badAttach.reason, "invalid-request");
+	assert.match(String(badAttach.message), /not attached/);
+
+	const seenBib: { style: string; locale?: string }[] = [];
+	const noteHost = host({
+		indexView: { index: { ...index, count: 1, entries: [entry] }, stale: false, ageMinutes: 0 },
+		bibliography: async (_e, style, locale) => { seenBib.push({ style, locale }); return "Rendered (2026)."; },
+		reader: {
+			vaultName: () => "Research",
+			scanWarnings: () => ({ skipped: [], truncated: false }),
+			listNotes: async () => [{ path: "Notes/test.md", basename: "test", frontmatter: { csl: "chicago-author-date", lang: "ko_kr" }, frontmatterParse: "ok" }],
+			readNote: async () => "[@Example2026]",
+			exists: async () => true,
+		},
+		pdfCache: {
+			list: async () => ["user-1-PDF12345-aaaaaaaaaaaaaaaa.json"],
+			read: async () => JSON.stringify({
+				version: 1, sha256: "a".repeat(64), bytes: 100, mtimeMs: 1, pageCount: 2, extractedAt: now.toISOString(),
+				pages: [{ page: 1, pageLabel: "1", text: "Page one has sufficient body text to count as non-empty here." }, { page: 2, pageLabel: "2", text: "" }],
+				id: "1:ABCD2345", attachmentKey: "PDF12345", path: "/tmp/a.pdf", tool: "pdfjs/test",
+			}),
+			statLocal: async () => ({ size: 100, mtimeMs: 1 }),
+			fileHash: async () => null,
+		},
+	});
+	const citesRes = await runAction(noteHost, "cites", { path: "Notes/test.md", bibliography: true });
+	assert.equal(citesRes.ok, true);
+	assert.deepEqual(seenBib[0], { style: "chicago-author-date", locale: "ko-KR" });
+	assert.equal((citesRes.references as { locale?: string }).locale, "ko-KR");
+
+	const idRes = await runAction(noteHost, "identity", { citekey: "Example2026", locale: "de-DE" });
+	assert.equal(idRes.ok, true);
+	assert.deepEqual(seenBib[1], { style: DEFAULT_SETTINGS.bibliographyStyle, locale: "de-DE" });
+
+	const locateRes = await runAction(noteHost, "locate", { citekey: "Example2026", quote: "missing quote from the scanned page two" });
+	assert.equal(locateRes.ok, true);
+	assert.ok((locateRes.warnings as string[]).some(w => /Partial text layer: 1 of 2 pages/.test(w)));
+});
+

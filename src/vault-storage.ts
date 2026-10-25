@@ -133,6 +133,7 @@ export class VaultIndexStorage implements IndexStorage {
 		const temp = `${this.indexPath}.${token}.tmp`;
 		const adapter = this.app.vault.adapter;
 		let backupName: string | undefined;
+		let replaced = false;
 		try {
 			await adapter.write(temp, content);
 			const written = await digestIfText(this.fullPath(temp), content);
@@ -152,9 +153,11 @@ export class VaultIndexStorage implements IndexStorage {
 			if (!(adapter instanceof FileSystemAdapter)) throw new Error("A desktop file-system vault is required.");
 			await assertVaultBoundary(this.app, this.indexPath);
 			await fs.rename(path.join(adapter.getBasePath(), temp), path.join(adapter.getBasePath(), this.indexPath));
+			replaced = true;
 			this.snapshot = written;
 		} finally {
 			if (await adapter.exists(temp)) await adapter.remove(temp);
+			if (!replaced && backupName !== undefined) await fs.rm(this.fullPath(`${BACKUP_DIR}/${backupName}`), { force: true }).catch(() => undefined);
 		}
 		if (backupName !== undefined) await this.pruneBackups(backupName);
 	}

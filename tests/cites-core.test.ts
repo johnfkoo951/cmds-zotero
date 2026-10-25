@@ -237,3 +237,14 @@ test("diagnostics map every non-resolved status to its code and severity; keys a
 	assert.deepEqual(summarize(files, true), { files: 2, citations: 8, resolved: 2, hubOnly: 1, rawOnly: 1, dangling: 3, ambiguous: 1, unchecked: 0, truncated: true });
 	assert.equal(summarize([]).truncated, false);
 });
+
+test("referencesPayload includes locale when provided and omits it when absent", () => {
+	const verdicts = classifyKeys(["alpha2020memory"], index, lookups, false, false);
+	const bibliography = new Map([["alpha2020memory", "Alpha, A. (2020)."]]);
+	const withLocale = referencesPayload(["alpha2020memory"], verdicts, bibliography, new Map(), { style: "apa", locale: "ko-KR" });
+	assert.equal(withLocale.style, "apa");
+	assert.equal(withLocale.locale, "ko-KR");
+	const withoutLocale = referencesPayload(["alpha2020memory"], verdicts, bibliography, new Map(), { style: "apa" });
+	assert.equal("locale" in withoutLocale, false);
+});
+

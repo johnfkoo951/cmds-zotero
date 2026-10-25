@@ -60,9 +60,9 @@ The plugin's human status line derives freshness from the same `ageMinutes`/`sta
 call, so the UI and the CLI agree on freshness; its wording is UI copy, not part of this contract.
 
 Bibliography text in `identity` and `cites` payloads may be served from the live plugin's write-through sidecar
-(`.cmds-zotero/bibliography.json`, keyed by style, entry id, entry `contentHash` and Better BibTeX version) without a BBT
+(`.cmds-zotero/bibliography.json`, keyed by style, optional BCP 47 locale, entry id, entry `contentHash` and Better BibTeX version) without a BBT
 call (0.5); such text is byte-identical to what BBT rendered for that content hash and style, and the payload does not
-distinguish it. `bibliographyReason: bbt-unreachable` with `bbtError` therefore means neither a live answer nor a cached
+distinguish it. `identity` and `cites` accept `--locale LOCALE` (e.g. `en-US`, `ko-KR`); when `cites` targets a single note without explicit `--style` or `--locale`, the note's Pandoc `csl` and `lang` frontmatter keys override settings. `bibliographyReason: bbt-unreachable` with `bbtError` therefore means neither a live answer nor a cached
 rendering existed. The sidecar is never filled at refresh time and the offline CLI never reads it.
 
 Existing implicit refresh in read-only legacy operations is intentionally removed.
@@ -342,16 +342,17 @@ counts blocks whose annotation was deleted in Zotero, which are kept, never remo
 reason: bbt-unreachable` with `bbtError`. A Zotero older than 10 refuses the reading-history search: that is `ok:false,
 reason: zotero-too-old` (0.6), never `bbt-unreachable`.
 
-`import` takes exactly one selector (`--citekey`, or `--item-key` with `--library`) and is a dry run unless `--apply`.
+`import` takes one selector (`--citekey`, or `--item-key` with `--library`; optional with `--adopt PATH` when the note's own frontmatter or filename identifies the item) and is a dry run unless `--apply`.
+It also accepts `--adopt PATH` (adopts an existing note via L1 frontmatter line patch + L2 managed section append, with a backup under `.cmds-zotero/backups/notes/`), `--rebuild` (repairs damaged, duplicate or missing managed markers of the owned note before refreshing, with a backup), and `--scope overview,citation,metadata,notes,annotations` (refreshes only the named section groups); these flags require `import-modes` in `service.features`.
 It renders from the item as Zotero has it now (one `item.export` plus `item.attachments`; the saved index is not
 rewritten), so annotations made since the last refresh are included; a citekey renamed in Zotero is followed by item key
 and an export that resolves to another item is refused. A citekey the saved index does not know yet is looked up with an
 exact `citationKey` search (several libraries using it is `invalid-request`). When the item cannot be read fresh the
 request is refused (`bbt-unreachable` or `invalid-request`) unless `--allow-stale`, which renders from the saved index and
-adds a warning; a first import still needs bibliography text (0.5 R12). The payload carries `dryRun`, `item`, `fresh`,
+adds a warning; a first import still needs bibliography text (0.5 R12). The payload carries `dryRun`, `mode` (`import` | `rebuild` | `adopt`), `item`, `fresh`,
 `note {path, existed, before, after?}` (note states as in `recent`), `preview {conflicts, softConflicts, sections (counts by
-state), changes}`, `outcome {status: created|updated|unchanged|refused, path, preserved, message?, summary}` (null on a dry
-run) and `warnings`. Edited generated sections are soft conflicts: kept verbatim and listed in `preserved` while the rest of
+state), changes}`, optional `repairs`, `outcome {status: created|updated|unchanged|refused, path, preserved, message?, summary}` (null on a dry
+run), optional `backup` and `unverified`, and `warnings`. Edited generated sections are soft conflicts: kept verbatim and listed in `preserved` while the rest of
 the note is written. Hard conflicts (unowned note, damaged or duplicate markers, several notes with one identity, a note
 changed between preview and write) are `ok:false, reason: note-conflict`, in a dry run as well as on apply. A failure while
 writing maps to `apply-failed`. The user-owned regions of a literature note are the frontmatter (initialised once), the
@@ -453,7 +454,7 @@ the URLs its own viewer uses) so CID-keyed CJK fonts and non-embedded standard f
 `pdf-text` adds `textLayer {textLayer: full|partial|none, emptyPages, bodyChars, ocrRecommended}`: lines repeated on at
 least half of the pages (three or more pages) are watermarks or running heads, not body text, and a page under 20 body
 characters has none. `none` or `partial` adds a warning to run OCR (not part of this plugin); `locate` cannot verify
-quotes in such pages.
+quotes in such pages and appends the text-layer OCR warning to `warnings` whenever `summary.notFound > 0` and the PDF's text layer is `none` or `partial`.
 Capture the input byte length before passing a transferable buffer to pdf.js.
 Page is one-based physical position; pageLabel is printed text. Empty/dash-only labels fall back to position.
 `p.-` must never appear. Fuzzy/ambiguous/unverified matches must not masquerade as confirmed quote locations.
