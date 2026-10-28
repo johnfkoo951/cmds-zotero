@@ -10,9 +10,9 @@ import { randomBytes } from "crypto";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { findStyle, homeRelative, independentStyle, wordStyleFacts } from "../bibliography/csl-styles";
-import { sanitizeForExport, sanitizeSummary, type LinkTarget } from "../export/sanitize";
-import { KIT_BIBLIOGRAPHY, KIT_DEFAULTS, KIT_MANIFEST, defaultsYaml, kitDecision, kitFolder, kitName, manifestText, pandocCommand, sha256, vaultRootFrom, type KitManifest } from "../export/kit";
-import { WORD_FILTER, bibliographyWithoutReferencesSection, documentFrontmatter, hasRefsPlace, preferenceChunks, sessionId, wordDefaultsYaml, wordFilterLua, zoteroDocumentData, zoteroLuaInstallCommand, zoteroLuaLocations } from "../export/word-kit";
+import { CITEPROC_KEYS, DOCUMENT_KEYS, documentFrontmatter, frontmatterSummary, sanitizeForExport, sanitizeSummary, type LinkTarget } from "../export/sanitize";
+import { KIT_BIBLIOGRAPHY, KIT_DEFAULTS, KIT_DOCX_FILTER, KIT_MANIFEST, defaultsYaml, docxFilterLua, kitDecision, kitFolder, kitName, manifestText, pandocCommand, sha256, vaultRootFrom, type KitManifest } from "../export/kit";
+import { WORD_FILTER, bibliographyWithoutReferencesSection, hasRefsPlace, preferenceChunks, sessionId, wordDefaultsYaml, wordFilterLua, zoteroDocumentData, zoteroLuaInstallCommand, zoteroLuaLocations } from "../export/word-kit";
 import { lineDiff } from "../fragments";
 import { NOTE_BACKUP_DIR } from "../importer";
 import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory } from "../vault-storage";
@@ -222,20 +222,22 @@ export class ReferencesController {
 		if (!index) throw new Error("No saved index yet. Refresh the citekey index first.");
 		const original = citedKeySet(withoutReferencesBlock(source));
 		const cleaned = sanitizeForExport(source, { resolve: this.linkResolver(file, index), renamed: renamedKeys(original, index.entries) });
+		const copy = documentFrontmatter(cleaned.text, [...DOCUMENT_KEYS, ...CITEPROC_KEYS]);
 		const cited = this.resolveCited(cleaned.text, index.entries, true);
 		if (!cited.entries.length) throw new Error("No resolved citations in this note; the kit needs at least one.");
 		const csl = await this.plugin.bibliography.cslJsonFor(cited.entries);
 		const name = kitName(file.basename.replace(/^@+/, ""));
-		const kitNames = [`${name}.md`, KIT_BIBLIOGRAPHY, KIT_DEFAULTS];
+		const kitNames = [`${name}.md`, KIT_BIBLIOGRAPHY, KIT_DEFAULTS, KIT_DOCX_FILTER];
 		const write = async (folder: string): Promise<void> => {
 			const vaultRoot = vaultRootFrom(folder);
 			const format = await this.plugin.bibliography.noteFormat(file);
 			const style = await this.cslPath(file, format.style, vaultRoot);
 			const noteFolder = file.parent && file.parent.path !== "/" ? file.parent.path : "";
 			const contents = new Map<string, string>([
-				[`${name}.md`, cleaned.text.endsWith("\n") ? cleaned.text : `${cleaned.text}\n`],
+				[`${name}.md`, copy.text.endsWith("\n") ? copy.text : `${copy.text}\n`],
 				[KIT_BIBLIOGRAPHY, csl.content],
 				[KIT_DEFAULTS, defaultsYaml({ input: `${name}.md`, output: `${name}.docx`, ...(style.path ? { csl: style.path } : {}), ...(format.locale ? { lang: format.locale } : {}), vaultRoot, noteFolder, generator: `${this.plugin.manifest.name} ${this.plugin.manifest.version}` })],
+				[KIT_DOCX_FILTER, docxFilterLua(`${this.plugin.manifest.name} ${this.plugin.manifest.version}`)],
 			]);
 			const command = pandocCommand(await this.writeKitFiles(folder, file, contents));
 			let copied = true;
@@ -247,6 +249,7 @@ export class ReferencesController {
 				...(cited.skipped.length ? [`Not in ${KIT_BIBLIOGRAPHY} (pandoc will warn): ${cited.skipped.join(", ")}.`] : []),
 				...(style.note ? [style.note] : []),
 				...sanitizeSummary(cleaned.report),
+				...frontmatterSummary(copy.removed),
 				"",
 				copied ? "Command copied to the clipboard (needs pandoc 2.17 or later; the plugin never runs it):" : "Run this command (needs pandoc 2.17 or later; the plugin never runs it):",
 				command,
@@ -343,7 +346,7 @@ export class ReferencesController {
 				...(cited.skipped.length ? [`Not in the index (zotero.lua leaves them as text): ${cited.skipped.join(", ")}.`] : []),
 				...(format.problems.length ? format.problems : []),
 				...sanitizeSummary(cleaned.report),
-				...(copy.removed.length ? [`${copy.removed.length} frontmatter field${copy.removed.length === 1 ? "" : "s"} kept out of the Word file (pandoc would store them as document properties): ${copy.removed.join(", ")}.`] : []),
+				...frontmatterSummary(copy.removed),
 				"",
 				found ? `zotero.lua: ${found}` : `zotero.lua was not found in pandoc's filters folder. Install Better BibTeX's filter once:\n${zoteroLuaInstallCommand()}`,
 				"",

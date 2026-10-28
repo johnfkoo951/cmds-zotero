@@ -6,7 +6,7 @@ import { citedKeySet } from "../src/citations/cited-keys";
 import { checkCitations, checkRowDetail, checkRowsInReportOrder, checkSummary } from "../src/citations/check";
 import { locateReferencesBlock, planReferencesSection, referencesBlock, withoutReferencesBlock } from "../src/citations/references-block";
 import { sanitizeForExport, sanitizeSummary, withoutIdentityKeys, type LinkTarget } from "../src/export/sanitize";
-import { defaultsYaml, kitDecision, kitFolder, kitName, manifestText, pandocCommand, sha256, shellQuote, vaultRootFrom } from "../src/export/kit";
+import { KIT_DOCX_FILTER, defaultsYaml, docxFilterLua, kitDecision, kitFolder, kitName, manifestText, pandocCommand, sha256, shellQuote, vaultRootFrom } from "../src/export/kit";
 
 const entry = (id: string, citekey: string, history: string[] = []): ZoteroIndexEntry => ({ id, citekey, citekeyHistory: history, title: `Title ${citekey}`, authors: ["Doe, Jane"], year: "2020" }) as ZoteroIndexEntry;
 
@@ -112,7 +112,10 @@ test("export kit: folder names, defaults with ${.} paths, manifest decisions and
 	assert.equal(kitFolder("CMDS Zotero exports", "Draft", 3), "CMDS Zotero exports/Draft 3");
 	assert.equal(vaultRootFrom("CMDS Zotero exports/Draft"), "${.}/../..");
 	const yaml = defaultsYaml({ input: "Draft.md", output: "Draft.docx", csl: "${HOME}/Zotero/styles/apa.csl", lang: "ko-KR", vaultRoot: "${.}/../..", noteFolder: "Notes", generator: "CMDS Zotero 0.6.2" });
-	assert.match(yaml, /^citeproc: true$/m);
+	assert.doesNotMatch(yaml, /^citeproc:/m);
+	assert.match(yaml, new RegExp(`^filters:\\n {2}- citeproc\\n {2}- "\\$\\{\\.\\}/${KIT_DOCX_FILTER.replace(/\./g, "\\.")}"$`, "m"), "the kit's filter runs after citeproc");
+	assert.match(docxFilterLua("CMDS Zotero 0.6.6"), /^-- Written by CMDS Zotero 0\.6\.6\./);
+	assert.match(docxFilterLua("x"), /'bibliography', 'csl'/);
 	assert.match(yaml, /^ {2}- "\$\{\.\}\/Draft\.md"$/m);
 	assert.match(yaml, /^csl: "\$\{HOME\}\/Zotero\/styles\/apa\.csl"$/m);
 	assert.match(yaml, /^ {2}lang: "ko-KR"$/m);

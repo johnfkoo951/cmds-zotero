@@ -11,6 +11,8 @@ import { createHash } from "crypto";
 export const KIT_MANIFEST = "cmds-zotero-export.json";
 export const KIT_BIBLIOGRAPHY = "references.json";
 export const KIT_DEFAULTS = "defaults.yaml";
+/** 0.6.6: the filter run after citeproc that keeps the citeproc settings out of the `.docx` document properties. */
+export const KIT_DOCX_FILTER = "cmds-zotero-docx.lua";
 
 export interface KitManifest {
 	version: 1;
@@ -110,7 +112,7 @@ export function defaultsYaml(input: DefaultsInput): string {
 		"to: docx",
 		`input-files:\n  - ${scalar(`\${.}/${input.input}`)}`,
 		`output-file: ${scalar(`\${.}/${input.output}`)}`,
-		"citeproc: true",
+		`filters:\n  - citeproc\n  - ${scalar(`\${.}/${KIT_DOCX_FILTER}`)}`,
 		`bibliography:\n  - ${scalar(`\${.}/${KIT_BIBLIOGRAPHY}`)}`,
 		...(input.csl ? [`csl: ${scalar(input.csl)}`] : ["# csl: no installed CSL file was found for the style; pandoc uses its default (Chicago author-date)."]),
 		`resource-path:\n${resource.map(path => `  - ${scalar(path)}`).join("\n")}`,
@@ -119,6 +121,24 @@ export function defaultsYaml(input: DefaultsInput): string {
 		...(input.lang ? [`  lang: ${scalar(input.lang)}`] : []),
 	];
 	return `${lines.join("\n")}\n`;
+}
+
+/**
+ * 0.6.6: the kit's filter, run after citeproc. Pandoc stores metadata a `.docx` has no slot for as custom document
+ * properties, and the citeproc settings hold paths on this computer (the CSL file under the home folder, the kit folder),
+ * so once citeproc has used them they are removed.
+ */
+export function docxFilterLua(generator: string): string {
+	return `-- Written by ${generator}. Runs after citeproc (see ${KIT_DEFAULTS} in this folder).
+-- Removes the citeproc settings, which hold paths on this computer, so the .docx does not keep them as document properties.
+local CITEPROC_SETTINGS = { 'bibliography', 'csl', 'citation-abbreviations', 'link-citations', 'link-bibliography',
+  'reference-section-title', 'suppress-bibliography', 'notes-after-punctuation', 'nocite', 'references' }
+
+function Meta(meta)
+  for _, key in ipairs(CITEPROC_SETTINGS) do meta[key] = nil end
+  return meta
+end
+`;
 }
 
 /** `${.}/..` repeated once per segment of the kit folder: the vault root seen from the kit folder. */

@@ -82,38 +82,6 @@ export function bibliographyWithoutReferencesSection(style: { noteStyle: boolean
 	throw new Error("bibliographyWithoutReferencesSection is not written yet.");
 }
 
-/**
- * Frontmatter keys a `.docx` reader should see: pandoc's title-page and core-property fields. `description` is left out
- * because vault notes use it for a summary aimed at agents, not at co-authors.
- */
-export const DOCUMENT_KEYS: readonly string[] = ["title", "subtitle", "author", "date", "abstract", "keywords", "subject", "lang", "dir", "nocite"];
-
-const KEY_LINE = /^([^\s:#-][^:]*?)[ \t]*:(?:[ \t]|$)/;
-const WIKILINK_VALUE = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g;
-
-/**
- * The cleaned copy with only `DOCUMENT_KEYS` in its frontmatter and wikilinks in their values written as names. Pandoc
- * writes every other metadata field into the `.docx` as a custom document property that travels with the file (vault
- * links, session links, model names), so the Word kit keeps the vault's own keys out of it. No kept key: no frontmatter.
- */
-export function documentFrontmatter(markdown: string): { text: string; removed: string[] } {
-	const block = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(markdown);
-	if (!block) return { text: markdown, removed: [] };
-	const kept: string[] = [];
-	const removed: string[] = [];
-	let keeping = false;
-	for (const line of block[1].split(/\r?\n/)) {
-		const key = KEY_LINE.exec(line);
-		if (key) {
-			keeping = DOCUMENT_KEYS.includes(key[1]);
-			if (!keeping) removed.push(key[1]);
-		}
-		if (keeping) kept.push(line.replace(WIKILINK_VALUE, (_whole: string, target: string, alias: string | undefined) => alias?.trim() || (target.split("/").pop() ?? target).trim()));
-	}
-	const body = markdown.slice(block[0].length);
-	return { text: kept.length ? `---\n${kept.join("\n")}\n---\n${body}` : body.replace(/^\r?\n/, ""), removed };
-}
-
 /** True when the cleaned copy has pandoc's bibliography place, `::: {#refs}` (written for the managed references section). */
 export function hasRefsPlace(markdown: string): boolean {
 	return /^:{3,}[ \t]*\{[ \t]*#refs[ \t}]/m.test(markdown);

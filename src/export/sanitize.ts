@@ -6,7 +6,8 @@
  * title; `==highlights==` become `[text]{.mark}`; block IDs (`^id`) are dropped; `[[@key]]` and wikilinks or embeds that
  * resolve to a literature note become `[@key]`; image embeds become Markdown images; other wikilinks become their text.
  * A citation of a former citekey is written with the item's current key (the CSL-JSON carries current keys only).
- * Frontmatter, fenced code and inline code are copied as they are.
+ * Frontmatter, fenced code and inline code are copied as they are; the kits then keep only the document's own
+ * frontmatter keys (`documentFrontmatter`, 0.6.6).
  */
 import { citedKeySet, ignoredRegions } from "../citations/cited-keys";
 import { locateReferencesBlock } from "../citations/references-block";
@@ -193,6 +194,48 @@ export function sanitizeForExport(source: string, options: SanitizeOptions): { t
 	}
 	const cleaned = rewriteRenamed(kept.join("\n"), options.renamed ?? new Map(), report);
 	return { text: cleaned, report };
+}
+
+/**
+ * Frontmatter keys a `.docx` reader should see: pandoc's title-page and core-property fields. `description` is left out
+ * because vault notes use it for a summary aimed at agents, not at co-authors.
+ */
+export const DOCUMENT_KEYS: readonly string[] = ["title", "subtitle", "author", "date", "abstract", "keywords", "subject", "lang", "dir", "nocite"];
+/**
+ * Document metadata citeproc reads (the pandoc kit runs citeproc; the Word kit does not). `csl` stays so pandoc can still
+ * find a style the kit found no file for; `bibliography` goes, the kit's defaults name the bibliography.
+ */
+export const CITEPROC_KEYS: readonly string[] = ["csl", "reference-section-title", "suppress-bibliography", "link-citations", "link-bibliography", "notes-after-punctuation"];
+
+const KEY_LINE = /^([^\s:#-][^:]*?)[ \t]*:(?:[ \t]|$)/;
+const WIKILINK_VALUE = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g;
+
+/**
+ * 0.6.6: the cleaned copy with only `keys` in its frontmatter and wikilinks in their values written as names. Pandoc
+ * writes every other metadata field into a `.docx` as a custom document property that travels with the file (vault
+ * links, session links, model names), so the export kits keep the vault's own keys out of it. No kept key: no frontmatter.
+ */
+export function documentFrontmatter(markdown: string, keys: readonly string[] = DOCUMENT_KEYS): { text: string; removed: string[] } {
+	const block = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(markdown);
+	if (!block) return { text: markdown, removed: [] };
+	const kept: string[] = [];
+	const removed: string[] = [];
+	let keeping = false;
+	for (const line of block[1].split(/\r?\n/)) {
+		const key = KEY_LINE.exec(line);
+		if (key) {
+			keeping = keys.includes(key[1]);
+			if (!keeping) removed.push(key[1]);
+		}
+		if (keeping) kept.push(line.replace(WIKILINK_VALUE, (_whole: string, target: string, alias: string | undefined) => alias?.trim() || (target.split("/").pop() ?? target).trim()));
+	}
+	const body = markdown.slice(block[0].length);
+	return { text: kept.length ? `---\n${kept.join("\n")}\n---\n${body}` : body.replace(/^\r?\n/, ""), removed };
+}
+
+/** The report line for `documentFrontmatter`'s removed keys, or nothing. */
+export function frontmatterSummary(removed: readonly string[]): string[] {
+	return removed.length ? [`${removed.length} frontmatter field${removed.length === 1 ? "" : "s"} kept out of the .docx (pandoc would store them as document properties): ${removed.join(", ")}.`] : [];
 }
 
 /** Plain-text lines of the report for the export summary. */

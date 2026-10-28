@@ -14,7 +14,8 @@ Bibliography and references; default `CMDS Zotero exports/`), one subfolder per 
 | --- | --- |
 | `<note>.md` | A cleaned copy of the note (below). The source note is not touched. |
 | `references.json` | CSL-JSON of exactly the cited items, from Better BibTeX's `item.export` (`abstract` and `note` removed). |
-| `defaults.yaml` | A pandoc defaults file: `citeproc`, the bibliography, the CSL file, `lang`, `link-citations`, resource paths and the output `<note>.docx`. |
+| `defaults.yaml` | A pandoc defaults file: citeproc and then the kit's filter, the bibliography, the CSL file, `lang`, `link-citations`, resource paths and the output `<note>.docx`. |
+| `cmds-zotero-docx.lua` | Runs after citeproc and removes the citeproc settings from the metadata (0.6.6). They hold paths on this computer (the CSL file under your home folder), and pandoc would keep them in the `.docx` as document properties. |
 | `cmds-zotero-export.json` | The kit manifest (SHA-256 of each file the plugin wrote). |
 
 The command line is copied to the clipboard and shown in the report:
@@ -37,9 +38,13 @@ What the cleaned copy changes:
 - `%%` comments, the plugin's own markers and block IDs (`^id`) are removed; callouts become blockquotes with a bold
   title; `==highlights==` become `[text]{.mark}`; the managed references section (below) becomes pandoc's
   `::: {#refs}` placeholder, so the bibliography lands under your heading.
-- The literature-note identity keys (`zoteroID`, `zoteroSelectURI`, `zotero-key`, `citekey`) are dropped from the
-  copy's frontmatter so an exported literature note is never taken for a second note of the same item. Everything
-  else (frontmatter, fenced and inline code, HTML comments) is copied as it is.
+- The copy's frontmatter keeps only what the document needs (0.6.6): `title`, `subtitle`, `author`, `date`, `abstract`,
+  `keywords`, `subject`, `lang`, `dir`, `nocite`, and for citeproc `csl`, `reference-section-title`,
+  `suppress-bibliography`, `link-citations`, `link-bibliography` and `notes-after-punctuation`. Wikilinked names
+  become names (`[[Jane Doe]]` → `Jane Doe`). Pandoc stores every other metadata field in a `.docx` as a custom
+  document property that travels with the file, so vault fields (`description`, `tags`, `CMDS`, session links, the
+  literature-note identity keys) stay in the vault; the report lists them. Fenced and inline code and HTML comments are
+  copied as they are.
 
 The CSL file is the note's `csl` when that names a `.csl` file in the vault or an absolute path, else the installed
 Zotero style the note uses (a dependent style uses its installed parent, which pandoc needs). Without a file the kit
@@ -81,10 +86,7 @@ for Document Preferences and the bibliography would have to be added by hand. Th
   a field.
 - **The bibliography field** where the managed references section was (`::: {#refs}`), so it lands under your heading.
 
-The copy in a Word kit keeps only the frontmatter keys a reader of the `.docx` should see (`title`, `subtitle`, `author`,
-`date`, `abstract`, `keywords`, `subject`, `lang`, `dir`, `nocite`), with wikilinked names written as names. Pandoc
-stores every other metadata field as a custom document property that travels with the file, so vault fields such as
-`description`, `tags`, `CMDS` or a session link stay in the vault. The report lists the fields it kept out.
+The copy's frontmatter is filtered as in the pandoc kit (section 0), without the citeproc keys: no citeproc runs here.
 
 Two layout notes for Korean manuscripts. A caption written on the line right after an image becomes part of the
 image's paragraph; leave one blank line between them. Pandoc's built-in reference document marks East Asian text as

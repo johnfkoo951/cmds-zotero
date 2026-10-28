@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { parseCslInfo, styleKey, wordStyleFacts, type InstalledStyle } from "../src/bibliography/csl-styles";
-import { MAX_PREF_LENGTH, WORD_FILTER, ZOTERO_LUA, documentFrontmatter, hasRefsPlace, luaString, preferenceChunks, sessionId, wordDefaultsYaml, wordFilterLua, zoteroDocumentData, zoteroLuaLocations } from "../src/export/word-kit";
+import { CITEPROC_KEYS, DOCUMENT_KEYS, documentFrontmatter, frontmatterSummary } from "../src/export/sanitize";
+import { MAX_PREF_LENGTH, WORD_FILTER, ZOTERO_LUA, hasRefsPlace, luaString, preferenceChunks, sessionId, wordDefaultsYaml, wordFilterLua, zoteroDocumentData, zoteroLuaLocations } from "../src/export/word-kit";
 
 const style = (id: string, attributes: string, info = "", body = ""): string => `<?xml version="1.0" encoding="utf-8"?>
 <style xmlns="http://purl.org/net/xbiblio/csl" ${attributes} version="1.0">
@@ -86,6 +87,10 @@ test("Word copy frontmatter: only document keys reach the .docx, wikilinked name
 	assert.deepEqual(copy.removed, ["type", "description", "date created", "session-link", "tags"]);
 	assert.deepEqual(documentFrontmatter("---\ntype: note\ncsl: apa\n---\n\nText.\n"), { text: "Text.\n", removed: ["type", "csl"] });
 	assert.deepEqual(documentFrontmatter("No frontmatter.\n"), { text: "No frontmatter.\n", removed: [] });
+	const pandocKit = documentFrontmatter("---\nreference-section-title: 참고문헌\nlink-citations: true\nCMDS: \"[[📚 220 Personal Insights]]\"\n---\nText.\n", [...DOCUMENT_KEYS, ...CITEPROC_KEYS]);
+	assert.equal(pandocKit.text, "---\nreference-section-title: 참고문헌\nlink-citations: true\n---\nText.\n", "the pandoc kit keeps what citeproc reads");
+	assert.deepEqual(frontmatterSummary(pandocKit.removed), ["1 frontmatter field kept out of the .docx (pandoc would store them as document properties): CMDS."]);
+	assert.deepEqual(frontmatterSummary([]), []);
 });
 
 const pandocVersion = ((): number[] | null => {
