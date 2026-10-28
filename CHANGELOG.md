@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+A Word hand-off that keeps the citations Zotero's.
+
+- New command Export Word kit with live Zotero citations for current note. It writes `<note> (Word)` in *Export kit folder*: the cleaned copy, a pandoc defaults file and a small Lua filter. Run the copied command while Zotero is open; Better BibTeX's `zotero.lua` turns each `[@citekey]` into a Zotero field, and the kit's filter adds what `zotero.lua` leaves out for `.docx`: Zotero's document preferences (the note's style and locale, footnotes for a note style), footnotes for the citations of a note style, and a bibliography field where the references section was. In Word one Refresh in the Zotero tab formats everything, without the Document Preferences dialog. The note's style must be installed in Zotero. The copy keeps only the frontmatter fields meant for the document (title, author, date, abstract, keywords, lang and a few more); pandoc would store the others, such as tags or session links, as document properties that travel with the file. See `docs/pandoc-docx.md` §0b.
+- Installed styles now record their citation format, class and whether they have a bibliography (read from the same `.csl` files).
+- `docs/pandoc-docx.md`: `lang: ko-KR` is for bibliographies that should read in Korean; a Korean manuscript with English-style references keeps `en-US`, because `ko-KR` also writes the role terms ("편집자：", "번역자：") in Korean.
+
 ## 0.6.5 — 2026-10-15
 
 A neutral default for the index. Nothing changes for an install that has saved its settings.

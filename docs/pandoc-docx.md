@@ -1,9 +1,9 @@
-# Pandoc DOCX from an Obsidian manuscript (CMDS Zotero 0.5–0.6.2)
+# Pandoc DOCX from an Obsidian manuscript (CMDS Zotero 0.5–0.6.6)
 
 The plugin never produces DOCX itself and never runs pandoc. It produces what pandoc's citeproc is missing: a
 bibliography file for the `[@citekey]` citations in a note, in CSL-JSON (recommended), BibTeX or BibLaTeX, exported
 through Better BibTeX's `item.export` (one call per Zotero library, Zotero read-only). Since 0.6.2 it can also write
-the whole export kit (section 0). Nothing below edits the source note.
+the whole export kit (section 0), and since 0.6.6 a Word kit whose citations stay live Zotero fields (section 0b). Nothing below edits the source note.
 
 ## 0. The export kit (0.6.2)
 
@@ -51,6 +51,68 @@ the folder, such as the `.docx` pandoc writes, are left alone.
 
 The copy is a normal Markdown file in the vault, so "Find notes citing a source" also lists it; exclude the export
 folder from search or delete old kits if that is in the way.
+
+## 0b. Word with live Zotero citations (0.6.6)
+
+The kit above renders the citations once: the `.docx` holds text, and the style is changed by exporting again. When the
+document goes on in Word (co-authors, reviewers, a journal asking for another style), use **Export Word kit with live
+Zotero citations for current note** instead. Pandoc then writes every citation as a Zotero field, the same field the
+Zotero Word plugin inserts, and Word's Zotero plugin formats the citations and the bibliography from then on.
+
+It writes `<export folder>/<note> (Word)/`:
+
+| File | What it is |
+| --- | --- |
+| `<note>.md` | The same cleaned copy as the pandoc kit. |
+| `defaults.yaml` | No `citeproc`, no bibliography file. Runs `cmds-zotero-word.lua` and then Better BibTeX's `zotero.lua`, with the note's style for `zotero.lua`. |
+| `cmds-zotero-word.lua` | The kit's filter (below). |
+| `cmds-zotero-export.json` | The kit manifest. |
+
+`zotero.lua` (Better BibTeX's pandoc filter, <https://retorque.re/zotero-better-bibtex/exporting/pandoc/>) turns each
+`[@citekey]` into a Zotero field but, for `.docx`, writes no document preferences and no bibliography, so Word would ask
+for Document Preferences and the bibliography would have to be added by hand. The kit's filter adds both:
+
+- **Document preferences** (style, locale, footnotes for a note style) as the custom document properties
+  `ZOTERO_PREF_1…n`, where Zotero keeps them (Word allows 255 characters per property). The first Refresh in Word uses
+  the note's style without asking.
+- **Footnotes for a note style** (Chicago notes and bibliography, for example): a citation in the text becomes a
+  footnote after the punctuation that follows it, as pandoc's citeproc places notes. Citations you wrote inside your own
+  footnotes stay there. An author-in-text citation (`@key` without brackets) stays in the text as the author's name and
+  a field.
+- **The bibliography field** where the managed references section was (`::: {#refs}`), so it lands under your heading.
+
+The copy in a Word kit keeps only the frontmatter keys a reader of the `.docx` should see (`title`, `subtitle`, `author`,
+`date`, `abstract`, `keywords`, `subject`, `lang`, `dir`, `nocite`), with wikilinked names written as names. Pandoc
+stores every other metadata field as a custom document property that travels with the file, so vault fields such as
+`description`, `tags`, `CMDS` or a session link stay in the vault. The report lists the fields it kept out.
+
+Two layout notes for Korean manuscripts. A caption written on the line right after an image becomes part of the
+image's paragraph; leave one blank line between them. Pandoc's built-in reference document marks East Asian text as
+Chinese (Word shows "Chinese (Simplified)" and checks spelling with it) whatever `lang` says; a reference document whose
+Normal style uses Korean fixes that (`pandoc -o reference.docx --print-default-data-file reference.docx`, change the
+language and font in Word, then add `reference-doc:` to `defaults.yaml`).
+
+Steps:
+
+1. Once per machine, put `zotero.lua` into pandoc's filters folder (the report shows this line when the file is
+   missing; read the file first if you like, it is plain Lua):
+
+   ```sh
+   mkdir -p ~/.local/share/pandoc/filters && curl -fsSL -o ~/.local/share/pandoc/filters/zotero.lua https://retorque.re/zotero-better-bibtex/exporting/zotero.lua
+   ```
+
+2. The note's style must be installed in Zotero (Settings → Cite), because Word's Zotero plugin formats with Zotero's
+   styles. A `csl:` that names a `.csl` file outside Zotero is refused with that reason.
+3. Run the copied command **while Zotero is open**: pandoc asks Better BibTeX for the cited items. A citekey Zotero does
+   not know stays as `[@key]` text and pandoc prints its name.
+4. Open the `.docx` in Word and press **Refresh** in the Zotero tab once. From then on add citations, refresh and change
+   the style (Document Preferences) in Word.
+
+`zotero.lua` also checks retorque.re for a newer version of itself each time pandoc runs it; that request is pandoc's,
+not the plugin's. The plugin only checks whether the file exists (see the README's disclosures).
+
+After the hand-off the `.docx` is the document: edits made in Word do not come back to the note. Decide when a
+manuscript moves to Word (for example, when it goes to co-authors) and keep writing in Obsidian until then.
 
 ## Style, locale and the cited keys (0.6.2)
 
@@ -149,6 +211,10 @@ as Word Document*.
 - `lang: ko-KR` in the YAML block selects the Korean CSL locale for citeproc terms ("및", "쪽", "n.d." equivalents)
   when the style ships or references a `locales-ko-KR.xml`; APA and most CSL styles do. Without `lang`, terms stay
   English even though the entries are Korean.
+- Use `ko-KR` only when the bibliography should read in Korean. A Korean manuscript whose references follow an English
+  style (Western-language sources in Chicago or APA, as in classics or theology) keeps `lang: en-US`: with `ko-KR`
+  citeproc also writes the role terms in Korean ("편집자：", "번역자：" in place of "ed.", "trans."), mixed into English
+  entries. The same `lang` sets the locale of the Word kit's Zotero document preferences.
 - Many styles alphabetise Korean author names correctly only when Zotero stores them in the family/given form;
   the export is verbatim, so fix the Zotero record, not the sidecar.
 - Fonts are a DOCX concern: pass `--reference-doc` with a document whose Normal style uses a Korean font.

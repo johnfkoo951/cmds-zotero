@@ -1,0 +1,266 @@
+/**
+ * 0.6.6 word-zotero-fields: the Word variant of the export kit. Pandoc runs this kit's own filter and then Better BibTeX's
+ * `zotero.lua`, which turns every citation into a live Zotero field. `zotero.lua` writes no document preferences and no
+ * bibliography for `.docx`, so the kit's filter adds them: Zotero's document preferences (style, locale, footnotes) as the
+ * custom properties `ZOTERO_PREF_1…n`, footnotes for the citations of a note style (as pandoc's citeproc makes them), and
+ * a Zotero bibliography field. Word's Zotero plugin fills all of it on the first Refresh without asking for Document
+ * Preferences. The plugin never runs pandoc and never ships or downloads `zotero.lua`. Pure: no `obsidian` import.
+ */
+import { join } from "path";
+import { KIT_DEFAULTS } from "./kit";
+
+export const WORD_FILTER = "cmds-zotero-word.lua";
+export const ZOTERO_LUA = "zotero.lua";
+export const ZOTERO_LUA_URL = "https://retorque.re/zotero-better-bibtex/exporting/zotero.lua";
+/** Word keeps at most 255 characters in one custom document property; Zotero joins `ZOTERO_PREF_1`, `_2`, … in order. */
+export const MAX_PREF_LENGTH = 255;
+
+export interface ZoteroDocumentInput {
+	/** The style's CSL id, e.g. `http://www.zotero.org/styles/chicago-notes-bibliography`. */
+	styleId: string;
+	/** BCP 47 locale, e.g. `en-US`. */
+	locale: string;
+	/** A note style: Zotero keeps the citations in footnotes. */
+	noteStyle: boolean;
+	hasBibliography: boolean;
+	/** Eight letters or digits; Zotero starts its own session for an unknown id. */
+	sessionId: string;
+}
+
+const xmlAttribute = (value: string): string => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * Zotero's document data (data version 3, the form Zotero writes back after a Refresh). `bibliographyStyleHasBeenSet="0"`
+ * lets Zotero set Word's Bibliography paragraph style from the CSL on the first Refresh.
+ */
+export function zoteroDocumentData(input: ZoteroDocumentInput): string {
+	const prefs = ["<pref name=\"fieldType\" value=\"Field\"/>", ...(input.noteStyle ? ["<pref name=\"noteType\" value=\"1\"/>"] : [])];
+	return `<data data-version="3" zotero-version="7.0"><session id="${xmlAttribute(input.sessionId)}"/>`
+		+ `<style id="${xmlAttribute(input.styleId)}" locale="${xmlAttribute(input.locale)}" hasBibliography="${input.hasBibliography ? 1 : 0}" bibliographyStyleHasBeenSet="0"/>`
+		+ `<prefs>${prefs.join("")}</prefs></data>`;
+}
+
+/** `text` in pieces of at most `size` UTF-16 units, never splitting a character; joined they are `text` again. */
+export function preferenceChunks(text: string, size = MAX_PREF_LENGTH): string[] {
+	const chunks: string[] = [];
+	let current = "";
+	for (const char of text) {
+		if (current.length + char.length > size) { chunks.push(current); current = ""; }
+		current += char;
+	}
+	if (current) chunks.push(current);
+	return chunks;
+}
+
+const SESSION_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/** An eight-character session id from random bytes (at least eight). */
+export function sessionId(bytes: Uint8Array): string {
+	if (bytes.length < 8) throw new Error("sessionId needs eight random bytes.");
+	return Array.from(bytes.slice(0, 8), byte => SESSION_ALPHABET[byte % SESSION_ALPHABET.length]).join("");
+}
+
+/** A Lua long-bracket string literal of `value`, with a level that `value` cannot close early. */
+export function luaString(value: string): string {
+	let level = 0;
+	const close = (): string => `]${"=".repeat(level)}]`;
+	while ((value + close()).indexOf(close()) !== value.length) level++;
+	// Lua drops a newline that directly follows the opening bracket; a leading newline is doubled so it survives.
+	return `[${"=".repeat(level)}[${value.startsWith("\n") ? "\n" : ""}${value}${close()}`;
+}
+
+export type BibliographyPlacement = "end" | "none";
+
+/**
+ * Where Word's bibliography goes when the copy has no `::: {#refs}` place, i.e. the note has no references section.
+ * "end": a Zotero bibliography field after the last paragraph, with no heading of its own.
+ * "none": no field; the author adds one in Word with Zotero → Add/Edit Bibliography.
+ */
+export function bibliographyWithoutReferencesSection(style: { noteStyle: boolean; hasBibliography: boolean }): BibliographyPlacement {
+	// TODO(you): decide the placement for notes without a references section (2–6 lines).
+	void style;
+	throw new Error("bibliographyWithoutReferencesSection is not written yet.");
+}
+
+/**
+ * Frontmatter keys a `.docx` reader should see: pandoc's title-page and core-property fields. `description` is left out
+ * because vault notes use it for a summary aimed at agents, not at co-authors.
+ */
+export const DOCUMENT_KEYS: readonly string[] = ["title", "subtitle", "author", "date", "abstract", "keywords", "subject", "lang", "dir", "nocite"];
+
+const KEY_LINE = /^([^\s:#-][^:]*?)[ \t]*:(?:[ \t]|$)/;
+const WIKILINK_VALUE = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g;
+
+/**
+ * The cleaned copy with only `DOCUMENT_KEYS` in its frontmatter and wikilinks in their values written as names. Pandoc
+ * writes every other metadata field into the `.docx` as a custom document property that travels with the file (vault
+ * links, session links, model names), so the Word kit keeps the vault's own keys out of it. No kept key: no frontmatter.
+ */
+export function documentFrontmatter(markdown: string): { text: string; removed: string[] } {
+	const block = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(markdown);
+	if (!block) return { text: markdown, removed: [] };
+	const kept: string[] = [];
+	const removed: string[] = [];
+	let keeping = false;
+	for (const line of block[1].split(/\r?\n/)) {
+		const key = KEY_LINE.exec(line);
+		if (key) {
+			keeping = DOCUMENT_KEYS.includes(key[1]);
+			if (!keeping) removed.push(key[1]);
+		}
+		if (keeping) kept.push(line.replace(WIKILINK_VALUE, (_whole: string, target: string, alias: string | undefined) => alias?.trim() || (target.split("/").pop() ?? target).trim()));
+	}
+	const body = markdown.slice(block[0].length);
+	return { text: kept.length ? `---\n${kept.join("\n")}\n---\n${body}` : body.replace(/^\r?\n/, ""), removed };
+}
+
+/** True when the cleaned copy has pandoc's bibliography place, `::: {#refs}` (written for the managed references section). */
+export function hasRefsPlace(markdown: string): boolean {
+	return /^:{3,}[ \t]*\{[ \t]*#refs[ \t}]/m.test(markdown);
+}
+
+export interface WordFilterInput {
+	generator: string;
+	/** `zoteroDocumentData` in pieces of `preferenceChunks`. */
+	prefs: readonly string[];
+	noteStyle: boolean;
+	hasBibliography: boolean;
+	/** Used only when the copy has no `::: {#refs}`. */
+	withoutRefs: BibliographyPlacement;
+}
+
+/**
+ * The kit's Lua filter, run before `zotero.lua`. Its CONFIG table is the only part that differs between kits. Citations
+ * already in a footnote stay where they are; a citation in the text of a note style becomes a footnote after the
+ * punctuation that follows it (the space before it goes), the way pandoc's citeproc places notes. An author-in-text
+ * citation (`@key` without brackets) stays in the text.
+ */
+export function wordFilterLua(input: WordFilterInput): string {
+	const config = [
+		"local CONFIG = {",
+		`  prefs = { ${input.prefs.map(luaString).join(", ")} },`,
+		`  note_style = ${input.noteStyle},`,
+		`  has_bibliography = ${input.hasBibliography},`,
+		`  bibliography_without_refs = ${luaString(input.withoutRefs)},`,
+		"}",
+	];
+	return `-- Written by ${input.generator}. Runs before Better BibTeX's zotero.lua (see ${KIT_DEFAULTS} in this folder).
+-- Adds what zotero.lua leaves out for .docx: Zotero's document preferences, footnotes for a note style, the bibliography.
+${config.join("\n")}
+
+local function document_preferences(meta)
+  for index, chunk in ipairs(CONFIG.prefs) do meta['ZOTERO_PREF_' .. index] = pandoc.MetaString(chunk) end
+  return meta
+end
+
+local BIBLIOGRAPHY_FIELD = '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+  .. '<w:r><w:instrText xml:space="preserve"> ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY </w:instrText></w:r>'
+  .. '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+  .. '<w:r><w:rPr><w:noProof/></w:rPr><w:t>{Bibliography: press Refresh in the Zotero tab}</w:t></w:r>'
+  .. '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+
+local PUNCTUATION = '^[%.,;:!?]+'
+
+local function footnoted(inlines)
+  local out = pandoc.List()
+  local at = 1
+  while at <= #inlines do
+    local node = inlines[at]
+    if node.t == 'Cite' and node.citations[1].mode ~= 'AuthorInText' then
+      if #out > 0 and (out[#out].t == 'Space' or out[#out].t == 'SoftBreak') then out:remove(#out) end
+      local note = pandoc.Note({ pandoc.Para({ node }) })
+      local after = inlines[at + 1]
+      local punctuation = after and after.t == 'Str' and after.text:match(PUNCTUATION)
+      if punctuation then
+        out:insert(pandoc.Str(punctuation))
+        out:insert(note)
+        local rest = after.text:sub(#punctuation + 1)
+        if rest ~= '' then out:insert(pandoc.Str(rest)) end
+        at = at + 2
+      else
+        out:insert(note)
+        at = at + 1
+      end
+    else
+      out:insert(node)
+      at = at + 1
+    end
+  end
+  return out
+end
+
+local refs_seen = false
+
+local function refs_place(div)
+  if div.identifier ~= 'refs' then return nil end
+  refs_seen = true
+  if not CONFIG.has_bibliography then return {} end
+  return pandoc.RawBlock('openxml', BIBLIOGRAPHY_FIELD)
+end
+
+local function bibliography_at_end(doc)
+  if refs_seen or not CONFIG.has_bibliography or CONFIG.bibliography_without_refs ~= 'end' then return nil end
+  doc.blocks:insert(pandoc.RawBlock('openxml', BIBLIOGRAPHY_FIELD))
+  return doc
+end
+
+local filters = { { Meta = document_preferences } }
+if CONFIG.note_style then
+  table.insert(filters, { traverse = 'topdown', Note = function(note) return note, false end, Inlines = footnoted })
+end
+table.insert(filters, { Div = refs_place })
+table.insert(filters, { Pandoc = bibliography_at_end })
+return filters
+`;
+}
+
+/** A YAML scalar: JSON's double-quoted form is valid YAML and escapes everything that needs it. */
+const scalar = (value: string): string => JSON.stringify(value);
+
+export interface WordDefaultsInput {
+	input: string;
+	output: string;
+	/** The style's short name or id, passed to `zotero.lua` (it reads `zotero.csl-style`). */
+	style: string;
+	lang?: string;
+	vaultRoot: string;
+	noteFolder: string;
+	generator: string;
+}
+
+/**
+ * The pandoc defaults file of a Word kit. No citeproc and no bibliography file: Zotero supplies the items while pandoc
+ * runs. `zotero.lua` is named without a folder, so pandoc looks in the working directory and then in the `filters`
+ * folder of its user data directory.
+ */
+export function wordDefaultsYaml(input: WordDefaultsInput): string {
+	const resource = [input.vaultRoot, ...(input.noteFolder ? [`${input.vaultRoot}/${input.noteFolder}`] : []), "${.}"];
+	const lines = [
+		`# Written by ${input.generator}. Run while Zotero is open: pandoc --defaults <this file>`,
+		"# Citations become live Zotero fields (Better BibTeX zotero.lua); in Word press Refresh in the Zotero tab once.",
+		"# ${.} is the folder of this file; pandoc 2.17 or later is needed.",
+		"from: markdown",
+		"to: docx",
+		`input-files:\n  - ${scalar(`\${.}/${input.input}`)}`,
+		`output-file: ${scalar(`\${.}/${input.output}`)}`,
+		`filters:\n  - ${scalar(`\${.}/${WORD_FILTER}`)}\n  - ${scalar(ZOTERO_LUA)}`,
+		`resource-path:\n${resource.map(path => `  - ${scalar(path)}`).join("\n")}`,
+		"metadata:",
+		"  zotero:",
+		`    csl-style: ${scalar(input.style)}`,
+		"    author-in-text: true",
+		...(input.lang ? [`  lang: ${scalar(input.lang)}`] : []),
+	];
+	return `${lines.join("\n")}\n`;
+}
+
+/** Where pandoc finds a filter named without a folder: the `filters` folders of its user data directories. */
+export function zoteroLuaLocations(home: string, xdgDataHome?: string): string[] {
+	const xdg = xdgDataHome?.trim() || join(home, ".local", "share");
+	return [join(xdg, "pandoc", "filters", ZOTERO_LUA), join(home, ".pandoc", "filters", ZOTERO_LUA)];
+}
+
+/** The one-line install of `zotero.lua` into pandoc's filters folder, shown when none was found. */
+export function zoteroLuaInstallCommand(): string {
+	return `mkdir -p ~/.local/share/pandoc/filters && curl -fsSL -o ~/.local/share/pandoc/filters/${ZOTERO_LUA} ${ZOTERO_LUA_URL}`;
+}

@@ -28,6 +28,12 @@ export interface CslStyleInfo {
 	parent?: string;
 	/** `default-locale` of the `<style>` element, when present. */
 	defaultLocale?: string;
+	/** `<category citation-format>` (`note`, `author-date`, `numeric`, …), when present; dependent styles carry it too. */
+	citationFormat?: string;
+	/** `class` of the `<style>` element (`note` or `in-text`); independent styles only. */
+	styleClass?: string;
+	/** True when the file has a `<bibliography>` layout (a dependent style has none of its own). */
+	bibliography?: boolean;
 }
 
 export interface InstalledStyle extends CslStyleInfo {
@@ -86,7 +92,25 @@ export function parseCslInfo(xml: string): CslStyleInfo | null {
 	const shortTitle = element("title-short");
 	let parent: string | undefined;
 	for (const link of info[1].matchAll(/<link\s[^>]*>/g)) if (attribute(link[0], "rel") === "independent-parent") parent = attribute(link[0], "href");
-	return { id, title, ...(shortTitle ? { shortTitle } : {}), ...(parent ? { parent } : {}), ...(defaultLocale ? { defaultLocale } : {}) };
+	let citationFormat: string | undefined;
+	for (const category of info[1].matchAll(/<category\s[^>]*>/g)) citationFormat ??= attribute(category[0], "citation-format");
+	const styleClass = attribute(style, "class");
+	const bibliography = /<bibliography[\s>]/.test(text);
+	return {
+		id, title, ...(shortTitle ? { shortTitle } : {}), ...(parent ? { parent } : {}), ...(defaultLocale ? { defaultLocale } : {}),
+		...(citationFormat ? { citationFormat } : {}), ...(styleClass ? { styleClass } : {}), ...(bibliography ? { bibliography } : {}),
+	};
+}
+
+/**
+ * Word facts of an installed style for Zotero's document preferences: a note style (footnotes) and whether it has a
+ * bibliography. A dependent style takes both from its installed parent; without the parent its category decides and a
+ * bibliography is assumed.
+ */
+export function wordStyleFacts(styles: readonly InstalledStyle[], style: InstalledStyle): { noteStyle: boolean; hasBibliography: boolean } {
+	const independent = independentStyle(styles, style);
+	const noteStyle = (independent?.styleClass ?? (style.citationFormat === "note" ? "note" : "in-text")) === "note";
+	return { noteStyle, hasBibliography: independent ? independent.bibliography === true : true };
 }
 
 /** The stored style value of a CSL id: `apa` for `http://www.zotero.org/styles/apa`, the full id otherwise. */

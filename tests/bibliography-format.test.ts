@@ -42,7 +42,7 @@ const csl = (id: string, title: string, extra = ""): string => `<?xml version="1
 
 test("CSL info: id, title, entities, parent and default locale; missing pieces are refused", () => {
 	const info = parseCslInfo(csl("http://www.zotero.org/styles/sample-a", "Sample &amp; Style &#xAC00;"));
-	assert.deepEqual(info, { id: "http://www.zotero.org/styles/sample-a", title: "Sample & Style 가", shortTitle: "T", defaultLocale: "en-US" });
+	assert.deepEqual(info, { id: "http://www.zotero.org/styles/sample-a", title: "Sample & Style 가", shortTitle: "T", defaultLocale: "en-US", styleClass: "in-text" });
 	const dependent = parseCslInfo(csl("http://www.zotero.org/styles/sample-b", "Dependent", "<link href=\"http://www.zotero.org/styles/sample-a\" rel=\"independent-parent\"/>"));
 	assert.equal(dependent?.parent, "http://www.zotero.org/styles/sample-a");
 	assert.equal(parseCslInfo("<style><info><title>No id</title></info></style>"), null);

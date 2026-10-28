@@ -15,6 +15,8 @@ export function registerReferenceCommands(plugin: CMDSZoteroPlugin): void {
 	plugin.addCommand({ id: "insert-references-section", name: "Insert or update references section", checkCallback: whenNote(() => plugin.currentNote() !== null, () => { void plugin.run(() => plugin.references.insertReferencesSection()); }) });
 	plugin.addCommand({ id: "export-pandoc-kit", name: "Export pandoc kit for current note", checkCallback: whenNote(() => plugin.currentNote() !== null, () => { void plugin.run(() => plugin.references.exportKit()); }) });
 	plugin.addCommand({ id: "choose-bibliography-style", name: "Choose bibliography style from installed styles", callback: () => { void plugin.run(() => chooseAndSaveStyle(plugin)); } });
+	// 0.6.6 word-zotero-fields
+	plugin.addCommand({ id: "export-word-zotero-kit", name: "Export Word kit with live Zotero citations for current note", checkCallback: whenNote(() => plugin.currentNote() !== null, () => { void plugin.run(() => plugin.references.exportWordKit()); }) });
 }
 
 /** 0.6.4: a command that needs a note is offered only while `available()` holds (Plugin guidelines: checkCallback). */

@@ -6,9 +6,13 @@ import { adjacentOccurrence, citedKeyAt, citedKeySet } from "../citations/cited-
 import { checkCitations, referenceRowsFromSet, renamedKeys } from "../citations/check";
 import { planReferencesSection, referencesBody, withoutReferencesBlock } from "../citations/references-block";
 import { markdownEntry } from "../bibliography/format";
-import { findStyle, homeRelative, independentStyle } from "../bibliography/csl-styles";
+import { randomBytes } from "crypto";
+import { existsSync } from "fs";
+import { homedir } from "os";
+import { findStyle, homeRelative, independentStyle, wordStyleFacts } from "../bibliography/csl-styles";
 import { sanitizeForExport, sanitizeSummary, type LinkTarget } from "../export/sanitize";
 import { KIT_BIBLIOGRAPHY, KIT_DEFAULTS, KIT_MANIFEST, defaultsYaml, kitDecision, kitFolder, kitName, manifestText, pandocCommand, sha256, vaultRootFrom, type KitManifest } from "../export/kit";
+import { WORD_FILTER, bibliographyWithoutReferencesSection, documentFrontmatter, hasRefsPlace, preferenceChunks, sessionId, wordDefaultsYaml, wordFilterLua, zoteroDocumentData, zoteroLuaInstallCommand, zoteroLuaLocations } from "../export/word-kit";
 import { lineDiff } from "../fragments";
 import { NOTE_BACKUP_DIR } from "../importer";
 import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory } from "../vault-storage";
@@ -233,16 +237,7 @@ export class ReferencesController {
 				[KIT_BIBLIOGRAPHY, csl.content],
 				[KIT_DEFAULTS, defaultsYaml({ input: `${name}.md`, output: `${name}.docx`, ...(style.path ? { csl: style.path } : {}), ...(format.locale ? { lang: format.locale } : {}), vaultRoot, noteFolder, generator: `${this.plugin.manifest.name} ${this.plugin.manifest.version}` })],
 			]);
-			const manifest: KitManifest = { version: 1, source: file.path, createdAt: new Date().toISOString(), files: Object.fromEntries([...contents].map(([key, value]) => [key, sha256(value)])) };
-			for (const [key, value] of [...contents, [KIT_MANIFEST, manifestText(manifest)] as const]) {
-				const path = `${folder}/${key}`;
-				await assertVaultBoundary(this.plugin.app, path);
-				await ensureDirectory(this.plugin.app, path);
-				await this.plugin.app.vault.adapter.write(path, value);
-			}
-			const adapter = this.plugin.app.vault.adapter;
-			const defaults = adapter instanceof FileSystemAdapter ? `${adapter.getBasePath()}/${folder}/${KIT_DEFAULTS}` : `${folder}/${KIT_DEFAULTS}`;
-			const command = pandocCommand(defaults);
+			const command = pandocCommand(await this.writeKitFiles(folder, file, contents));
 			let copied = true;
 			try { await navigator.clipboard.writeText(command); } catch { copied = false; }
 			const missing = cited.entries.length - csl.exported.length;
@@ -258,6 +253,27 @@ export class ReferencesController {
 			];
 			new ReportModal(this.plugin.app, "Pandoc export kit", lines.join("\n")).open();
 		};
+		await this.writeKitFolder(name, kitNames, write);
+	}
+
+	/** Writes `contents` and the manifest into `folder` (inside the vault); returns the absolute defaults path when known. */
+	private async writeKitFiles(folder: string, source: TFile, contents: ReadonlyMap<string, string>): Promise<string> {
+		const manifest: KitManifest = { version: 1, source: source.path, createdAt: new Date().toISOString(), files: Object.fromEntries([...contents].map(([key, value]) => [key, sha256(value)])) };
+		for (const [key, value] of [...contents, [KIT_MANIFEST, manifestText(manifest)] as const]) {
+			const path = `${folder}/${key}`;
+			await assertVaultBoundary(this.plugin.app, path);
+			await ensureDirectory(this.plugin.app, path);
+			await this.plugin.app.vault.adapter.write(path, value);
+		}
+		const adapter = this.plugin.app.vault.adapter;
+		return adapter instanceof FileSystemAdapter ? `${adapter.getBasePath()}/${folder}/${KIT_DEFAULTS}` : `${folder}/${KIT_DEFAULTS}`;
+	}
+
+	/**
+	 * The kit folder `<export folder>/<name>`: written when empty or still the plugin's unchanged export; otherwise a fresh
+	 * `<name> <n>` is offered and the earlier export stays as it is.
+	 */
+	private async writeKitFolder(name: string, kitNames: readonly string[], write: (folder: string) => Promise<void>): Promise<void> {
 		const root = this.plugin.settings.exportFolder;
 		const first = kitFolder(root, name);
 		const existing = await this.existingKit(first, kitNames);
@@ -274,5 +290,70 @@ export class ReferencesController {
 		new ActionsModal(this.plugin.app, `${first} ${why}`, [
 			{ name: `Export to ${freshFolder}`, description: "A new folder; the earlier export stays as it is.", action: () => write(freshFolder) },
 		]).open();
+	}
+
+	/**
+	 * 0.6.6 word-zotero-fields, "Export Word kit with live Zotero citations": the cleaned copy, a defaults file that runs
+	 * this kit's filter and Better BibTeX's `zotero.lua`, and the filter. Word gets live Zotero fields in the note's style,
+	 * so the bibliography is made (and the style changed) in Word with the Zotero plugin. The style must be installed in
+	 * Zotero, because Word's Zotero plugin formats with Zotero's styles. No Better BibTeX request is made here; pandoc asks
+	 * Zotero for the cited items when the person runs the command. Pandoc is never run.
+	 */
+	async exportWordKit(): Promise<void> {
+		const file = this.activeFile();
+		const source = await this.plugin.readSaved(file);
+		const { index, state } = await this.snapshot();
+		if (!index) throw new Error("No saved index yet. Refresh the citekey index first.");
+		const original = citedKeySet(withoutReferencesBlock(source));
+		const cleaned = sanitizeForExport(source, { resolve: this.linkResolver(file, index), renamed: renamedKeys(original, index.entries) });
+		const cited = this.resolveCited(cleaned.text, index.entries, state.loaded);
+		if (!cited.entries.length) throw new Error("No resolved citations in this note; the kit needs at least one.");
+		const format = await this.plugin.bibliography.noteFormat(file);
+		const styles = (await this.plugin.bibliography.installedStyles()).styles;
+		const style = findStyle(styles, format.style);
+		if (!style) throw new Error(`The style "${format.style}" is not installed in Zotero. Word's Zotero plugin formats with Zotero's installed styles: install it in Zotero (Settings → Cite → +) or choose an installed style for this note.`);
+		const facts = wordStyleFacts(styles, style);
+		const locale = format.locale || style.defaultLocale || "en-US";
+		const copy = documentFrontmatter(cleaned.text);
+		const refsPlace = hasRefsPlace(copy.text);
+		const withoutRefs = refsPlace ? "none" : bibliographyWithoutReferencesSection(facts);
+		const prefs = preferenceChunks(zoteroDocumentData({ styleId: style.id, locale, ...facts, sessionId: sessionId(randomBytes(8)) }));
+		const name = `${kitName(file.basename.replace(/^@+/, ""))} (Word)`;
+		const copyName = `${kitName(file.basename.replace(/^@+/, ""))}.md`;
+		const kitNames = [copyName, KIT_DEFAULTS, WORD_FILTER];
+		const generator = `${this.plugin.manifest.name} ${this.plugin.manifest.version}`;
+		const found = zoteroLuaLocations(homedir(), process.env.XDG_DATA_HOME).find(path => existsSync(path)) ?? null;
+		const write = async (folder: string): Promise<void> => {
+			const noteFolder = file.parent && file.parent.path !== "/" ? file.parent.path : "";
+			const contents = new Map<string, string>([
+				[copyName, copy.text.endsWith("\n") ? copy.text : `${copy.text}\n`],
+				[KIT_DEFAULTS, wordDefaultsYaml({ input: copyName, output: copyName.replace(/\.md$/, ".docx"), style: style.key, ...(format.locale ? { lang: format.locale } : {}), vaultRoot: vaultRootFrom(folder), noteFolder, generator })],
+				[WORD_FILTER, wordFilterLua({ generator, prefs, ...facts, withoutRefs })],
+			]);
+			const command = pandocCommand(await this.writeKitFiles(folder, file, contents));
+			let copied = true;
+			try { await navigator.clipboard.writeText(command); } catch { copied = false; }
+			const placement = !facts.hasBibliography ? `"${style.title}" has no bibliography, so none is added.`
+				: refsPlace ? "The bibliography field takes the place of the references section."
+				: withoutRefs === "end" ? "The note has no references section; the bibliography field is added at the end."
+				: "The note has no references section, so no bibliography field is added (Zotero → Add/Edit Bibliography in Word).";
+			const lines = [
+				`Written to ${folder}/: ${kitNames.join(", ")} and ${KIT_MANIFEST}. ${file.basename} itself was not changed.`,
+				`Style: ${style.title}${facts.noteStyle ? " (footnotes)" : ""} · ${locale}. ${placement}`,
+				...(cited.skipped.length ? [`Not in the index (zotero.lua leaves them as text): ${cited.skipped.join(", ")}.`] : []),
+				...(format.problems.length ? format.problems : []),
+				...sanitizeSummary(cleaned.report),
+				...(copy.removed.length ? [`${copy.removed.length} frontmatter field${copy.removed.length === 1 ? "" : "s"} kept out of the Word file (pandoc would store them as document properties): ${copy.removed.join(", ")}.`] : []),
+				"",
+				found ? `zotero.lua: ${found}` : `zotero.lua was not found in pandoc's filters folder. Install Better BibTeX's filter once:\n${zoteroLuaInstallCommand()}`,
+				"",
+				copied ? "Command copied to the clipboard. Run it while Zotero is open (pandoc 2.17 or later; the plugin never runs it):" : "Run this command while Zotero is open (pandoc 2.17 or later; the plugin never runs it):",
+				command,
+				"",
+				"In Word, press Refresh in the Zotero tab once; the citations and the bibliography are then Zotero's, in the style above.",
+			];
+			new ReportModal(this.plugin.app, "Word export kit (live Zotero citations)", lines.join("\n")).open();
+		};
+		await this.writeKitFolder(name, kitNames, write);
 	}
 }

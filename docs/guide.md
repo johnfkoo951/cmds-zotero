@@ -110,6 +110,7 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 
 **Exporting with pandoc**
 - **Export pandoc kit for current note** writes into **Export kit folder** (default `CMDS Zotero exports`), one subfolder per note: a cleaned copy of the note (literature links become `[@key]`, callouts become blockquotes, comments and markers are removed), the cited sources as CSL-JSON and a pandoc defaults file. The pandoc command line goes to the clipboard. The source note is not changed, the plugin never runs pandoc, and an earlier kit you changed is never overwritten; a new folder is offered instead.
+- **Export Word kit with live Zotero citations for current note** (0.6.6) writes `<note> (Word)` in the same folder: the cleaned copy, a defaults file and a small filter. Run the copied command while Zotero is open; the `.docx` holds Zotero fields, so in Word you press Refresh in the Zotero tab once and then add citations, refresh and change the style there. The note's style must be installed in Zotero, and Better BibTeX's `zotero.lua` must be in pandoc's filters folder (the report shows the install line). See [pandoc-docx.md](pandoc-docx.md) §0b.
 - **Copy CSL-JSON for cited sources** and **Write pandoc bibliography sidecar for current note** copy the current note's cited sources as CSL-JSON, or save them to `.cmds-zotero/bibliography/<note>.json` and show the `bibliography:` line for the frontmatter.
 - The [pandoc/DOCX guide](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/pandoc-docx.md) explains the kit and the export step by step.
 
@@ -149,6 +150,7 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 | Insert or update references section | Writes or updates a managed references block at the end of the note |
 | Choose bibliography style from installed styles | Picks a style from Zotero's styles folder and checks it with BBT |
 | Export pandoc kit for current note | Writes a cleaned copy, CSL-JSON and pandoc defaults for export |
+| Export Word kit with live Zotero citations for current note | Writes a cleaned copy and pandoc defaults whose `.docx` keeps Zotero fields for Word |
 | Copy CSL-JSON for cited sources | Copies CSL-JSON for the current note's citations |
 | Write pandoc bibliography sidecar for current note | Saves a bibliography file for pandoc |
 | Open references sidebar | Reviews the current note's citations |

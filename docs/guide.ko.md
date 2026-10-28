@@ -110,6 +110,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 
 **pandoc으로 내보내기**
 - **Export pandoc kit for current note**는 **Export kit folder**(기본 `CMDS Zotero exports`) 안에 노트마다 하위 폴더를 만들어 씁니다. 정리한 노트 사본(문헌 링크는 `[@key]`로, 콜아웃은 인용 블록으로 바꾸고 주석과 마커는 지움), 인용한 자료의 CSL-JSON, pandoc defaults 파일이 들어가고, pandoc 명령줄은 클립보드에 복사합니다. 원래 노트는 바꾸지 않고, 플러그인이 pandoc을 실행하지도 않습니다. 내가 고친 이전 키트는 덮어쓰지 않고 새 폴더를 제안합니다.
+- **Export Word kit with live Zotero citations for current note**(0.6.6)는 같은 폴더에 `<노트> (Word)`를 만들어 정리한 사본, defaults 파일, 작은 필터를 씁니다. 복사된 명령을 Zotero를 켠 채 실행하면 `.docx`의 인용이 Zotero 필드로 들어갑니다. Word의 Zotero 탭에서 Refresh를 한 번 누르면 그다음부터 인용 추가, 갱신, 스타일 변경을 Word에서 합니다. 노트의 스타일은 Zotero에 설치돼 있어야 하고, Better BibTeX의 `zotero.lua`가 pandoc 필터 폴더에 있어야 합니다(없으면 보고 창에 설치 명령이 나옵니다). 자세한 내용은 [pandoc-docx.md](pandoc-docx.md) §0b.
 - **Copy CSL-JSON for cited sources**와 **Write pandoc bibliography sidecar for current note**: 현재 노트가 인용한 자료를 CSL-JSON으로 복사하거나 `.cmds-zotero/bibliography/<노트>.json`에 저장하고, frontmatter에 넣을 `bibliography:` 줄을 알려 줍니다.
 - 키트와 내보내기 과정은 [pandoc/DOCX 가이드](https://github.com/johnfkoo951/cmds-zotero/blob/main/docs/pandoc-docx.md)에 단계별로 있습니다.
 
@@ -149,6 +150,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 | Insert or update references section | 노트 끝의 관리형 참고문헌 블록 작성·갱신 |
 | Choose bibliography style from installed styles | Zotero styles 폴더에서 스타일을 골라 BBT로 확인 |
 | Export pandoc kit for current note | 내보내기용 정리 사본·CSL-JSON·pandoc defaults 작성 |
+| Export Word kit with live Zotero citations for current note | Word에서 Zotero 필드로 이어 쓰는 `.docx`용 정리 사본·pandoc defaults 작성 |
 | Copy CSL-JSON for cited sources | 현재 노트 인용의 CSL-JSON 복사 |
 | Write pandoc bibliography sidecar for current note | pandoc용 참고문헌 파일 저장 |
 | Open references sidebar | 현재 노트 인용 검토 |
