@@ -8797,6 +8797,11 @@ var DEFAULT_SETTINGS = {
   bibliographyOrder: "style",
   zoteroDataDirectory: "~/Zotero",
   exportFolder: "CMDS Zotero exports",
+  // 0.6.6: all off; export kits stay in the vault and the plugin runs nothing.
+  exportOutsideVault: false,
+  pandocAfterExport: false,
+  pandocPath: "",
+  hookmarkLinkExports: false,
   noteFilenamePattern: "@{citekey}",
   // 0.6.3: the 0.6.1 file name
   noteFolderPattern: ""
@@ -10451,6 +10456,14 @@ function sortCitingNotes(notes) {
 }
 
 // src/doctor/checks.ts
+function completionCheck(completion) {
+  const title = "Citation completion ([@)";
+  if (!completion) return { id: "citation-completion", status: "unknown", title, detail: "Not checked here." };
+  if (!completion.enabled) return { id: "citation-completion", status: "info", title, detail: "Citation completion is off (Settings \u2192 Citations \u2192 Citation trigger)." };
+  if (!completion.conflicts.length) return { id: "citation-completion", status: "ok", title, detail: "Typing [@ opens the plugin's citation list." };
+  const names = completion.conflicts.map((conflict) => conflict.plugin).join(" and ");
+  return { id: "citation-completion", status: "warning", title, detail: `${names} answer${completion.conflicts.length === 1 ? "s" : ""} [@ before the plugin, so its citation list may not open and a half-typed citekey can be completed from words in the note. To fix: ${completion.conflicts.map((conflict) => conflict.fix).join("; ")}.` };
+}
 var MAX_PATHS = 20;
 function flagged(id, title, code, detail, paths) {
   return { id, status: DIAGNOSTIC_CODES2[code], title, detail, code, ...paths?.length ? { paths: paths.slice(0, MAX_PATHS) } : {} };
@@ -10507,6 +10520,7 @@ function doctorChecks(facts) {
   checks.push(indexCheck(facts.index), gitCheck(facts.git, facts.index.path));
   checks.push(facts.pdfjs === null ? { id: "pdfjs", status: "unknown", title: "PDF text (pdf.js)", detail: "Not checked here; PDF text extraction runs in Obsidian." } : facts.pdfjs ? { id: "pdfjs", status: "ok", title: "PDF text (pdf.js)", detail: "Obsidian's PDF library loads." } : flagged("pdfjs", "PDF text (pdf.js)", "pdfjs-unavailable", "Obsidian's PDF library did not load; PDF text extraction and quote location will fail."));
   checks.push(peersCheck(facts.peers), outputCheck(facts.outputFolder));
+  if (facts.completion !== void 0) checks.push(completionCheck(facts.completion));
   if (facts.obsidian !== void 0) checks.push(facts.obsidian === "ok" ? { id: "obsidian", status: "ok", title: "Obsidian bridge", detail: "The Obsidian CLI reached the plugin." } : flagged("obsidian", "Obsidian bridge", "obsidian-unavailable", "The Obsidian CLI did not reach the plugin, so answers come from the saved index file. Live actions need Obsidian running with its CLI enabled."));
   return checks;
 }
@@ -11650,6 +11664,13 @@ var LEGACY_DEFAULT_INDEX_PATH = "80. References/zotero-index.json";
 function storesIndexPath(raw) {
   return !!raw && typeof raw === "object" && text4(raw.zoteroIndexPath, "") !== "";
 }
+function pandocPathProblem(value) {
+  const text5 = value.trim();
+  if (!text5) return null;
+  if (text5.includes("\0")) return "The path contains a NUL character.";
+  if (!(text5.startsWith("/") || text5.startsWith("~/") || /^[A-Za-z]:[\\/]/.test(text5))) return "Enter the full path to pandoc, for example /opt/homebrew/bin/pandoc, or leave it empty.";
+  return null;
+}
 function text4(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
@@ -11719,6 +11740,11 @@ function normalizeSettings(raw, options = {}) {
     bibliographyOrder: ["style", "citation", "alphabetical"].find((order) => order === data.bibliographyOrder) ?? DEFAULT_SETTINGS.bibliographyOrder,
     zoteroDataDirectory: typeof data.zoteroDataDirectory === "string" && data.zoteroDataDirectory.trim() && !dataDirectoryProblem(data.zoteroDataDirectory) ? data.zoteroDataDirectory.trim() : DEFAULT_SETTINGS.zoteroDataDirectory,
     exportFolder: text4(data.exportFolder, DEFAULT_SETTINGS.exportFolder),
+    // 0.6.6: an outside-the-vault exportFolder is kept as stored; the export refuses it while exportOutsideVault is off.
+    exportOutsideVault: flag2(data.exportOutsideVault, DEFAULT_SETTINGS.exportOutsideVault),
+    pandocAfterExport: flag2(data.pandocAfterExport, DEFAULT_SETTINGS.pandocAfterExport),
+    pandocPath: typeof data.pandocPath === "string" && !pandocPathProblem(data.pandocPath) ? data.pandocPath.trim() : DEFAULT_SETTINGS.pandocPath,
+    hookmarkLinkExports: flag2(data.hookmarkLinkExports, DEFAULT_SETTINGS.hookmarkLinkExports),
     // 0.6.3 filename-folder-pattern: an unusable stored pattern keeps the 0.6.1 naming.
     noteFilenamePattern: typeof data.noteFilenamePattern === "string" && !notePatternProblem(data.noteFilenamePattern) ? data.noteFilenamePattern.trim() : DEFAULT_SETTINGS.noteFilenamePattern,
     noteFolderPattern: typeof data.noteFolderPattern === "string" && !notePatternProblem(data.noteFolderPattern, true) ? data.noteFolderPattern.trim() : DEFAULT_SETTINGS.noteFolderPattern

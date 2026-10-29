@@ -2,7 +2,8 @@ import { FileSystemAdapter, loadPdfJs, Notice } from "obsidian";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { transportReasonOf } from "../api/transport";
-import { doctorChecks, doctorReport, type DoctorFacts } from "../doctor/checks";
+import { completionConflict, doctorChecks, doctorReport, type CompletionConflict, type DoctorFacts } from "../doctor/checks";
+import { CitekeySuggest } from "../citations/suggest";
 import type CMDSZoteroPlugin from "../main";
 import type { ZoteroIndex } from "../types";
 import { DoctorModal } from "../modals/doctor";
@@ -41,6 +42,27 @@ async function vaultRoot(plugin: CMDSZoteroPlugin): Promise<string | null> {
 	return fs.realpath(adapter.getBasePath()).catch(() => adapter.getBasePath());
 }
 
+/**
+ * 0.6.6: the completions known to answer `[@` before the plugin's own. Reads Obsidian's suggester list (the first one
+ * that answers wins) and the other plugins' settings; it calls none of their code and changes nothing.
+ */
+export function completionFact(plugin: CMDSZoteroPlugin): DoctorFacts["completion"] {
+	if (plugin.settings.citationTrigger === "off") return { enabled: false, conflicts: [] };
+	const suggests = (plugin.app.workspace as unknown as { editorSuggest?: { suggests?: unknown[] } }).editorSuggest?.suggests;
+	if (!Array.isArray(suggests)) return null;
+	const own = suggests.findIndex(item => item instanceof CitekeySuggest);
+	if (own < 0) return null;
+	const plugins = (plugin.app as unknown as { plugins?: { plugins?: Record<string, object> } }).plugins?.plugins ?? {};
+	const conflicts: CompletionConflict[] = [];
+	for (const suggest of suggests.slice(0, own)) {
+		const owner = Object.entries(plugins).find(([, instance]) => (suggest as { plugin?: unknown }).plugin === instance || Object.values(instance).includes(suggest));
+		if (!owner) continue;
+		const conflict = completionConflict(owner[0], (owner[1] as { settings?: Record<string, unknown> }).settings);
+		if (conflict && !conflicts.some(item => item.plugin === conflict.plugin)) conflicts.push(conflict);
+	}
+	return { enabled: true, conflicts };
+}
+
 /** Every doctor fact for the Diagnose setup view: one Better BibTeX readiness probe (the person asked), then local checks. */
 export async function gatherFacts(plugin: CMDSZoteroPlugin): Promise<DoctorFacts> {
 	const bbt: DoctorFacts["bbt"] = await plugin.bbt.capabilities().then(
@@ -56,6 +78,7 @@ export async function gatherFacts(plugin: CMDSZoteroPlugin): Promise<DoctorFacts
 		index: { path: plugin.settings.zoteroIndexPath, count: index?.count ?? null, ageMinutes: plugin.index.ageMinutes(index, now), stale: plugin.index.isStale(index, now), maxAgeMinutes: plugin.settings.indexMaxAgeMinutes, complete: index?.complete ?? null },
 		git: root ? await plugin.gitProbe(root, plugin.settings.zoteroIndexPath).catch(() => null) : null,
 		...await environmentFacts(plugin, index),
+		completion: completionFact(plugin),
 	};
 }
 

@@ -29,6 +29,8 @@ test("0.5 keys and defaults are unchanged (0.6.5: a neutral Index path); 0.6 add
 		citationFormat: "pandoc", citekeyProblemMarks: true, citationHover: false, authorDateRendering: false, citationClickAction: "nothing", pasteZoteroLinks: false,
 		// 0.6.2 WP6: references, bibliography and export kit.
 		bibliographyLocale: "", bibliographyOrder: "style", zoteroDataDirectory: "~/Zotero", exportFolder: "CMDS Zotero exports",
+		// 0.6.6: export outside the vault, running pandoc and Hookmark links are opt-in.
+		exportOutsideVault: false, pandocAfterExport: false, pandocPath: "", hookmarkLinkExports: false,
 		// 0.6.3 filename-folder-pattern: the 0.6.1 path.
 		noteFilenamePattern: "@{citekey}", noteFolderPattern: "",
 	});

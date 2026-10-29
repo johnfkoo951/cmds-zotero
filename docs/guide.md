@@ -210,7 +210,11 @@ Settings are grouped by area; request limits and the agent-only References headi
 | Bibliography and references | Bibliography locale | Empty (the style's default); for example `ko-KR`; a note's `lang` overrides it |
 | Bibliography and references | Bibliography order | As the style orders it; or order of first citation, or alphabetical |
 | Bibliography and references | Zotero data directory | `~/Zotero`; the folder that holds Zotero's `styles` folder, read only |
-| Bibliography and references | Export kit folder | `CMDS Zotero exports`; where the pandoc export kit goes, one subfolder per note |
+| Bibliography and references | Allow export kits outside the vault | Off; on lets *Export kit folder* be an absolute folder or one under `~/` (0.6.6) |
+| Bibliography and references | Export kit folder | `CMDS Zotero exports`; where the export kits go, one subfolder per note |
+| Bibliography and references | Run pandoc after export | Off; on runs pandoc on the kit and opens the `.docx` (0.6.6) |
+| Bibliography and references | Pandoc path | Empty: the usual install folders, then the system's search path |
+| Bibliography and references | Link exports in Hookmark | Off; on (macOS) hooks the `.docx` and the note in Hookmark (0.6.6) |
 | Bibliography and references | References sidebar follows the active note | On; when off the sidebar keeps its note until you press Refresh |
 | Recently read | Recently read window | 30 days (7/30/90/365); the recently read list and picker ordering |
 | Connected vaults | Peer vaults | One `Vault name \| absolute path` per line, for cross-vault lookup |

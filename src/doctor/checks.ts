@@ -12,7 +12,7 @@ import { summarizeOutcomes, type OutcomeRecord } from "./outcome-log";
 export type CheckStatus = "ok" | "info" | "warning" | "error" | "unknown";
 
 export interface DoctorCheck {
-	id: "zotero" | "legacy-plugin" | "index" | "git" | "pdfjs" | "peer-vaults" | "output-folder" | "obsidian";
+	id: "zotero" | "legacy-plugin" | "index" | "git" | "pdfjs" | "peer-vaults" | "output-folder" | "obsidian" | "citation-completion";
 	status: CheckStatus;
 	title: string;
 	detail: string;
@@ -35,6 +35,37 @@ export interface DoctorFacts {
 	outputFolder: { folder: string; notes: number; unmatched: string[]; betterNotes: string[]; /** 0.6.3 find-moved-notes: literature notes (`type: zotero` with a `zoteroID`) outside the folder. */ moved?: string[] } | null;
 	/** CLI hosts only: whether the Obsidian bridge answered. */
 	obsidian?: "ok" | "unavailable";
+	/**
+	 * 0.6.6, Obsidian host only: whether citation completion is on and which other plugins' completions, registered before
+	 * it, are known to answer `[@` first (read from Obsidian's suggester list and those plugins' settings; null: unknown).
+	 */
+	completion?: { enabled: boolean; conflicts: CompletionConflict[] } | null;
+}
+
+export interface CompletionConflict { plugin: string; fix: string }
+
+/**
+ * 0.6.6: whether another plugin's completion, registered before the plugin's own, answers `[@` with its settings, and how
+ * to stop it. Only plugins whose behaviour is known are judged; null means no known conflict.
+ */
+export function completionConflict(pluginId: string, settings: Record<string, unknown> | undefined): CompletionConflict | null {
+	if (pluginId === "various-complements") {
+		const first = typeof settings?.firstCharactersDisableSuggestions === "string" ? settings.firstCharactersDisableSuggestions : "";
+		return first.includes("[") ? null : { plugin: "Various Complements", fix: "in Various Complements add [ and @ to \"First characters to disable suggestions\"" };
+	}
+	if (pluginId === "obsidian-pandoc-reference-list") {
+		return settings?.enableCiteKeyCompletion === false ? null : { plugin: "Pandoc Reference List", fix: "in Pandoc Reference List turn off its citekey autocomplete" };
+	}
+	return null;
+}
+
+function completionCheck(completion: DoctorFacts["completion"]): DoctorCheck {
+	const title = "Citation completion ([@)";
+	if (!completion) return { id: "citation-completion", status: "unknown", title, detail: "Not checked here." };
+	if (!completion.enabled) return { id: "citation-completion", status: "info", title, detail: "Citation completion is off (Settings → Citations → Citation trigger)." };
+	if (!completion.conflicts.length) return { id: "citation-completion", status: "ok", title, detail: "Typing [@ opens the plugin's citation list." };
+	const names = completion.conflicts.map(conflict => conflict.plugin).join(" and ");
+	return { id: "citation-completion", status: "warning", title, detail: `${names} answer${completion.conflicts.length === 1 ? "s" : ""} [@ before the plugin, so its citation list may not open and a half-typed citekey can be completed from words in the note. To fix: ${completion.conflicts.map(conflict => conflict.fix).join("; ")}.` };
 }
 
 /** Paths listed per check; the count in the detail stays exact. */
@@ -106,6 +137,7 @@ export function doctorChecks(facts: DoctorFacts): DoctorCheck[] {
 		: facts.pdfjs ? { id: "pdfjs", status: "ok", title: "PDF text (pdf.js)", detail: "Obsidian's PDF library loads." }
 			: flagged("pdfjs", "PDF text (pdf.js)", "pdfjs-unavailable", "Obsidian's PDF library did not load; PDF text extraction and quote location will fail."));
 	checks.push(peersCheck(facts.peers), outputCheck(facts.outputFolder));
+	if (facts.completion !== undefined) checks.push(completionCheck(facts.completion));
 	if (facts.obsidian !== undefined) checks.push(facts.obsidian === "ok" ? { id: "obsidian", status: "ok", title: "Obsidian bridge", detail: "The Obsidian CLI reached the plugin." }
 		: flagged("obsidian", "Obsidian bridge", "obsidian-unavailable", "The Obsidian CLI did not reach the plugin, so answers come from the saved index file. Live actions need Obsidian running with its CLI enabled."));
 	return checks;

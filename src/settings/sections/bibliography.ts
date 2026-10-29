@@ -1,5 +1,5 @@
 import type { SectionDefinition } from "../model";
-import { choiceField, dataDirectoryField, localeField, textField, toggleField, vaultPathField } from "../fields";
+import { choiceField, dataDirectoryField, exportFolderField, localeField, pandocPathField, textField, toggleField } from "../fields";
 
 /** Bibliography and references: the CSL style and locale, the bibliography order, installed styles, the references sidebar and the export kit. */
 export const bibliographySection: SectionDefinition = {
@@ -19,8 +19,17 @@ export const bibliographySection: SectionDefinition = {
 		section.text(dataDirectoryField).setName("Zotero data directory")
 			.setDesc("Folder that holds Zotero's styles folder, read only; Zotero shows it among its advanced settings under files and folders. Absolute, or starting with ~/.")
 			.setPlaceholder("~/Zotero");
-		section.text(vaultPathField("exportFolder")).setName("Export kit folder")
-			.setDesc("Vault folder the pandoc export kit writes into, one subfolder per note. The source note is never changed.");
+		section.toggle(toggleField("exportOutsideVault")).setName("Allow export kits outside the vault")
+			.setDesc("Off: the export kits are written inside this vault only. On: the export kit folder may also be an absolute folder or one under ~/, so Word files, filters and copies stay out of the vault. The plugin then writes there and nowhere else outside the vault.");
+		section.text(exportFolderField).setName("Export kit folder")
+			.setDesc("Where the export kits are written, one subfolder per note: a vault folder, or an absolute folder or one under ~/ when writing outside the vault is allowed above. The source note is never changed.");
+		section.toggle(toggleField("pandocAfterExport")).setName("Run pandoc after export")
+			.setDesc("Off: the export commands copy the pandoc command line for you to run. On: they run pandoc on the kit and open the .docx with its default app. The Word kit needs Zotero running at that moment; pandoc then runs Better BibTeX's zotero.lua, which also checks retorque.re for a newer version of itself.");
+		section.text(pandocPathField).setName("Pandoc path")
+			.setDesc("The pandoc to run. Leave empty to look in /opt/homebrew/bin, /usr/local/bin and the other usual folders, then wherever the system finds it.")
+			.setPlaceholder("/opt/homebrew/bin/pandoc");
+		section.toggle(toggleField("hookmarkLinkExports")).setName("Link exports in Hookmark")
+			.setDesc("macOS with Hookmark. After pandoc made the .docx, link it with the source note in Hookmark (one bookmark each, hooked together), so either opens the other. macOS asks once to let Obsidian control Hookmark.");
 		section.toggle(toggleField("referencesFollowActiveNote")).setName("References sidebar follows the active note")
 			.setDesc("Re-render the references sidebar whenever another note becomes active. When off, it keeps the note it shows until you press its refresh button.");
 	},

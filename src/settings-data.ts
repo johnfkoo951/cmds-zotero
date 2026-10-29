@@ -25,6 +25,15 @@ export function withLegacyIndexPath(raw: unknown): Record<string, unknown> {
 	const data = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
 	return { ...data, zoteroIndexPath: LEGACY_DEFAULT_INDEX_PATH };
 }
+/** 0.6.6: a pandoc path is empty (look in the usual places), absolute, or under `~/`. */
+export function pandocPathProblem(value: string): string | null {
+	const text = value.trim();
+	if (!text) return null;
+	if (text.includes("\0")) return "The path contains a NUL character.";
+	if (!(text.startsWith("/") || text.startsWith("~/") || /^[A-Za-z]:[\\/]/.test(text))) return "Enter the full path to pandoc, for example /opt/homebrew/bin/pandoc, or leave it empty.";
+	return null;
+}
+
 function text(value: unknown, fallback: string): string { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 
 /**
@@ -97,6 +106,11 @@ export function normalizeSettings(raw: unknown, options: { legacyIndex?: boolean
 		bibliographyOrder: (["style", "citation", "alphabetical"] as const).find(order => order === data.bibliographyOrder) ?? DEFAULT_SETTINGS.bibliographyOrder,
 		zoteroDataDirectory: typeof data.zoteroDataDirectory === "string" && data.zoteroDataDirectory.trim() && !dataDirectoryProblem(data.zoteroDataDirectory) ? data.zoteroDataDirectory.trim() : DEFAULT_SETTINGS.zoteroDataDirectory,
 		exportFolder: text(data.exportFolder, DEFAULT_SETTINGS.exportFolder),
+		// 0.6.6: an outside-the-vault exportFolder is kept as stored; the export refuses it while exportOutsideVault is off.
+		exportOutsideVault: flag(data.exportOutsideVault, DEFAULT_SETTINGS.exportOutsideVault),
+		pandocAfterExport: flag(data.pandocAfterExport, DEFAULT_SETTINGS.pandocAfterExport),
+		pandocPath: typeof data.pandocPath === "string" && !pandocPathProblem(data.pandocPath) ? data.pandocPath.trim() : DEFAULT_SETTINGS.pandocPath,
+		hookmarkLinkExports: flag(data.hookmarkLinkExports, DEFAULT_SETTINGS.hookmarkLinkExports),
 		// 0.6.3 filename-folder-pattern: an unusable stored pattern keeps the 0.6.1 naming.
 		noteFilenamePattern: typeof data.noteFilenamePattern === "string" && !notePatternProblem(data.noteFilenamePattern) ? data.noteFilenamePattern.trim() : DEFAULT_SETTINGS.noteFilenamePattern,
 		noteFolderPattern: typeof data.noteFolderPattern === "string" && !notePatternProblem(data.noteFolderPattern, true) ? data.noteFolderPattern.trim() : DEFAULT_SETTINGS.noteFolderPattern,

@@ -6,7 +6,7 @@
  * a Zotero bibliography field. Word's Zotero plugin fills all of it on the first Refresh without asking for Document
  * Preferences. The plugin never runs pandoc and never ships or downloads `zotero.lua`. Pure: no `obsidian` import.
  */
-import { join } from "path";
+import { join, win32 } from "path";
 import { KIT_DEFAULTS } from "./kit";
 
 export const WORD_FILTER = "cmds-zotero-word.lua";
@@ -73,13 +73,13 @@ export type BibliographyPlacement = "end" | "none";
 
 /**
  * Where Word's bibliography goes when the copy has no `::: {#refs}` place, i.e. the note has no references section.
- * "end": a Zotero bibliography field after the last paragraph, with no heading of its own.
+ * "end": a heading and a Zotero bibliography field after the last paragraph.
  * "none": no field; the author adds one in Word with Zotero → Add/Edit Bibliography.
+ * Decided 2026-10-29: the reference list is made in Word, so a note without a references section still gets one, at the
+ * end; a style without a bibliography gets none.
  */
 export function bibliographyWithoutReferencesSection(style: { noteStyle: boolean; hasBibliography: boolean }): BibliographyPlacement {
-	// TODO(you): decide the placement for notes without a references section (2–6 lines).
-	void style;
-	throw new Error("bibliographyWithoutReferencesSection is not written yet.");
+	return style.hasBibliography ? "end" : "none";
 }
 
 /** True when the cleaned copy has pandoc's bibliography place, `::: {#refs}` (written for the managed references section). */
@@ -95,6 +95,8 @@ export interface WordFilterInput {
 	hasBibliography: boolean;
 	/** Used only when the copy has no `::: {#refs}`. */
 	withoutRefs: BibliographyPlacement;
+	/** The heading put above a bibliography added at the end (`withoutRefs` "end"); empty for none. */
+	heading: string;
 }
 
 /**
@@ -110,6 +112,7 @@ export function wordFilterLua(input: WordFilterInput): string {
 		`  note_style = ${input.noteStyle},`,
 		`  has_bibliography = ${input.hasBibliography},`,
 		`  bibliography_without_refs = ${luaString(input.withoutRefs)},`,
+		`  heading = ${luaString(input.heading)},`,
 		"}",
 	];
 	return `-- Written by ${input.generator}. Runs before Better BibTeX's zotero.lua (see ${KIT_DEFAULTS} in this folder).
@@ -168,6 +171,7 @@ end
 
 local function bibliography_at_end(doc)
   if refs_seen or not CONFIG.has_bibliography or CONFIG.bibliography_without_refs ~= 'end' then return nil end
+  if CONFIG.heading ~= '' then doc.blocks:insert(pandoc.Header(2, CONFIG.heading)) end
   doc.blocks:insert(pandoc.RawBlock('openxml', BIBLIOGRAPHY_FIELD))
   return doc
 end
@@ -222,13 +226,18 @@ export function wordDefaultsYaml(input: WordDefaultsInput): string {
 	return `${lines.join("\n")}\n`;
 }
 
-/** Where pandoc finds a filter named without a folder: the `filters` folders of its user data directories. */
-export function zoteroLuaLocations(home: string, xdgDataHome?: string): string[] {
-	const xdg = xdgDataHome?.trim() || join(home, ".local", "share");
+/**
+ * Where pandoc finds a filter named without a folder: the `filters` folder of its user data directory, which is
+ * `%APPDATA%\\pandoc` on Windows and `$XDG_DATA_HOME/pandoc` (or `~/.local/share/pandoc`) and the older `~/.pandoc` elsewhere.
+ */
+export function zoteroLuaLocations(home: string, env: { XDG_DATA_HOME?: string; APPDATA?: string } = {}, platform = "darwin"): string[] {
+	if (platform === "win32") return [win32.join(env.APPDATA?.trim() || win32.join(home, "AppData", "Roaming"), "pandoc", "filters", ZOTERO_LUA)];
+	const xdg = env.XDG_DATA_HOME?.trim() || join(home, ".local", "share");
 	return [join(xdg, "pandoc", "filters", ZOTERO_LUA), join(home, ".pandoc", "filters", ZOTERO_LUA)];
 }
 
-/** The one-line install of `zotero.lua` into pandoc's filters folder, shown when none was found. */
-export function zoteroLuaInstallCommand(): string {
+/** The one-line install of `zotero.lua` into pandoc's filters folder, shown when none was found (PowerShell on Windows). */
+export function zoteroLuaInstallCommand(platform = "darwin"): string {
+	if (platform === "win32") return `New-Item -ItemType Directory -Force "$env:APPDATA\\pandoc\\filters" | Out-Null; Invoke-WebRequest -Uri ${ZOTERO_LUA_URL} -OutFile "$env:APPDATA\\pandoc\\filters\\${ZOTERO_LUA}"`;
 	return `mkdir -p ~/.local/share/pandoc/filters && curl -fsSL -o ~/.local/share/pandoc/filters/${ZOTERO_LUA} ${ZOTERO_LUA_URL}`;
 }

@@ -210,7 +210,11 @@ PDF 쪽 번호는 **1부터 시작하는 파일 위치**이지 인쇄된 쪽 번
 | Bibliography and references | Bibliography locale | 비움(스타일 기본값); 예: `ko-KR`; 노트의 `lang`이 우선 |
 | Bibliography and references | Bibliography order | 스타일이 정한 순서; 또는 처음 인용한 순서, 가나다·알파벳순 |
 | Bibliography and references | Zotero data directory | `~/Zotero`; Zotero의 `styles` 폴더가 있는 폴더, 읽기 전용 |
-| Bibliography and references | Export kit folder | `CMDS Zotero exports`; pandoc 내보내기 키트 위치, 노트마다 하위 폴더 |
+| Bibliography and references | Allow export kits outside the vault | 꺼짐. 켜면 *Export kit folder*에 절대경로나 `~/` 경로를 쓸 수 있음(0.6.6) |
+| Bibliography and references | Export kit folder | `CMDS Zotero exports`; 내보내기 키트 위치, 노트마다 하위 폴더 |
+| Bibliography and references | Run pandoc after export | 꺼짐. 켜면 키트에 pandoc을 실행하고 `.docx`를 엶(0.6.6) |
+| Bibliography and references | Pandoc path | 비우면 흔한 설치 폴더, 그다음 시스템 검색 경로 |
+| Bibliography and references | Link exports in Hookmark | 꺼짐. 켜면(macOS) `.docx`와 노트를 Hookmark로 연결(0.6.6) |
 | Bibliography and references | References sidebar follows the active note | 켬; 끄면 Refresh를 누를 때까지 보던 노트를 유지 |
 | Recently read | Recently read window | 30일(7/30/90/365); 최근 읽은 논문 목록과 자료 선택 창 정렬 |
 | Connected vaults | Peer vaults | 한 줄에 `볼트 이름 \| 절대 경로`; 다른 볼트 노트 찾기용 |

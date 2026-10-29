@@ -3,8 +3,10 @@
  * written back. Pure (no `obsidian` import) so every rule is unit-tested; `normalizeSettings` still runs on save and
  * `saveSettings` keeps the authoritative endpoint and path checks.
  */
+import { homedir } from "os";
 import type { CmdsZoteroSettings, PeerVault } from "../types";
-import { normalizeTagList, validateEndpoint } from "../settings-data";
+import { normalizeTagList, pandocPathProblem, validateEndpoint } from "../settings-data";
+import { externalFolderProblem, isExternalFolderValue } from "../export/location";
 import { canonicalLocale, dataDirectoryProblem, localeProblem } from "../bibliography/rules";
 
 export type SettingsDraft = CmdsZoteroSettings;
@@ -45,6 +47,27 @@ export function vaultPathField(key: KeysOf<string>): Field<string> {
 		write: (draft, input) => { const value = input.trim(); const problem = vaultPathProblem(value); if (problem) return problem; draft[key] = value; return null; },
 	};
 }
+
+/**
+ * 0.6.6 export-outside-vault: the export kit folder. A vault folder, or, only while "Allow export kits outside the vault"
+ * is on, an absolute folder or one under `~/`. Empty means the default vault folder.
+ */
+export const exportFolderField: Field<string> = {
+	key: "exportFolder", read: draft => draft.exportFolder,
+	write: (draft, input) => {
+		const value = input.trim();
+		const problem = isExternalFolderValue(value) ? externalFolderProblem(value, draft.exportOutsideVault, homedir()) : vaultPathProblem(value);
+		if (problem) return problem;
+		draft.exportFolder = value;
+		return null;
+	},
+};
+
+/** 0.6.6: the pandoc to run after an export; empty looks in the usual install folders, then PATH. */
+export const pandocPathField: Field<string> = {
+	key: "pandocPath", read: draft => draft.pandocPath,
+	write: (draft, input) => { const value = input.trim(); const problem = pandocPathProblem(value); if (problem) return problem; draft.pandocPath = value; return null; },
+};
 
 /** The Better BibTeX endpoint: a local HTTP URL without credentials, query or fragment (`validateEndpoint`). */
 export const endpointField: Field<string> = {

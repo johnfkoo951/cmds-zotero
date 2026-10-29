@@ -152,7 +152,11 @@ export function shellQuote(value: string): string {
 	return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** The command the person runs (copied to the clipboard): `pandoc --defaults <absolute path of defaults.yaml>`. */
-export function pandocCommand(defaultsPath: string): string {
+/**
+ * The command the person runs (copied to the clipboard): `pandoc --defaults <absolute path of defaults.yaml>`, quoted for
+ * a POSIX shell, or with double quotes for PowerShell and cmd on Windows.
+ */
+export function pandocCommand(defaultsPath: string, platform = "darwin"): string {
+	if (platform === "win32") return `pandoc --defaults "${defaultsPath.replace(/\//g, "\\")}"`;
 	return `pandoc --defaults ${shellQuote(defaultsPath)}`;
 }

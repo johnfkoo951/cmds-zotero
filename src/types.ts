@@ -92,8 +92,16 @@ export interface CmdsZoteroSettings {
 	bibliographyOrder: "style" | "citation" | "alphabetical";
 	/** Zotero data directory whose `styles/*.csl` are listed (read-only); absolute or `~/…`. */
 	zoteroDataDirectory: string;
-	/** Vault folder the pandoc export kit writes into, one subfolder per note. */
+	/** Folder the export kits write into, one subfolder per note: a vault folder, or (0.6.6, with `exportOutsideVault`) an absolute folder or one under `~/`. */
 	exportFolder: string;
+	/** 0.6.6 export-outside-vault: opt-in; without it `exportFolder` must be a vault folder. */
+	exportOutsideVault: boolean;
+	/** 0.6.6 run-pandoc-after-export: opt-in; the export commands run pandoc on the kit and open the `.docx`. */
+	pandocAfterExport: boolean;
+	/** 0.6.6: pandoc to run; empty looks in the usual install folders, then PATH. */
+	pandocPath: string;
+	/** 0.6.6 hookmark-link-export: opt-in, macOS; after pandoc, the `.docx` and the note are linked in Hookmark. */
+	hookmarkLinkExports: boolean;
 	/** 0.6.3 filename-folder-pattern (note-path.ts): file name of new literature notes from a fixed token set; `@{citekey}` is the 0.6.1 name. */
 	noteFilenamePattern: string;
 	/** 0.6.3: subfolder below the output folder for new literature notes (fixed tokens, `/` between levels); empty is the 0.6.1 behaviour. */
@@ -150,6 +158,11 @@ export const DEFAULT_SETTINGS: CmdsZoteroSettings = {
 	bibliographyOrder: "style",
 	zoteroDataDirectory: "~/Zotero",
 	exportFolder: "CMDS Zotero exports",
+	// 0.6.6: all off; export kits stay in the vault and the plugin runs nothing.
+	exportOutsideVault: false,
+	pandocAfterExport: false,
+	pandocPath: "",
+	hookmarkLinkExports: false,
 	noteFilenamePattern: "@{citekey}", // 0.6.3: the 0.6.1 file name
 	noteFolderPattern: "",
 };

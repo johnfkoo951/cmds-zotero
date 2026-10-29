@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { parseCslInfo, styleKey, wordStyleFacts, type InstalledStyle } from "../src/bibliography/csl-styles";
 import { CITEPROC_KEYS, DOCUMENT_KEYS, documentFrontmatter, frontmatterSummary } from "../src/export/sanitize";
-import { MAX_PREF_LENGTH, WORD_FILTER, ZOTERO_LUA, hasRefsPlace, luaString, preferenceChunks, sessionId, wordDefaultsYaml, wordFilterLua, zoteroDocumentData, zoteroLuaLocations } from "../src/export/word-kit";
+import { MAX_PREF_LENGTH, WORD_FILTER, ZOTERO_LUA, bibliographyWithoutReferencesSection, hasRefsPlace, luaString, preferenceChunks, sessionId, wordDefaultsYaml, wordFilterLua, zoteroDocumentData, zoteroLuaLocations } from "../src/export/word-kit";
 
 const style = (id: string, attributes: string, info = "", body = ""): string => `<?xml version="1.0" encoding="utf-8"?>
 <style xmlns="http://purl.org/net/xbiblio/csl" ${attributes} version="1.0">
@@ -55,6 +55,12 @@ test("Zotero document data: the form Zotero writes back, escaped, in 255-charact
 	assert.throws(() => sessionId(new Uint8Array(4)), /eight/);
 });
 
+test("Word bibliography without a references section: at the end when the style has one", () => {
+	assert.equal(bibliographyWithoutReferencesSection({ noteStyle: false, hasBibliography: true }), "end");
+	assert.equal(bibliographyWithoutReferencesSection({ noteStyle: true, hasBibliography: true }), "end");
+	assert.equal(bibliographyWithoutReferencesSection({ noteStyle: true, hasBibliography: false }), "none");
+});
+
 test("Lua strings: a long-bracket level the value cannot close", () => {
 	assert.equal(luaString("plain"), "[[plain]]");
 	assert.equal(luaString("a]]b"), "[=[a]]b]=]");
@@ -77,7 +83,7 @@ test("Word defaults file: no citeproc, the kit's filter before zotero.lua, the s
 	assert.ok(hasRefsPlace("::::{ #refs .small}\n::::"));
 	assert.ok(!hasRefsPlace("A sentence about ::: {#refs} in prose.\n"));
 	assert.deepEqual(zoteroLuaLocations("/h"), ["/h/.local/share/pandoc/filters/zotero.lua", "/h/.pandoc/filters/zotero.lua"]);
-	assert.deepEqual(zoteroLuaLocations("/h", "/x"), ["/x/pandoc/filters/zotero.lua", "/h/.pandoc/filters/zotero.lua"]);
+	assert.deepEqual(zoteroLuaLocations("/h", { XDG_DATA_HOME: "/x" }), ["/x/pandoc/filters/zotero.lua", "/h/.pandoc/filters/zotero.lua"]);
 });
 
 test("Word copy frontmatter: only document keys reach the .docx, wikilinked names become names", () => {
@@ -103,10 +109,10 @@ const noPandoc = !pandocVersion || pandocVersion[0] < 3;
 interface PandocNode { t: string; c?: unknown }
 
 /** The pandoc JSON of `markdown` after the kit's filter (without zotero.lua: citations stay Cite nodes). */
-async function filtered(markdown: string, options: { noteStyle: boolean; hasBibliography: boolean; withoutRefs: "end" | "none"; prefs: string[] }): Promise<{ meta: Record<string, PandocNode>; blocks: PandocNode[] }> {
+async function filtered(markdown: string, options: { noteStyle: boolean; hasBibliography: boolean; withoutRefs: "end" | "none"; prefs: string[]; heading?: string }): Promise<{ meta: Record<string, PandocNode>; blocks: PandocNode[] }> {
 	const folder = await mkdtemp(join(tmpdir(), "cmds-zotero-word-"));
 	try {
-		await writeFile(join(folder, WORD_FILTER), wordFilterLua({ generator: "test", ...options }));
+		await writeFile(join(folder, WORD_FILTER), wordFilterLua({ generator: "test", heading: "", ...options }));
 		await writeFile(join(folder, "in.md"), markdown);
 		const json = execFileSync("pandoc", [join(folder, "in.md"), "-t", "json", "--lua-filter", join(folder, WORD_FILTER)], { encoding: "utf8" });
 		return JSON.parse(json) as { meta: Record<string, PandocNode>; blocks: PandocNode[] };
@@ -147,6 +153,11 @@ test("Word filter: an in-text style keeps citations in place; the end placement 
 	assert.equal(nodes(inText.blocks, "Note").length, 0);
 	assert.equal(inText.blocks.length, 2);
 	assert.equal(inText.blocks[1].t, "RawBlock", "no refs place: the field goes at the end");
+	const headed = await filtered("Text [@a2020].\n", { noteStyle: false, hasBibliography: true, withoutRefs: "end", prefs: ["p"], heading: "참고문헌" });
+	assert.deepEqual(headed.blocks.map(block => block.t), ["Para", "Header", "RawBlock"], "a heading goes above a bibliography added at the end");
+	assert.match(JSON.stringify(headed.blocks[1]), /참고문헌/);
+	const placed = await filtered(SAMPLE, { noteStyle: true, hasBibliography: true, withoutRefs: "end", prefs: ["p"], heading: "References" });
+	assert.equal(nodes(placed.blocks, "Header").length, 1, "with a refs place no second heading is added");
 	const none = await filtered("Text [@a2020].\n", { noteStyle: false, hasBibliography: true, withoutRefs: "none", prefs: ["p"] });
 	assert.equal(nodes(none.blocks, "RawBlock").length, 0);
 	const noBibliography = await filtered(SAMPLE, { noteStyle: true, hasBibliography: false, withoutRefs: "end", prefs: ["p"] });

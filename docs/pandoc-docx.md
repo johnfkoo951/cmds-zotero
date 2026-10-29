@@ -1,6 +1,6 @@
 # Pandoc DOCX from an Obsidian manuscript (CMDS Zotero 0.5–0.6.6)
 
-The plugin never produces DOCX itself and never runs pandoc. It produces what pandoc's citeproc is missing: a
+The plugin never produces DOCX itself, and runs pandoc only when you turn on *Run pandoc after export* (section 0c). It produces what pandoc's citeproc is missing: a
 bibliography file for the `[@citekey]` citations in a note, in CSL-JSON (recommended), BibTeX or BibLaTeX, exported
 through Better BibTeX's `item.export` (one call per Zotero library, Zotero read-only). Since 0.6.2 it can also write
 the whole export kit (section 0), and since 0.6.6 a Word kit whose citations stay live Zotero fields (section 0b). Nothing below edits the source note.
@@ -84,7 +84,7 @@ for Document Preferences and the bibliography would have to be added by hand. Th
   footnote after the punctuation that follows it, as pandoc's citeproc places notes. Citations you wrote inside your own
   footnotes stay there. An author-in-text citation (`@key` without brackets) stays in the text as the author's name and
   a field.
-- **The bibliography field** where the managed references section was (`::: {#refs}`), so it lands under your heading.
+- **The bibliography field** where the managed references section was (`::: {#refs}`), so it lands under your heading. A note without a references section gets it at the end, under a heading taken from the first line of *References headings* (default `References`); a style without a bibliography gets none.
 
 The copy's frontmatter is filtered as in the pandoc kit (section 0), without the citeproc keys: no citeproc runs here.
 
@@ -105,7 +105,7 @@ Steps:
 
 2. The note's style must be installed in Zotero (Settings → Cite), because Word's Zotero plugin formats with Zotero's
    styles. A `csl:` that names a `.csl` file outside Zotero is refused with that reason.
-3. Run the copied command **while Zotero is open**: pandoc asks Better BibTeX for the cited items. A citekey Zotero does
+3. Run the copied command **while Zotero is open**: pandoc asks Better BibTeX for the cited items. With *Run pandoc after export* on (section 0c) the plugin runs it and opens the `.docx` itself. A citekey Zotero does
    not know stays as `[@key]` text and pandoc prints its name.
 4. Open the `.docx` in Word and press **Refresh** in the Zotero tab once. From then on add citations, refresh and change
    the style (Document Preferences) in Word.
@@ -115,6 +115,30 @@ not the plugin's. The plugin only checks whether the file exists (see the README
 
 After the hand-off the `.docx` is the document: edits made in Word do not come back to the note. Decide when a
 manuscript moves to Word (for example, when it goes to co-authors) and keep writing in Obsidian until then.
+
+## 0c. Export folder outside the vault, pandoc from Obsidian, Hookmark (0.6.6)
+
+Three settings under Settings → Bibliography and references, all off by default:
+
+| Setting | Off (default) | On |
+| --- | --- | --- |
+| Allow export kits outside the vault | *Export kit folder* must be a vault folder | *Export kit folder* may also be an absolute folder or one under `~/`, e.g. `~/Documents/CMDS Zotero exports`. Kits, filters and the `.docx` then stay out of the vault; the copies no longer show in search, the graph or "Find notes citing a source". An absolute path inside the vault is used as that vault folder |
+| Run pandoc after export | The export commands copy the pandoc command line | They run pandoc on the kit and open the `.docx` with its default app. The report lists citekeys Zotero did not find. The Word kit runs pandoc only while Zotero answers; otherwise the command is copied as before |
+| Link exports in Hookmark | — | macOS with Hookmark: after pandoc, the `.docx` and the note (its `obsidian://open` address) become two Hookmark bookmarks hooked together, so either opens the other from Hookmark. macOS asks once to let Obsidian control Hookmark |
+
+*Pandoc path* names the pandoc to run; empty looks in `/opt/homebrew/bin`, `/usr/local/bin` and the other usual folders
+(on Windows `%LOCALAPPDATA%\Pandoc` and `C:\Program Files\Pandoc`), then on the system's search path (Obsidian, as a
+GUI app on macOS, does not see the shell's `PATH`).
+
+On Windows, pandoc's filters folder is `%APPDATA%\pandoc\filters`; the report shows a PowerShell line that puts
+`zotero.lua` there, and copied commands use double quotes. Hookmark is macOS-only; with it missing the report says so.
+
+If typing `[@` does not open the citation list, another plugin's completion is answering first. **Diagnose setup**
+names it: Various Complements (add `[` and `@` to its *First characters to disable suggestions*) or Pandoc Reference
+List (turn off its citekey autocomplete).
+
+With an outside folder the kit's `defaults.yaml` reaches the vault by its path under `${HOME}` (for images and a `csl`
+file in the vault), so the kit still names no user name.
 
 ## Style, locale and the cited keys (0.6.2)
 
