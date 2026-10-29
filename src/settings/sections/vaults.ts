@@ -7,6 +7,6 @@ export const vaultsSection: SectionDefinition = {
 	define(section) {
 		section.setName("Connected vaults");
 		section.textArea(peerVaultsField).setName("Peer vaults").setDesc("Opt-in, read-only access to each vault's published note map. One line: Vault name | absolute folder path. Refresh the index in each vault after importing notes.");
-		section.note().setText("Hookmark-compatible links are Markdown links. This plugin does not change Hookmark settings, create bookmarks, or require Hookmark to be installed.");
+		section.note().setText("Hookmark-compatible links are Markdown links, and the link commands only copy them. Bookmarks are made only by the opt-in to link exports in Hookmark, under bibliography and references; with it off, this plugin does not change Hookmark or need it installed.");
 	},
 };

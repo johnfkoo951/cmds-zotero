@@ -2,7 +2,7 @@
 Send what you read and mark up in Zotero to Obsidian literature notes. Metadata, highlights and comments, Zotero notes, citations and links back to the source end up in one note, and the text you write yourself stays untouched. Zotero is treated as read-only.
 
 ## Version and release status
-This guide covers **CMDS Zotero 0.6.5**, released on **2026-10-15**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.5) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. Install it from **Settings → Community plugins → Browse**, manually, or with BRAT.
+This guide covers **CMDS Zotero 0.6.7**, released on **2026-10-29**. The [GitHub release](https://github.com/johnfkoo951/cmds-zotero/releases/tag/0.6.7) carries `main.js`, `manifest.json` and `styles.css`, built and attested by CI. Install it from **Settings → Community plugins → Browse**, manually, or with BRAT.
 0.6.5 builds the index of a new install at `References/Zotero/zotero-index.json`, next to the literature notes, instead of a numbered `80. References` folder; an install that already has an index there keeps it. 0.6.4 readied the plugin for the Community directory: choosing an installed style now updates the settings field on Obsidian 1.13 and later, and commands for the current note appear only while a note is open. 0.6.3 finds literature notes you moved, names new notes from fixed tokens, imports by search, shows a review list before every batch, adopts notes made by other Zotero plugins, and adds per-note update, rebuild, frontmatter refresh, legacy-key cleanup and merged-item relink. 0.6.2, released the same day, added a citation editor, bibliographies in Zotero's installed styles and locales, Check citations, a references section and a pandoc export kit. 0.6.1 added note layout settings, Insert item content, a richer annotations sidebar, fielded search, Zotero selection commands and Diagnose setup. 0.6.0 made refreshes, startup and batch updates faster, keeps refreshes going past bad items, lets the citation picker wait for you, reorganises the settings tab and adds agent actions; the [changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md) lists every change. It was verified with Obsidian 1.14.4, Zotero 10.0.6 and Better BibTeX 9.0.71 on macOS. Checks of 0.5 on a real library covered the recently read list, creating and updating four literature notes, PDF text extraction for four papers (one of them a scan) and quote location. Group libraries and Windows/Linux are outside the verified scope.
 Coming from 0.6.1, four things look different with the default settings: citekey problems are underlined in the editor, a copied bibliography keeps the style's own order, **Update all owned literature notes** first shows a review list, and literature notes you moved out of the output folder are updated where they are. New notes keep the names and folders 0.6.1 gave them.
 
@@ -173,7 +173,7 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 PDF page numbers are **one-based file positions**, not printed page labels.
 
 ## Settings
-Settings are grouped by area; request limits and the agent-only References headings are under **Advanced**. Values are checked as you type. Press **Save configuration** after changing values; until then the previous values apply.
+Settings are grouped by area; request limits and the agent-only References headings are under **Advanced**. Values are checked as you type. Switches and menus are saved as soon as they change (0.6.7). After typing a value, press **Save configuration**; until then the previous value applies.
 
 | Section | Setting | Default and meaning |
 |---|---|---|
@@ -245,14 +245,14 @@ Agents never edit managed sections; their own summaries go under `## Synthesis` 
 
 ## Cross-vault and Hookmark
 The plugin reads the note maps of vaults listed in **Peer vaults**, read-only, and **Find literature across vaults** opens them. The same citekey in another vault can be a different source, so check the identity.
-The Hookmark commands only copy links to the clipboard. They do not change Hookmark settings, create bookmarks or run scripts.
+The Hookmark link commands only copy links to the clipboard. Bookmarks are made only when you turn on **Link exports in Hookmark** (off by default, macOS): after pandoc, the `.docx` and its source note become two bookmarks hooked together.
 
 ## Data and privacy
 - The plugin asks the local BBT for metadata, citations, bibliographies, attachments and annotations, and reading history. It never changes Zotero settings, the database, citekeys or library records.
 - Importing image annotations, or inserting one as a callout from the annotations sidebar or Search annotations, reads Zotero's cached image outside the vault and copies it into the image folder. Listing Zotero's installed styles (choosing a style, a note whose `csl` names one, the pandoc export kit) reads the `.csl` files in Zotero's `styles` folder, read-only.
 - In the vault it writes settings, the index, literature notes, image copies, export kits you ask for and private files under `.cmds-zotero/` (bibliography, note map, backups, PDF text caches). It creates `.cmds-zotero/.gitignore` first so the folder stays out of git. PDF text caches hold full paper text; do not share them.
 - The index and note map can contain bibliographic data, private paths and annotations. Keep them out of public repositories.
-- For agent requests and the **Diagnose setup** and **Diagnose index and links** commands, when the vault is a Git repository, the plugin runs `git` read-only (`ls-files`, `check-ignore`) to report whether private files are ignored. It runs nothing else; the export kit leaves running pandoc to you.
+- For agent requests and the **Diagnose setup** and **Diagnose index and links** commands, when the vault is a Git repository, the plugin runs `git` read-only (`ls-files`, `check-ignore`) to report whether private files are ignored. Three opt-in settings (all off by default) start other programs only during an export: **Run pandoc after export** runs pandoc on the kit and opens the `.docx`, and **Link exports in Hookmark** runs `osascript` to make the Hookmark bookmarks. Each runs without a shell and with a time limit. It runs nothing else.
 - No telemetry, own HTTP server or self-updater.
 
 ## Troubleshooting
@@ -286,6 +286,6 @@ node scripts/migrate-local.mjs --vault /path/to/vault --backup /path/to/private-
 `rollback` mode undoes it and refuses to overwrite files changed after deployment. Afterwards check that only the new ID is enabled and rebuild the index.
 
 ## Updates, support and license
-[Web guide](https://apps.cmdspace.work/plugins/cmds-zotero/) | [Repository](https://github.com/johnfkoo951/cmds-zotero) | [Releases](https://github.com/johnfkoo951/cmds-zotero/releases) | [Issues](https://github.com/johnfkoo951/cmds-zotero/issues) | [Changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md)
+[Web guide](https://apps.cmdspace.work/plugins/cmds-zotero/) | [Korean docs site](https://zotero.cmdspace.work) | [Repository](https://github.com/johnfkoo951/cmds-zotero) | [Releases](https://github.com/johnfkoo951/cmds-zotero/releases) | [Issues](https://github.com/johnfkoo951/cmds-zotero/issues) | [Changelog](https://github.com/johnfkoo951/cmds-zotero/blob/main/CHANGELOG.md)
 When reporting a problem, include the plugin, Obsidian, Zotero and BBT versions, your OS and diagnostics with private data removed. Do not post real indexes, private paths, annotation text or PDF text caches.
 **Yohan Koo (CMDSPACE)**, https://cmdspace.work. MIT, [LICENSE](https://github.com/johnfkoo951/cmds-zotero/blob/main/LICENSE).
