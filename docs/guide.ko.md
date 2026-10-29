@@ -85,6 +85,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 - 편집기에서 `[@` 뒤에 citekey·제목·저자·연도 일부를 입력하면 로컬 자동완성이 나옵니다. 캐시된 인덱스를 읽으므로 키 입력마다 Zotero를 부르지 않습니다. 한글은 조합형·분리형 어느 쪽으로 입력해도 찾고, 악센트는 무시합니다(`é`는 `e`와 맞음). Enter는 인용을, Shift+Enter는 서술형 `@key`를, Mod+Enter는 문헌 노트 링크를 넣습니다.
 - 새 인용은 커서의 인용에 합쳐집니다. `[@kim2020]` 바로 뒤에서 `[@`를 입력하거나 Zotero 선택기, Zotero 선택 항목, 자료 선택 창으로 인용하면 키를 반복하지 않고 `[@kim2020; @lee2021]`이 됩니다.
 - pandoc의 접두어, 위치(locator), 접미어를 이해합니다(예: `[see @kim2020, pp. 33–35; also -@lee2021, ch. 1]`). **Edit citation locator**는 커서에 있는 인용의 위치를 고칩니다.
+- 한국어 문장에서는 `@key` 바로 뒤에 조사를 붙이지 않습니다(조사까지 citekey로 읽힘). `@key 는`처럼 띄우거나 대괄호 뒤에 붙입니다. "구요한 외(2005)"처럼 한국어 저자를 쓰려면 이름을 직접 쓰고 연도만 인용합니다: `구요한 외[-@key]는`. 스타일은 "외"를 만들지 않습니다. 각주식 스타일에서는 `[@key]`만 씁니다. 실제로 그린 예시는 [웹 설명서의 인용 쓰기](https://zotero.cmdspace.work/citations/)에 있습니다.
 - **Insert citation from the literature index**는 인덱스에서 자료를 골라 **Default citation format** 형식으로 넣습니다. 형식마다 명령도 따로 있습니다: **Insert pandoc citation**(`[@key]`), **Insert narrative citation**(`@key`), **Insert citekey wikilink**(`[[@key]]`), **Insert author-date citation text**(`(Kim & Lee, 2020)`, 인덱스로 만든 근사치), **Insert Zotero item link**, **Insert literature note link**. 템플릿이 아니라 고정된 형식입니다.
 - 자료 선택 창과 자동완성은 필드를 이해합니다: `author:`, `title:`, `year:2019-2021`, `tag:`, `col:<컬렉션 경로>`, `lib:`, `type:`, `has:pdf|note|annotations`(앞에 `-`를 붙이면 제외, 공백이 있는 값은 따옴표).
 - **Insert item content from Zotero**는 자료의 Zotero 노트·참고문헌·메타데이터·초록·링크·주석을 사용자 소유 텍스트로 현재 노트에 넣습니다.
@@ -100,7 +101,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 **참고문헌과 참고 목록**
 - **Bibliography style**: **Choose style**(설정 → Bibliography and references)과 명령 **Choose bibliography style from installed styles**는 Zotero의 `styles` 폴더에 있는 스타일을 읽기 전용으로 보여 줍니다(`~/Zotero`가 아니면 **Zotero data directory**를 정합니다). Better BibTeX가 렌더링하지 못하는 스타일은 이유와 함께 거절합니다. 직접 입력한 스타일이나 로캘도 **Save configuration**을 누를 때 같은 방식으로 확인합니다.
 - **Bibliography locale**은 참고문헌 용어와 날짜의 언어·지역을 정합니다(예: `ko-KR`, `de-DE`). 비워 두면 스타일의 기본값을 씁니다.
-- 노트의 `csl`과 `lang` frontmatter는 그 노트의 스타일과 로캘을 정합니다. 참고문헌 사이드바, Insert bibliography, 복사한 참고문헌, 참고문헌 구역, 내보내기 키트에 적용됩니다. `csl: apa.csl`은 파일 이름으로 설치된 스타일과 맞춥니다.
+- 노트의 `csl`과 `lang` frontmatter는 그 노트의 스타일과 로캘을 정합니다. 참고문헌 사이드바, Insert bibliography, 복사한 참고문헌, 참고문헌 구역, 내보내기 키트에 적용됩니다. `csl: apa.csl`은 파일 이름으로 설치된 스타일과 맞춥니다. `lang`은 원고가 아니라 참고문헌 용어의 언어입니다. 한국어 원고라도 영어 문헌을 영어 양식으로 적으면 `en-US`를 씁니다. `ko-KR`은 영어 양식 안의 용어만 바꿔("Eds."는 "편집자", "et al."은 "기타") 둘이 섞입니다. `csl`과 `lang`의 세 가지 예는 [웹 설명서의 참고문헌과 Word](https://zotero.cmdspace.work/references/)에 있습니다.
 - **Open references sidebar**: 현재 노트의 `[@key]`, `@key`, 인용 위키링크를 모아 참고문헌과 미해결 상태를 보여 줍니다. Zotero가 꺼져 있어도 저장된 참고문헌(`.cmds-zotero/bibliography.json`)으로 표시합니다. 인용은 pandoc과 같은 방식으로 셉니다. 코드, HTML 주석, `%%` 주석 안의 인용, 이스케이프한 `\@`, 이메일 주소는 빼고, `-@key`와 `nocite`의 키는 셉니다. 행마다 이전·다음 위치로 이동할 수 있고, 편집기에서는 **Go to next occurrence of the citation at cursor**와 **Go to previous occurrence of the citation at cursor**로 같은 일을 합니다.
 - **Check citations in current note**는 인덱스에 없는 키, 여러 항목이 쓰는 키, 예전 키, 문헌 노트가 없는 키, `nocite` 키를 저장된 인덱스로 보여 줍니다. 각 위치를 노트에서 열 수 있습니다.
 - **Copy bibliography for current note**(참고문헌 사이드바의 버튼도 같음)는 서식 있는 HTML과 일반 텍스트를 함께 클립보드에 넣으므로 워드프로세서에 서식째 붙습니다. 순서는 **Bibliography order**로 정합니다: 스타일이 정한 순서(기본), 처음 인용한 순서, 가나다·알파벳순.
