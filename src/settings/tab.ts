@@ -3,14 +3,14 @@ import type { SettingDefinition, SettingDefinitionGroup, SettingDefinitionItem }
 import type CMDSZoteroPlugin from "../main";
 import { describeBbtError } from "../api/transport";
 import { draftOf, type Problem, type SettingsDraft } from "./fields";
-import { buildSections, saveBlocker, type RowSpec, type SectionSpec, type SettingsActions } from "./model";
+import { buildSections, saveBlocker, savesAtOnce, withSetting, type ControlRowSpec, type RowSpec, type SectionSpec, type SettingsActions } from "./model";
 import { SETTINGS_SECTIONS } from "./registry";
 import { chooseInstalledStyle } from "../plugin/style-picker";
 
 /**
- * The settings tab: the area sections of `registry.ts`, edited in a draft and stored only by Save (inline problems
- * block it). Obsidian before 1.13 renders `display()`; 1.13 and later render the same rows from
- * `getSettingDefinitions()` (searchable), each row through the same `renderRow`.
+ * The settings tab: the area sections of `registry.ts`, edited in a draft and stored by Save (inline problems block
+ * it); 0.6.7: switches and menus are stored as soon as they change. Obsidian before 1.13 renders `display()`; 1.13 and
+ * later render the same rows from `getSettingDefinitions()` (searchable), each row through the same `renderRow`.
  */
 export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	private readonly sections: SectionSpec[] = buildSections(SETTINGS_SECTIONS);
@@ -24,6 +24,8 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 	 * stored settings may have changed while the tab was closed (Choose bibliography style from installed styles).
 	 */
 	private draftStale = true;
+	/** 0.6.7: saves run one after another, so two quick switches never store over each other. */
+	private saving: Promise<unknown> = Promise.resolve();
 	private readonly actions: SettingsActions;
 
 	constructor(app: App, private plugin: CMDSZoteroPlugin) {
@@ -144,10 +146,12 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 		this.problems.delete(row.name);
 		const problemEl = setting.infoEl.createDiv({ cls: "cmds-zotero-error", attr: { role: "alert" } });
 		problemEl.hide();
+		const savedEl = savesAtOnce(row) ? setting.infoEl.createDiv({ cls: "cmds-zotero-status", attr: { role: "status", "aria-live": "polite" } }) : null;
 		const report = (problem: Problem): void => {
 			if (problem) this.problems.set(row.name, problem); else this.problems.delete(row.name);
 			problemEl.setText(problem ?? "");
 			problemEl.toggle(problem !== null);
+			if (problem === null && savedEl) this.saveAtOnce(row, savedEl);
 		};
 		switch (row.kind) {
 			case "text":
@@ -175,8 +179,29 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 		}
 	}
 
+	/** Runs a save after the ones already started. */
+	private enqueue(job: () => Promise<void>): Promise<void> {
+		const run = this.saving.then(job, job);
+		this.saving = run.catch(() => undefined);
+		return run;
+	}
+
+	/**
+	 * 0.6.7: stores the value a switch or menu just took, written over the stored settings at the moment it runs. The
+	 * value is read now: closing the tab replaces the draft before a queued save starts. A refused save (for example while
+	 * the index refreshes) is shown under the row; the draft keeps the value for Save.
+	 */
+	private saveAtOnce(row: ControlRowSpec, status: HTMLElement): void {
+		const key = row.field.key;
+		const value = this.draft[key];
+		status.setText("");
+		void this.enqueue(() => this.plugin.saveSettings(withSetting(this.plugin.settings, key, value))).catch((error: unknown) => {
+			status.setText(`Not saved: ${error instanceof Error ? error.message : "the setting could not be saved."} Press Save configuration to try again.`);
+		});
+	}
+
 	private renderSave(setting: Setting): void {
-		setting.setName("Save configuration").setDesc("Changes above take effect only after saving.");
+		setting.setName("Save configuration").setDesc("Switches and menus are saved as soon as they change. Typed values take effect only after saving.");
 		const status = setting.infoEl.createDiv({ cls: "cmds-zotero-status", attr: { role: "status", "aria-live": "polite" } });
 		setting.addButton(button => button.setButtonText("Save").setCta().onClick(async () => {
 			const blocked = saveBlocker(this.problems);
@@ -190,7 +215,8 @@ export class CmdsZoteroSettingsTab extends PluginSettingTab {
 					const problem = await this.plugin.bibliography.probeFormat({ style: this.draft.bibliographyStyle || stored.bibliographyStyle, locale: this.draft.bibliographyLocale });
 					if (problem) { status.setText(problem); return; }
 				}
-				await this.plugin.saveSettings(this.draft);
+				const draft = this.draft;
+				await this.enqueue(() => this.plugin.saveSettings(draft));
 				status.setText("Configuration saved.");
 			}
 			catch (error) { status.setText(error instanceof Error ? error.message : "Configuration could not be saved."); }

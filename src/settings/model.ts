@@ -101,6 +101,19 @@ export function controlRows(sections: readonly SectionSpec[]): ControlRowSpec[] 
 }
 
 /**
+ * 0.6.7 save-switches-at-once: a switch or a menu is stored as soon as it changes, so a setting never looks on while the
+ * stored one is off (Obsidian 1.13+ shows Save far from the row in settings search). Typed values still wait for Save.
+ */
+export function savesAtOnce(row: ControlRowSpec): boolean {
+	return row.kind === "toggle" || row.kind === "dropdown";
+}
+
+/** The stored settings with one value written over them; other unsaved edits stay in the draft. */
+export function withSetting<K extends keyof SettingsDraft>(stored: SettingsDraft, key: K, value: SettingsDraft[K]): SettingsDraft {
+	return { ...stored, [key]: value };
+}
+
+/**
  * Why the draft cannot be saved: the inline problems still open (named after their controls), else null. Each control
  * keeps its own message; this is the summary the Save button shows.
  */

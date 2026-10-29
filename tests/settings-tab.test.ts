@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "../src/types";
 import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, normalizeTagList, storesIndexPath, withLegacyIndexPath } from "../src/settings-data";
 import { choiceField, draftOf, endpointField, integerField, linesField, parsePeerVaults, peerVaultsField, secondsField, tagsField, toggleField, vaultPathField, vaultPathProblem } from "../src/settings/fields";
-import { buildSections, controlRows, saveBlocker, type DropdownRowSpec } from "../src/settings/model";
+import { buildSections, controlRows, saveBlocker, savesAtOnce, withSetting, type DropdownRowSpec } from "../src/settings/model";
 import { SETTINGS_SECTIONS } from "../src/settings/registry";
 
 const sections = buildSections(SETTINGS_SECTIONS);
@@ -195,4 +195,26 @@ test("save is blocked while any control holds a rejected value", () => {
 	assert.equal(saveBlocker(new Map()), null);
 	assert.equal(saveBlocker(new Map([["Request timeout", "Enter seconds from 1 to 180."]])), "Fix this value first: Request timeout.");
 	assert.equal(saveBlocker(new Map([["Index path", "x"], ["Peer vaults", "y"]])), "Fix these 2 values first: Index path, Peer vaults.");
+});
+
+test("0.6.7 switches and menus are saved at once; typed values wait for Save", () => {
+	const rows = controlRows(buildSections(SETTINGS_SECTIONS));
+	const kinds = (key: string) => rows.filter(row => row.field.key === key).map(row => savesAtOnce(row));
+	assert.deepEqual(kinds("pandocAfterExport"), [true]);
+	assert.deepEqual(kinds("hookmarkLinkExports"), [true]);
+	assert.deepEqual(kinds("bibliographyOrder"), [true]);
+	assert.deepEqual(kinds("exportFolder"), [false]);
+	assert.deepEqual(kinds("pandocPath"), [false]);
+	for (const row of rows) assert.equal(savesAtOnce(row), row.kind === "toggle" || row.kind === "dropdown", row.name);
+});
+
+test("0.6.7 an at-once save writes one value over the stored settings and keeps the other unsaved edits out", () => {
+	const stored = normalizeSettings({ ...DEFAULT_SETTINGS, exportFolder: "Stored exports" });
+	const draft = { ...draftOf(stored), exportFolder: "Typed but not saved", pandocAfterExport: true };
+	const next = withSetting(stored, "pandocAfterExport", draft.pandocAfterExport);
+	assert.equal(next.pandocAfterExport, true);
+	assert.equal(next.exportFolder, "Stored exports");
+	assert.equal(stored.pandocAfterExport, false, "the stored object is not changed");
+	// Stored, then loaded again: the switch stays on (the 2026-10-29 report: off again after a restart).
+	assert.equal(normalizeSettings(JSON.parse(JSON.stringify(normalizeSettings(next)))).pandocAfterExport, true);
 });
