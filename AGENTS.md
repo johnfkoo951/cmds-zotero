@@ -31,6 +31,7 @@ A desktop-only, local-first Zotero integration: verified identities and index, c
 - Note addresses shown to people and agents come from `obsidianOpenURI` (`obsidian://open?vault=&file=`, percent-encoded, `.md` stripped: the form Obsidian's Copy Obsidian URL produces; Hookmark records the same form, path-encoding parity unverified). Peer rows use `peerNoteURI` (Advanced URI when the peer lists that plugin). `noteDeepLink` (`obsidian://cmds-zotero`) is only for the rename-safe identity link and the protocol handler.
 - Run `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`. `npm test` never rewrites a tracked file: after changing a module bundled into the offline core, run `npm run build:core` (the drift test fails until the committed `scripts/ingest-core.mjs` matches).
 - Public release tags equal manifest versions without a `v` prefix; CI builds and attests assets. Release/community submission require explicit approval.
+- After publishing, the release workflow calls the `DOCS_DEPLOY_HOOK` secret, which rebuilds the Korean docs site https://zotero.cmdspace.work from the new release (private repo `johnfkoo951/cmds-zotero-docs`: version, commands, settings, changelog and the practice kit are read from the release; new commands or settings without Korean text are shown in English and listed in its `drift.json`). A missing secret only skips that step.
 
 ## API contract
 

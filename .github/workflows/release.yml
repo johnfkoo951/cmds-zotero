@@ -60,3 +60,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" main.js manifest.json styles.css provenance.jsonl
+      - name: Rebuild the docs site (zotero.cmdspace.work)
+        env:
+          DOCS_DEPLOY_HOOK: ${{ secrets.DOCS_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DOCS_DEPLOY_HOOK" ]; then echo "DOCS_DEPLOY_HOOK is not set; skipping"; exit 0; fi
+          curl -fsS -X POST "$DOCS_DEPLOY_HOOK" > /dev/null && echo "docs rebuild requested" || echo "::warning::docs deploy hook failed; the docs repo's daily check rebuilds the site"
