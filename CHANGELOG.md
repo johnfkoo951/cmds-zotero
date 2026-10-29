@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.7 — 2026-10-29
+
+Settings that look on are on.
+
+- Switches and menus in Settings are saved as soon as they change. Before, every change waited for *Save configuration*, which on Obsidian 1.13 and later sits apart from the setting in the settings search. A switch such as *Run pandoc after export* could look on while the stored setting stayed off, so both export commands still only copied the pandoc command, and the switch was off again after the plugin or Obsidian restarted. Typed values (paths, addresses, styles, lists) still take effect after *Save configuration*, which checks them first. A save refused while the index refreshes is shown under its row; *Save configuration* tries again.
+- The README and the guides link the Korean docs site, https://zotero.cmdspace.work. The Hookmark disclosure and the note in *Connected vaults* say that bookmarks are made only by the opt-in *Link exports in Hookmark*.
+
 ## 0.6.6 — 2026-10-29
 
 A Word hand-off that keeps the citations Zotero's, and export kits that can live outside the vault, run pandoc and link to the note in Hookmark (those three are opt-in and off by default). Verified on macOS with pandoc 3.9 and Word for Mac; the Windows paths are covered by tests, not live-tested.
