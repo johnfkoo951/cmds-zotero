@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "../src/types";
 import { LEGACY_DEFAULT_INDEX_PATH, normalizeSettings, normalizeTagList, storesIndexPath, withLegacyIndexPath } from "../src/settings-data";
 import { choiceField, draftOf, endpointField, integerField, linesField, parsePeerVaults, peerVaultsField, secondsField, tagsField, toggleField, vaultPathField, vaultPathProblem } from "../src/settings/fields";
-import { buildSections, controlRows, saveBlocker, savesAtOnce, withSetting, type DropdownRowSpec } from "../src/settings/model";
+import { buildSections, closedUnsavedNotice, controlRows, isUnsaved, rowSaveButton, saveBlocker, savesAtOnce, unsavedRowNames, unsavedSummary, withSetting, type DropdownRowSpec } from "../src/settings/model";
 import { SETTINGS_SECTIONS } from "../src/settings/registry";
 
 const sections = buildSections(SETTINGS_SECTIONS);
@@ -217,4 +217,66 @@ test("0.6.7 an at-once save writes one value over the stored settings and keeps 
 	assert.equal(stored.pandocAfterExport, false, "the stored object is not changed");
 	// Stored, then loaded again: the switch stays on (the 2026-10-29 report: off again after a restart).
 	assert.equal(normalizeSettings(JSON.parse(JSON.stringify(normalizeSettings(next)))).pandocAfterExport, true);
+});
+
+// Issue #3 (0.6.8 unsaved-row-save): a typed value is saved beside its row, and closing the tab names what was not saved.
+test("0.6.8 a row is unsaved while storing its value would change the stored settings", () => {
+	const stored = normalizeSettings({ ...DEFAULT_SETTINGS, pandocPath: "/opt/homebrew/bin/pandoc" });
+	const draft = draftOf(stored);
+	assert.equal(isUnsaved(draft, stored, "exportFolder"), false);
+	assert.equal(rowFor("exportFolder")!.field.write(draft, "Exports"), null);
+	assert.equal(isUnsaved(draft, stored, "exportFolder"), true);
+	assert.equal(rowFor("exportFolder")!.field.write(draft, "CMDS Zotero exports"), null);
+	assert.equal(isUnsaved(draft, stored, "exportFolder"), false, "a value typed back to the stored one is not a change");
+	// An emptied field is saved as its default: not a change while the default is stored, a change otherwise.
+	assert.equal(rowFor("exportFolder")!.field.write(draft, ""), null);
+	assert.equal(isUnsaved(draft, stored, "exportFolder"), false);
+	assert.equal(rowFor("pandocPath")!.field.write(draft, ""), null);
+	assert.equal(isUnsaved(draft, stored, "pandocPath"), true);
+	// Lists compare by value: the draft's copy is never the stored array.
+	assert.equal(isUnsaved(draft, stored, "excludedTags"), false);
+	assert.equal(rowFor("excludedTags")!.field.write(draft, "obscite\nto-read"), null);
+	assert.equal(isUnsaved(draft, stored, "excludedTags"), true);
+	assert.equal(rowFor("excludedTags")!.field.write(draft, " ObsCite "), null);
+	assert.equal(isUnsaved(draft, stored, "excludedTags"), false);
+});
+
+test("0.6.8 a row's Save stores that value alone; the other unsaved rows stay unsaved, in the tab's order", () => {
+	const stored = normalizeSettings(DEFAULT_SETTINGS);
+	const draft = draftOf(stored);
+	assert.equal(rowFor("pandocPath")!.field.write(draft, "/usr/local/bin/pandoc"), null);
+	assert.equal(rowFor("exportFolder")!.field.write(draft, "Exports"), null);
+	assert.deepEqual(unsavedRowNames(controls, draft, stored, new Map()), [rowFor("exportFolder")!.name, rowFor("pandocPath")!.name]);
+	const next = normalizeSettings(withSetting(stored, "exportFolder", draft.exportFolder));
+	assert.equal(next.exportFolder, "Exports");
+	assert.equal(next.pandocPath, "", "the other row's draft value is not stored");
+	assert.deepEqual(unsavedRowNames(controls, draft, next, new Map()), [rowFor("pandocPath")!.name]);
+	// A rejected input is named too: the draft keeps the last accepted value, so the row is otherwise unchanged.
+	const timeout = rowFor("requestTimeoutMs")!;
+	const problem = timeout.field.write(draft, "999");
+	assert.ok(problem);
+	const inTabOrder = controls.filter(row => row === timeout || row.field.key === "pandocPath").map(row => row.name);
+	assert.deepEqual(unsavedRowNames(controls, draft, next, new Map([[timeout.name, problem]])), inTabOrder);
+});
+
+test("0.6.8 the row Save button: hidden while stored, disabled for a rejected input or while saving, a switch's only after a refused save", () => {
+	assert.equal(rowSaveButton({ unsaved: false, problem: false, saving: false }), "hidden");
+	assert.equal(rowSaveButton({ unsaved: true, problem: false, saving: false }), "enabled");
+	assert.equal(rowSaveButton({ unsaved: true, problem: true, saving: false }), "disabled", "a value with an error cannot be saved");
+	assert.equal(rowSaveButton({ unsaved: false, problem: true, saving: false }), "disabled");
+	assert.equal(rowSaveButton({ unsaved: true, problem: false, saving: true }), "disabled");
+	assert.equal(rowSaveButton({ unsaved: true, problem: false, saving: true, atOnce: true }), "hidden", "a switch saving itself shows no button");
+	assert.equal(rowSaveButton({ unsaved: true, problem: false, saving: false, atOnce: true }), "enabled", "a refused switch can be saved again");
+	assert.equal(rowSaveButton({ unsaved: false, problem: false, saving: false, atOnce: true }), "hidden");
+});
+
+test("0.6.8 the Save configuration summary and the Notice when the tab closes with unsaved rows", () => {
+	assert.equal(unsavedSummary([]), "");
+	assert.equal(unsavedSummary(["Pandoc path"]), "1 value is not saved yet: Pandoc path.");
+	assert.equal(unsavedSummary(["Export kit folder", "Pandoc path"]), "2 values are not saved yet: Export kit folder, Pandoc path.");
+	assert.equal(closedUnsavedNotice([]), null);
+	assert.match(closedUnsavedNotice(["Pandoc path"]) ?? "", /^Settings closed without saving Pandoc path\. The stored value stays in use/);
+	const many = closedUnsavedNotice(["Export kit folder", "Pandoc path"]) ?? "";
+	assert.match(many, /Export kit folder, Pandoc path/);
+	assert.match(many, /stored values stay in use/);
 });

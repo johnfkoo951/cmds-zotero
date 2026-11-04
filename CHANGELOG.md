@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Settings that say what is not saved yet.
+
+- Settings ([#3](https://github.com/johnfkoo951/cmds-zotero/issues/3)): a typed value that differs from the stored one says *Not saved yet* under its row, with a **Save** button beside it that stores that value alone; Enter does the same in a one-line field, and a value with an error cannot be saved. Typing the stored value back clears the mark. *Save configuration* lists the values not saved yet, and its button, now **Save all**, stores them all. Closing settings while values are not saved shows a notice that names them; before, they were dropped without a word. Switches and menus are still saved as soon as they change and now say *Saved.*; one refused while the index refreshes keeps the reason under its row and gets a **Save** button to try again. On Obsidian 1.13 and later, the settings search no longer lists *Save configuration* with every setting, since each row it finds has its own **Save**. Stored settings are unchanged.
+
 ## 0.6.7 — 2026-10-29
 
 Settings that look on are on.

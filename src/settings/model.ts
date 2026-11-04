@@ -4,7 +4,8 @@
  * (`setName`, `setDesc`, `addOption`, `setButtonText`, `setPlaceholder`, `setText`) so UI text stays visible to the
  * sentence-case lint. Pure: no `obsidian` import.
  */
-import type { Field, SettingsDraft } from "./fields";
+import type { Field, SettingKey, SettingsDraft } from "./fields";
+import { normalizeSettings } from "../settings-data";
 
 /** What a button row may ask of the plugin; each call resolves to the status text shown under the button. */
 export interface SettingsActions {
@@ -111,6 +112,49 @@ export function savesAtOnce(row: ControlRowSpec): boolean {
 /** The stored settings with one value written over them; other unsaved edits stay in the draft. */
 export function withSetting<K extends keyof SettingsDraft>(stored: SettingsDraft, key: K, value: SettingsDraft[K]): SettingsDraft {
 	return { ...stored, [key]: value };
+}
+
+const sameValue = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * 0.6.8 unsaved-row-save: true when saving the draft's value of `key` would change the stored settings. The value is
+ * compared after the normalisation Save applies, so a value set back to the stored one, or an emptied field whose
+ * default is the stored value, is not an unsaved change.
+ */
+export function isUnsaved(draft: SettingsDraft, stored: SettingsDraft, key: SettingKey): boolean {
+	if (sameValue(draft[key], stored[key])) return false;
+	return !sameValue(normalizeSettings(withSetting(stored, key, draft[key]))[key], stored[key]);
+}
+
+/**
+ * The names of the rows whose input is not stored, in the tab's order: a value that differs from the stored one, or an
+ * input the field rejected (`problems`, keyed by row name).
+ */
+export function unsavedRowNames(rows: readonly ControlRowSpec[], draft: SettingsDraft, stored: SettingsDraft, problems: ReadonlyMap<string, string>): string[] {
+	return rows.filter(row => problems.has(row.name) || isUnsaved(draft, stored, row.field.key)).map(row => row.name);
+}
+
+/**
+ * The Save button beside a control: hidden while the row holds the stored value, disabled while the input is rejected
+ * or the row is being saved, enabled otherwise. A switch or menu (`atOnce`) saves itself, so its button stays hidden
+ * while that save runs and appears only when the value is still unsaved afterwards (the save was refused).
+ */
+export function rowSaveButton(state: { unsaved: boolean; problem: boolean; saving: boolean; atOnce?: boolean }): "hidden" | "enabled" | "disabled" {
+	if (state.saving && state.atOnce) return "hidden";
+	if (state.problem || state.saving) return "disabled";
+	return state.unsaved ? "enabled" : "hidden";
+}
+
+/** What the Save configuration row says about the rows that are not saved yet; empty when every value is stored. */
+export function unsavedSummary(names: readonly string[]): string {
+	if (!names.length) return "";
+	return `${names.length === 1 ? "1 value is" : `${names.length} values are`} not saved yet: ${names.join(", ")}.`;
+}
+
+/** 0.6.8: the Notice shown when the tab closes while rows are not saved (their input is dropped); null when none are. */
+export function closedUnsavedNotice(names: readonly string[]): string | null {
+	if (!names.length) return null;
+	return `Settings closed without saving ${names.join(", ")}. The stored ${names.length === 1 ? "value stays" : "values stay"} in use; enter ${names.length === 1 ? "it" : "them"} again and press Save to change ${names.length === 1 ? "it" : "them"}.`;
 }
 
 /**

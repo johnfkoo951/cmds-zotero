@@ -27,7 +27,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 
 ## 첫 성공: 최근 읽은 논문을 노트로 보내기
 1. Better BibTeX가 켜진 Zotero를 실행합니다.
-2. **설정 → CMDS Zotero**에서 **Output folder**, **Image folder**, **Index path**를 볼트 상대경로로 정하고 **Save configuration**을 누릅니다. **Test connection**은 저장된 설정을 시험합니다.
+2. **설정 → CMDS Zotero**에서 **Output folder**, **Image folder**, **Index path**를 볼트 상대경로로 정하고 각 칸 옆의 **Save**(또는 맨 아래 **Save all**)를 누릅니다. **Test connection**은 저장된 설정을 시험합니다.
 3. 명령 팔레트(Ctrl/Cmd+P)에서 **Refresh citekey index**를 한 번 실행합니다.
 4. Zotero 리더에서 논문 PDF를 열고 하이라이트나 메모를 남깁니다.
 5. **Send recently read papers to notes**를 실행하거나 펼친 책 모양 리본 아이콘을 누릅니다.
@@ -99,7 +99,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 - 여러 항목이 함께 쓰는 citekey는 실패하지 않고 어느 항목인지 묻습니다.
 
 **참고문헌과 참고 목록**
-- **Bibliography style**: **Choose style**(설정 → Bibliography and references)과 명령 **Choose bibliography style from installed styles**는 Zotero의 `styles` 폴더에 있는 스타일을 읽기 전용으로 보여 줍니다(`~/Zotero`가 아니면 **Zotero data directory**를 정합니다). Better BibTeX가 렌더링하지 못하는 스타일은 이유와 함께 거절합니다. 직접 입력한 스타일이나 로캘도 **Save configuration**을 누를 때 같은 방식으로 확인합니다.
+- **Bibliography style**: **Choose style**(설정 → Bibliography and references)과 명령 **Choose bibliography style from installed styles**는 Zotero의 `styles` 폴더에 있는 스타일을 읽기 전용으로 보여 줍니다(`~/Zotero`가 아니면 **Zotero data directory**를 정합니다). Better BibTeX가 렌더링하지 못하는 스타일은 이유와 함께 거절합니다. 직접 입력한 스타일이나 로캘도 저장할 때 같은 방식으로 확인합니다.
 - **Bibliography locale**은 참고문헌 용어와 날짜의 언어·지역을 정합니다(예: `ko-KR`, `de-DE`). 비워 두면 스타일의 기본값을 씁니다.
 - 노트의 `csl`과 `lang` frontmatter는 그 노트의 스타일과 로캘을 정합니다. 참고문헌 사이드바, Insert bibliography, 복사한 참고문헌, 참고문헌 구역, 내보내기 키트에 적용됩니다. `csl: apa.csl`은 파일 이름으로 설치된 스타일과 맞춥니다. `lang`은 원고가 아니라 참고문헌 용어의 언어입니다. 한국어 원고라도 영어 문헌을 영어 양식으로 적으면 `en-US`를 씁니다. `ko-KR`은 영어 양식 안의 용어만 바꿔("Eds."는 "편집자", "et al."은 "기타") 둘이 섞입니다. `csl`과 `lang`의 세 가지 예는 [웹 설명서의 참고문헌과 Word](https://zotero.cmdspace.work/references/)에 있습니다.
 - **Open references sidebar**: 현재 노트의 `[@key]`, `@key`, 인용 위키링크를 모아 참고문헌과 미해결 상태를 보여 줍니다. Zotero가 꺼져 있어도 저장된 참고문헌(`.cmds-zotero/bibliography.json`)으로 표시합니다. 인용은 pandoc과 같은 방식으로 셉니다. 코드, HTML 주석, `%%` 주석 안의 인용, 이스케이프한 `\@`, 이메일 주소는 빼고, `-@key`와 `nocite`의 키는 셉니다. 행마다 이전·다음 위치로 이동할 수 있고, 편집기에서는 **Go to next occurrence of the citation at cursor**와 **Go to previous occurrence of the citation at cursor**로 같은 일을 합니다.
@@ -174,7 +174,7 @@ Zotero에서 읽고 표시한 내용을 Obsidian 문헌 노트로 보냅니다. 
 PDF 쪽 번호는 **1부터 시작하는 파일 위치**이지 인쇄된 쪽 번호가 아닙니다.
 
 ## 설정
-설정은 영역별 구역으로 나뉘며, 요청 한도와 에이전트 전용 References headings는 **Advanced** 아래에 있습니다. 입력하는 동안 값을 검사합니다. 스위치와 선택 상자는 바꾸는 즉시 저장됩니다(0.6.7). 글자로 입력한 값은 **Save configuration**을 눌러야 저장되고, 그 전에는 이전 값이 쓰입니다.
+설정은 영역별 구역으로 나뉘며, 요청 한도와 에이전트 전용 References headings는 **Advanced** 아래에 있습니다. 입력하는 동안 값을 검사합니다. 스위치와 선택 상자는 바꾸는 즉시 저장됩니다(0.6.7). 글자로 입력한 값이 저장된 값과 다르면 그 행에 *Not saved yet*과 **Save** 버튼이 나타납니다(한 줄 입력칸은 Enter로도 저장). 저장하기 전에는 이전 값이 쓰입니다. *Save configuration*의 **Save all**은 바꾼 값을 한 번에 저장하고, 저장하지 않은 값이 남은 채 설정을 닫으면 그 항목 이름을 알림으로 보여 줍니다.
 
 | 구역 | 설정 | 기본값과 의미 |
 |---|---|---|

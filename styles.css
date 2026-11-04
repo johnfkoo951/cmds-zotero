@@ -418,3 +418,9 @@ mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius
   font-family: inherit;
 }
 .cmds-zotero-review-skip .setting-item-name { color: var(--cmds-zotero-state-muted); }
+
+/* 0.6.8 unsaved-row-save: a settings row whose value is not stored yet, and the Save configuration summary. */
+.cmds-zotero-unsaved .cmds-zotero-status,
+.cmds-zotero-unsaved-summary {
+  color: var(--cmds-zotero-state-warning);
+}
