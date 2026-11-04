@@ -23,11 +23,14 @@ import { assertVaultBoundary, ensureCmdsIgnore, ensureDirectory } from "../vault
 import { CitationCheckModal, checkReportText } from "../modals/citation-check";
 import { SectionPreviewModal } from "../modals/section-preview";
 import { ActionsModal } from "../modals/actions";
-import { ReportModal } from "../modals/report";
+import { ReportModal, type ReportAction } from "../modals/report";
+import { exportReport, type ExportReport, type ExportStep, type KitResult } from "../export/outcome";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif", "tif", "tiff"]);
 /** Fresh kit folders tried (`<name> 2` … `<name> 50`) before giving up. */
 const MAX_KIT_ATTEMPTS = 50;
+/** How long the Notice of a clean export stays (its button opens the report). */
+const EXPORT_NOTICE_MS = 10_000;
 
 /**
  * 0.6.2 WP6: the citation check, occurrence navigation, the managed references section and the pandoc export kit, all
@@ -277,13 +280,18 @@ export class ReferencesController {
 			const missing = cited.entries.length - csl.exported.length;
 			const lines = [
 				`Written to ${target.store.label(folder)}: ${kitNames.join(", ")} and ${KIT_MANIFEST}. ${file.basename} itself was not changed.`,
-				`${csl.exported.length} cited source${csl.exported.length === 1 ? "" : "s"} in ${KIT_BIBLIOGRAPHY}${missing > 0 ? ` (${missing} missing from the Better BibTeX export)` : ""}.`,
-				...(cited.skipped.length ? [`Not in ${KIT_BIBLIOGRAPHY} (pandoc will warn): ${cited.skipped.join(", ")}.`] : []),
-				...(style.note ? [style.note] : []),
+				`${csl.exported.length} cited source${csl.exported.length === 1 ? "" : "s"} in ${KIT_BIBLIOGRAPHY}.`,
+				// With a CSL file the note only names a dependent style's parent; without one pandoc formats in its default style.
+				...(style.path && style.note ? [style.note] : []),
 				...sanitizeSummary(cleaned.report),
 				...frontmatterSummary(copy.removed),
 			];
-			await this.finishKit({ title: "Pandoc export kit", lines, store: target.store, folder, defaultsPath, docx: `${name}.docx`, file, word: false });
+			const unresolved = [
+				...(missing > 0 ? [`${missing} cited source${missing === 1 ? " is" : "s are"} missing from the Better BibTeX export, so ${KIT_BIBLIOGRAPHY} does not have ${missing === 1 ? "it" : "them"}.`] : []),
+				...(cited.skipped.length ? [`Not in ${KIT_BIBLIOGRAPHY} (pandoc will warn): ${cited.skipped.join(", ")}.`] : []),
+			];
+			const warnings = !style.path && style.note ? [style.note] : [];
+			await this.finishKit({ title: "Pandoc export kit", lines, warnings, unresolved, store: target.store, folder, defaultsPath, docx: `${name}.docx`, file, word: false });
 		};
 		await this.writeKitFolder(target.store, target.root, name, kitNames, write);
 	}
@@ -321,39 +329,48 @@ export class ReferencesController {
 	 * The end of an export. Without "Run pandoc after export": the command goes to the clipboard and the report. With it:
 	 * pandoc runs (for the Word kit only while Zotero answers), the `.docx` opens with its default app and, with "Link
 	 * exports in Hookmark", the `.docx` and the note are hooked together. Any step that cannot run says why and leaves
-	 * the command to run by hand.
+	 * the command to run by hand. 0.6.8 export-result-tones: a clean run is only a Notice (`exportReport`).
 	 */
-	private async finishKit(kit: { title: string; lines: string[]; store: KitStore; folder: string; defaultsPath: string; docx: string; file: TFile; word: boolean }): Promise<void> {
+	private async finishKit(kit: FinishedKit): Promise<void> {
 		const settings = this.plugin.settings;
 		const command = pandocCommand(kit.defaultsPath, process.platform);
-		const show = (lines: string[]): void => { new ReportModal(this.plugin.app, kit.title, lines.join("\n")).open(); };
-		const handOver = async (why: string[]): Promise<void> => {
-			let copied = true;
-			try { await navigator.clipboard.writeText(command); } catch { copied = false; }
-			show([...kit.lines, "", ...why, copied ? "Command copied to the clipboard (pandoc 2.17 or later):" : "Run this command (pandoc 2.17 or later):", command,
-				...(kit.word ? ["", "Run it while Zotero is open. In Word, press Refresh in the Zotero tab once; the citations and the bibliography are then Zotero's."] : [])]);
-		};
+		const copy = async (): Promise<boolean> => { try { await navigator.clipboard.writeText(command); return true; } catch { return false; } };
+		const show = (step: ExportStep, copied = false): void => { this.showExport(kit, exportReport(kit, step, command, copied), copied); };
 		const folderPath = kit.store.absolute(kit.folder);
-		if (!settings.pandocAfterExport || !folderPath) { await handOver([]); return; }
-		if (kit.word && !(await this.plugin.bbt.isReachable())) { await handOver(["Zotero is not answering, so pandoc was not run (the Word kit asks Zotero for the cited items). Start Zotero and export again, or run the command yourself."]); return; }
+		if (!settings.pandocAfterExport || !folderPath) { show({ kind: "handed-over" }, await copy()); return; }
+		if (kit.word && !(await this.plugin.bbt.isReachable())) { show({ kind: "zotero-offline" }, await copy()); return; }
 		const notice = new Notice("Running pandoc…", 0);
 		let run: PandocRun;
 		try { run = await runPandoc(settings.pandocPath, kit.defaultsPath, folderPath); } finally { notice.hide(); }
-		const issues = run.summary ? [
-			...(run.summary.missing.length ? [`Not found in Zotero, left as text in the .docx: ${run.summary.missing.map(key => `@${key}`).join(", ")}.`] : []),
-			...(run.summary.ambiguous.length ? [`Found more than once in Zotero, left as text: ${run.summary.ambiguous.map(key => `@${key}`).join(", ")}.`] : []),
-			...run.summary.other.map(line => `pandoc: ${line}`),
-		] : [];
-		if (run.kind === "failed") { await handOver([`pandoc did not finish: ${run.message}`, ...issues, ""]); return; }
+		if (run.kind === "failed") { show({ kind: "failed", pandoc: run.pandoc, message: run.message, ...(run.summary ? { summary: run.summary } : {}) }, await copy()); return; }
 		const docxPath = normalize(`${folderPath}/${kit.docx}`);
-		const result = [`pandoc (${run.pandoc}) wrote ${docxPath}.`, ...issues];
 		const openProblem = await openWithDefaultApp(docxPath);
-		result.push(openProblem ? `The .docx could not be opened: ${openProblem}` : `Opened the .docx.${kit.word ? " In Word, press Refresh in the Zotero tab once." : ""}`);
-		if (settings.hookmarkLinkExports) {
-			const linkProblem = await linkInHookmark(docxPath, obsidianOpenURI(this.plugin.app.vault.getName(), kit.file.path), kit.docx, kit.file.basename);
-			result.push(linkProblem ?? "Linked the .docx and the note in Hookmark.");
-		}
-		show([...kit.lines, "", ...result, "", "To run pandoc again yourself:", command]);
+		const hookmark = settings.hookmarkLinkExports ? { problem: await linkInHookmark(docxPath, obsidianOpenURI(this.plugin.app.vault.getName(), kit.file.path), kit.docx, kit.file.basename) } : null;
+		show({ kind: "ran", pandoc: run.pandoc, summary: run.summary, docxPath, openProblem, hookmark });
+	}
+
+	/** A clean run is a Notice whose button opens the report; any other end opens the report with its tone. */
+	private showExport(kit: FinishedKit, report: ExportReport, copied: boolean): void {
+		const actions: ReportAction[] = [{
+			text: copied ? "Command copied" : "Copy command",
+			run: async controls => {
+				try { await navigator.clipboard.writeText(report.command); controls.label("Command copied"); }
+				catch { controls.label("Copy failed; select the command in the report"); }
+			},
+		}];
+		const docxPath = report.docxPath;
+		if (docxPath) actions.push({ text: "Open .docx", run: async () => { const problem = await openWithDefaultApp(docxPath); if (problem) new Notice(`The .docx could not be opened: ${problem}`); } });
+		if (report.retry) actions.push({ text: "Try again", cta: true, run: controls => { controls.close(); void this.plugin.run(() => this.finishKit(kit)); } });
+		const open = (): void => {
+			new ReportModal(this.plugin.app, report.title, report.details.join("\n"), { tone: report.tone, summary: report.summary, ...(report.showCommand ? { code: report.command } : {}), actions }).open();
+		};
+		if (report.notice === null) { open(); return; }
+		const fragment = createFragment();
+		const body = fragment.createDiv({ cls: "cmds-zotero-export-notice" });
+		body.createDiv({ text: report.notice });
+		// A click on the Notice dismisses it; the button also opens the report.
+		body.createEl("button", { text: "Show report" }).addEventListener("click", open);
+		new Notice(fragment, EXPORT_NOTICE_MS);
 	}
 
 	/**
@@ -404,17 +421,23 @@ export class ReferencesController {
 			const lines = [
 				`Written to ${target.store.label(folder)}: ${kitNames.join(", ")} and ${KIT_MANIFEST}. ${file.basename} itself was not changed.`,
 				`Style: ${style.title}${facts.noteStyle ? " (footnotes)" : ""} · ${locale}. ${placement}`,
-				...(cited.skipped.length ? [`Not in the index (zotero.lua leaves them as text): ${cited.skipped.join(", ")}.`] : []),
-				...(format.problems.length ? format.problems : []),
 				...sanitizeSummary(cleaned.report),
 				...frontmatterSummary(copy.removed),
-				found ? `zotero.lua: ${found}` : `zotero.lua was not found in pandoc's filters folder. Install Better BibTeX's filter once:\n${zoteroLuaInstallCommand(process.platform)}`,
+				...(found ? [`zotero.lua: ${found}`] : []),
 			];
-			await this.finishKit({ title: "Word export kit (live Zotero citations)", lines, store: target.store, folder, defaultsPath, docx: copyName.replace(/\.md$/, ".docx"), file, word: true });
+			const warnings = [
+				...format.problems,
+				...(found ? [] : [`zotero.lua was not found in pandoc's filters folder. Install Better BibTeX's filter once:\n${zoteroLuaInstallCommand(process.platform)}`]),
+			];
+			const unresolved = cited.skipped.length ? [`Not in the index (zotero.lua leaves them as text): ${cited.skipped.join(", ")}.`] : [];
+			await this.finishKit({ title: "Word export kit (live Zotero citations)", lines, warnings, unresolved, store: target.store, folder, defaultsPath, docx: copyName.replace(/\.md$/, ".docx"), file, word: true });
 		};
 		await this.writeKitFolder(target.store, target.root, name, kitNames, write);
 	}
 }
+
+/** A written kit on its way to pandoc: what the report says, where the kit is and the note it came from. */
+type FinishedKit = KitResult & { store: KitStore; folder: string; defaultsPath: string; file: TFile };
 
 /** 0.6.6: where a kit's files are read and written (the vault, or a folder outside it). Paths are `<folder>/<name>`. */
 interface KitStore {
