@@ -27,7 +27,7 @@ Upgrading keeps your settings (`data.json`) and index. Back up the plugin folder
 
 ## First success: send recently read papers to notes
 1. Start Zotero with Better BibTeX enabled.
-2. In **Settings → CMDS Zotero**, set **Output folder**, **Image folder** and **Index path** (vault-relative) and press **Save configuration**. **Test connection** tests the saved settings.
+2. In **Settings → CMDS Zotero**, set **Output folder**, **Image folder** and **Index path** (vault-relative) and press **Save** beside each one (or **Save all** at the end). **Test connection** tests the saved settings.
 3. Run **Refresh citekey index** once from the command palette (Ctrl/Cmd+P).
 4. Open a paper's PDF in Zotero's reader and add a highlight or a comment.
 5. Run **Send recently read papers to notes**, or click the open-book ribbon icon.
@@ -99,7 +99,7 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 - A citekey that several items carry asks which item you mean instead of failing.
 
 **Bibliographies and references**
-- **Bibliography style**: **Choose style** (Settings → Bibliography and references) and the command **Choose bibliography style from installed styles** list the styles in Zotero's `styles` folder, read-only (set **Zotero data directory** if it is not `~/Zotero`). A style Better BibTeX cannot render is refused with the reason. A style or locale typed by hand is checked the same way when you press **Save configuration**.
+- **Bibliography style**: **Choose style** (Settings → Bibliography and references) and the command **Choose bibliography style from installed styles** list the styles in Zotero's `styles` folder, read-only (set **Zotero data directory** if it is not `~/Zotero`). A style Better BibTeX cannot render is refused with the reason. A style or locale typed by hand is checked the same way when you save it.
 - **Bibliography locale** sets the language and region of bibliography terms and dates, for example `ko-KR` or `de-DE`; empty keeps the style's default.
 - A note's own `csl` and `lang` frontmatter set the style and locale for that note: its references sidebar, Insert bibliography, copied bibliography, references section and export kit. `csl: apa.csl` is matched to an installed style by file name. `lang` sets the language of the bibliography terms, not of the manuscript: a Korean manuscript citing English sources in English style keeps `en-US`, while `ko-KR` only translates the terms inside the English style ("Eds." becomes "편집자", "et al." becomes "기타"). Three `csl`/`lang` recipes are on the [Korean docs site](https://zotero.cmdspace.work/references/).
 - **Open references sidebar** collects `[@key]`, `@key` and citation wikilinks in the current note and shows their bibliography and unresolved states. With Zotero closed it uses saved bibliography text (`.cmds-zotero/bibliography.json`). It counts citations the way pandoc does: citations in code, HTML comments and `%%` comments, an escaped `\@` and e-mail addresses are left out; `-@key` and keys in `nocite` are counted. Each row jumps to the previous or next occurrence, and **Go to next occurrence of the citation at cursor** and **Go to previous occurrence of the citation at cursor** do the same from the editor.
@@ -174,7 +174,7 @@ Damaged or duplicate markers, a note CMDS Zotero did not create, or several note
 PDF page numbers are **one-based file positions**, not printed page labels.
 
 ## Settings
-Settings are grouped by area; request limits and the agent-only References headings are under **Advanced**. Values are checked as you type. Switches and menus are saved as soon as they change (0.6.7). After typing a value, press **Save configuration**; until then the previous value applies.
+Settings are grouped by area; request limits and the agent-only References headings are under **Advanced**. Values are checked as you type. Switches and menus are saved as soon as they change (0.6.7). A typed value that differs from the stored one says *Not saved yet* and gets a **Save** button beside it (Enter also saves a one-line field); until then the previous value applies. **Save all** under *Save configuration* stores every changed value at once, and closing settings with values not saved names them in a notice.
 
 | Section | Setting | Default and meaning |
 |---|---|---|

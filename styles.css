@@ -418,3 +418,60 @@ mark[class^="cmds-zotero-hl-"] { color: inherit; padding: 0 0.1em; border-radius
   font-family: inherit;
 }
 .cmds-zotero-review-skip .setting-item-name { color: var(--cmds-zotero-state-muted); }
+
+/* 0.6.8 unsaved-row-save: a settings row whose value is not stored yet, and the Save configuration summary. */
+.cmds-zotero-unsaved .cmds-zotero-status,
+.cmds-zotero-unsaved-summary {
+  color: var(--cmds-zotero-state-warning);
+}
+
+/* 0.6.8 export-result-tones: the outcome block of a toned report and the clean-export Notice. */
+.cmds-zotero-report-outcome {
+  display: flex;
+  gap: var(--size-4-3);
+  align-items: flex-start;
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-inline-start: var(--cmds-zotero-card-border) solid var(--cmds-zotero-report-tone, var(--cmds-zotero-state-muted));
+  border-radius: var(--radius-s);
+  overflow-wrap: anywhere;
+}
+.cmds-zotero-report-success { --cmds-zotero-report-tone: var(--cmds-zotero-state-ok); }
+.cmds-zotero-report-info { --cmds-zotero-report-tone: var(--cmds-zotero-state-accent); }
+.cmds-zotero-report-warning { --cmds-zotero-report-tone: var(--cmds-zotero-state-warning); }
+.cmds-zotero-report-error { --cmds-zotero-report-tone: var(--cmds-zotero-state-error); }
+.cmds-zotero-report-icon {
+  flex: none;
+  color: var(--cmds-zotero-report-tone, var(--cmds-zotero-state-muted));
+}
+.cmds-zotero-report-outcome-text {
+  min-width: 0;
+  white-space: pre-wrap;
+}
+.cmds-zotero-report-outcome-text p,
+.cmds-zotero-report-outcome-text ul {
+  margin: 0;
+}
+.cmds-zotero-report-outcome-text ul {
+  margin-top: var(--size-2-3);
+  padding-inline-start: var(--size-4-4);
+}
+.cmds-zotero-report-headline {
+  font-weight: var(--font-semibold);
+}
+.cmds-zotero-report-code {
+  margin-bottom: var(--size-4-3);
+  user-select: text;
+}
+.cmds-zotero-report-details > summary {
+  cursor: pointer;
+  margin-bottom: var(--size-2-3);
+  color: var(--text-muted);
+}
+.cmds-zotero-export-notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-3);
+  align-items: flex-start;
+}

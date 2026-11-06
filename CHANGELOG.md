@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Settings that say what is not saved yet, and an export that looks like what happened.
+
+- Settings ([#3](https://github.com/johnfkoo951/cmds-zotero/issues/3)): a typed value that differs from the stored one says *Not saved yet* under its row, with a **Save** button beside it that stores that value alone; Enter does the same in a one-line field, and a value with an error cannot be saved. Typing the stored value back clears the mark. *Save configuration* lists the values not saved yet, and its button, now **Save all**, stores them all. Closing settings while values are not saved shows a notice that names them; before, they were dropped without a word. Switches and menus are still saved as soon as they change and now say *Saved.*; one refused while the index refreshes keeps the reason under its row and gets a **Save** button to try again. On Obsidian 1.13 and later, the settings search no longer lists *Save configuration* with every setting, since each row it finds has its own **Save**. Stored settings are unchanged.
+- Export pandoc kit and Export Word kit with *Run pandoc after export* on ([#4](https://github.com/johnfkoo951/cmds-zotero/issues/4)): a clean run (the `.docx` opened, no citation left as text, Hookmark linked when asked) shows only a notice, with *Show report* for the details; the Word kit's notice says to press Refresh in Word. The report opens by itself only when something needs attention, with the outcome first and the kit's files folded under *Details*: as a warning when citekeys were left as text (it names them), the `.docx` did not open, Hookmark did not link or the kit has no CSL file, with *Open .docx*; as an error when Zotero did not answer or pandoc failed, with *Try again*, which runs pandoc again on the same kit. The pandoc command sits behind *Copy command* instead of ending the text, and a copied command shows on that button. With *Run pandoc after export* off the report still opens, starting with what was written and showing the command to run.
+
 ## 0.6.7 — 2026-10-29
 
 Settings that look on are on.
